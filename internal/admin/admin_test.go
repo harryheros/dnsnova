@@ -14,6 +14,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -48,6 +49,8 @@ func (f *fake) Tops(time.Duration) Tops {
 	return Tops{Domains: []insight.Entry{{Name: "example.com", Count: 9}}}
 }
 func (f *fake) QueryLog() *insight.QueryLog { return f.qlog }
+func (f *fake) ClearStats()                 {}
+func (f *fake) Guide() GuideInfo            { return GuideInfo{} }
 func (f *fake) Upstreams() []Upstream {
 	return []Upstream{{Address: "udp://192.0.2.53", Role: "primary", Healthy: true}}
 }
@@ -189,13 +192,19 @@ func (e *env) setup() {
 	e.csrf = r.body["csrf"].(string)
 }
 
+func noLocalTrust(t *testing.T) {
+	trustLocalSetup = false
+	t.Cleanup(func() { trustLocalSetup = true })
+}
+
 func TestSetupLoginAndLockout(t *testing.T) {
+	noLocalTrust(t)
 	e := newEnv(t)
 	if r := e.do(e.c, "GET", "/api/v1/setup", nil); r.code != 200 || r.body["needed"] != true {
 		t.Fatalf("setup state: %d %s", r.code, r.raw)
 	}
 	code := e.a.SetupCode()
-	if len(code) != 32 {
+	if !regexp.MustCompile(`^[A-HJKMNP-Z2-9]{4}-[A-HJKMNP-Z2-9]{4}$`).MatchString(code) {
 		t.Fatalf("setup code %q", code)
 	}
 	if fi, err := os.Stat(filepath.Join(e.dir, "secrets", "setup-code")); err != nil || fi.Mode().Perm() != 0o600 {
@@ -597,5 +606,65 @@ func TestQueryLogEndpoints(t *testing.T) {
 	// Without a session nothing is shown.
 	if r := e.do(e.client(), "GET", "/api/v1/querylog", nil); r.code != 401 {
 		t.Fatalf("anonymous: %d", r.code)
+	}
+}
+
+func TestSetupCodeForgivingAndCapped(t *testing.T) {
+	noLocalTrust(t)
+	e := newEnv(t)
+	code := e.a.SetupCode()
+	if normalizeCode(strings.ToLower(strings.ReplaceAll(code, "-", " "))) != normalizeCode(code) {
+		t.Fatal("typing the code in lower case with a space should work")
+	}
+	// Wrong codes from many addresses replace the code.
+	for i := 0; i < setupFailLimit; i++ {
+		e.a.lock.succeed(netip.MustParseAddr("127.0.0.1")) // as if each came from another address
+		if r := e.do(e.c, "POST", "/api/v1/setup", map[string]string{"code": "AAAA-AAAA", "username": "ops", "password": "correct horse battery"}); r.code != 403 {
+			t.Fatalf("attempt %d: %d", i, r.code)
+		}
+	}
+	if e.a.SetupCode() == code {
+		t.Fatal("the code was not replaced after many wrong attempts")
+	}
+}
+
+func TestSetupTrustedWithoutCode(t *testing.T) {
+	e := newEnv(t)
+	if r := e.do(e.c, "GET", "/api/v1/setup", nil); r.body["code_required"] != false {
+		t.Fatalf("code required from the server itself: %s", r.raw)
+	}
+	pub := netip.MustParseAddr("203.0.113.7")
+	if e.a.sec.setupTrusted(pub) || !e.a.sec.setupTrusted(netip.MustParseAddr("192.168.1.20")) || !e.a.sec.setupTrusted(netip.MustParseAddr("fd00::5")) {
+		t.Fatal("trust rules")
+	}
+	os.WriteFile(filepath.Join(e.dir, "secrets", "setup-trust"), []byte("203.0.113.7\n"), 0o600)
+	if !e.a.sec.setupTrusted(pub) {
+		t.Fatal("the installer's SSH address is not trusted")
+	}
+	r := e.do(e.c, "POST", "/api/v1/setup", map[string]string{"username": "ops", "password": "correct horse battery"})
+	if r.code != 201 {
+		t.Fatalf("setup without code: %d %s", r.code, r.raw)
+	}
+	if _, err := os.Stat(filepath.Join(e.dir, "secrets", "setup-trust")); !os.IsNotExist(err) {
+		t.Fatal("setup-trust left behind")
+	}
+}
+
+func TestResetAccount(t *testing.T) {
+	e := newEnv(t)
+	e.setup()
+	if err := ResetAccount(e.dir); err != nil {
+		t.Fatal(err)
+	}
+	// After a restart the account is gone and setup is offered again.
+	a, err := New(e.b, e.dir, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.sec.account() != nil || a.SetupCode() == "" {
+		t.Fatal("account still there after reset")
+	}
+	if err := ResetAccount(t.TempDir()); err != nil {
+		t.Fatalf("reset with nothing to remove: %v", err)
 	}
 }

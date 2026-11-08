@@ -132,10 +132,7 @@ func NewGroup(o Options) (*Group, error) {
 	if g.fallback, err = build(o.Fallback, true); err != nil {
 		return nil, err
 	}
-	if len(g.primary) == 0 {
-		return nil, errors.New("no primary upstreams")
-	}
-	return g, nil
+	return g, nil // with no members (DNS not set up yet) Exchange fails at once
 }
 
 // Members returns primaries followed by fallbacks.
@@ -163,6 +160,8 @@ func (g *Group) pick(list []*Member) []*Member {
 	return sel
 }
 
+var errNoUpstreams = errors.New("no upstreams configured")
+
 type result struct {
 	resp []byte
 	err  error
@@ -170,6 +169,9 @@ type result struct {
 
 // Exchange resolves msg. ctx should carry the overall deadline.
 func (g *Group) Exchange(ctx context.Context, msg []byte) ([]byte, error) {
+	if len(g.primary)+len(g.fallback) == 0 {
+		return nil, errNoUpstreams
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	ch := make(chan result, len(g.primary)+len(g.fallback)+1)

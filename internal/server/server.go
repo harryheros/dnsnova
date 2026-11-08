@@ -181,10 +181,37 @@ func checkZone(c *config.Config) string {
 	return m.WireName(append([]string{"check"}, strings.Split(strings.ToLower(c.TLS.Domains[0]), ".")...)...)
 }
 
+// applyRetention sizes the in-memory statistics to stats.retention.
+func (s *Server) applyRetention(c *config.Config) {
+	h := config.RetentionHours[c.Stats.Retention]
+	if h == 0 {
+		h = 7 * 24
+	}
+	s.History.SetHours(h + 1)
+	s.Domains.SetHours(h)
+	s.NXDomains.SetHours(h)
+}
+
+// ClearStats implements admin.Backend: it forgets the statistics and the
+// domain lists. Prometheus counters keep counting.
+func (s *Server) ClearStats() {
+	now := time.Now()
+	s.History.Reset(now)
+	s.Domains.Reset(now)
+	s.NXDomains.Reset(now)
+	s.Limited.Reset(now)
+}
+
+func localNames(c *config.Config) *resolver.LocalNames {
+	recs, _ := config.ParseLocalRecords(c.Local.Records) // validated when loaded
+	return resolver.NewLocalNames(recs)
+}
+
 func settingsFrom(c *config.Config) resolver.Settings {
 	return resolver.Settings{
 		DDR:                 ddrFrom(c),
 		CheckZone:           checkZone(c),
+		Local:               localNames(c),
 		CacheSize:           c.Cache.Size,
 		MinTTL:              c.Cache.MinTTL,
 		MaxTTL:              c.Cache.MaxTTL,
@@ -215,6 +242,7 @@ func (s *Server) buildState(c *config.Config) (*state, error) {
 	gd := guard.New(guard.Limits{
 		Private:      c.Server.Mode == config.ModePrivate,
 		Allow:        guard.ACL(c.Access.Allow),
+		Deny:         guard.ACL(c.Access.Deny),
 		ClientQPS:    c.Limits.ClientQPS,
 		ClientBurst:  c.Limits.ClientBurst,
 		NetworkQPS:   c.Limits.PrefixQPS,
@@ -240,6 +268,7 @@ func (s *Server) Start() error {
 		return err
 	}
 	s.res = resolver.New(settingsFrom(snap.Config), st.group, s.Stats)
+	s.applyRetention(snap.Config)
 	s.Certs = tlsmgr.NewManager(snap.Config.Server.DataDir, s.Log)
 	s.Certs.HTTP = s.ACMEHTTP
 	s.tlsDoT = s.Certs.TLSConfig("dot")
@@ -304,6 +333,7 @@ func (s *Server) Apply(snap *config.Snapshot) error {
 	old := s.state.Swap(st)
 	s.snap.Store(snap)
 	s.res.SetSettings(settingsFrom(snap.Config))
+	s.applyRetention(snap.Config)
 	s.res.SetUpstreams(st.group)
 	s.hash = snap.Hash
 	if old != nil {

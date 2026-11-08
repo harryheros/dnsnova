@@ -172,3 +172,92 @@ enabled = %v
 		t.Fatalf("query log not shown: %s", body)
 	}
 }
+
+// A fresh install runs only the admin interface; DNS starts once setup sets
+// addresses and upstreams.
+func TestSetupPendingServesNoDNS(t *testing.T) {
+	auth := dnstest.Serve(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dnsnova.toml")
+	os.WriteFile(path, []byte(fmt.Sprintf(`[server]
+mode = "public"
+listen = []
+data_dir = %q
+
+[upstream]
+primary = []
+bootstrap = []
+
+[admin]
+listen = "127.0.0.1:0"
+`, dir)), 0o640)
+	store := config.NewStore(path)
+	s, err := New(store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(s.Shutdown)
+	if udp, _, _, _ := s.Addrs(); len(udp) != 0 || s.AdminAddr() == "" {
+		t.Fatalf("udp %v admin %q", udp, s.AdminAddr())
+	}
+	if len(s.Upstreams()) != 0 {
+		t.Fatal("upstreams before setup")
+	}
+	snap, _ := store.Load()
+	out, _ := snap.Doc.Set("server", "listen", config.StrList([]string{"127.0.0.1:0"}))
+	doc, err := config.Parse(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out2, _ := doc.Set("upstream", "primary", config.StrList([]string{"udp://" + auth.Addr}))
+	snap3, err := store.Write(out2, snap.Hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Apply(snap3); err != nil {
+		t.Fatal(err)
+	}
+	udp, _, _, _ := s.Addrs()
+	if len(udp) != 1 {
+		t.Fatalf("udp after setup: %v", udp)
+	}
+	b, err := udpAsk(t, udp[0], dnstest.Query(3, "after.test", 1, false, false), 2*time.Second)
+	if err != nil || dnstest.Parse(t, b).AN != 1 {
+		t.Fatalf("query after setup: %v", err)
+	}
+}
+
+func TestLocalNamesAndDenyList(t *testing.T) {
+	s, auth, _ := start(t, "\n[local]\nrecords = [\"nas.home 192.168.1.5\", \"*.lab.home 10.0.0.9\"]\n")
+	udp, _, _, _ := s.Addrs()
+	b, err := udpAsk(t, udp[0], dnstest.Query(1, "nas.home", 1, false, false), 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := dnstest.Parse(t, b); p.AN != 1 || !bytes.Contains(b, []byte{192, 168, 1, 5}) {
+		t.Fatalf("nas.home: %+v", p)
+	}
+	b, _ = udpAsk(t, udp[0], dnstest.Query(2, "x.lab.home", 1, false, false), 2*time.Second)
+	if !bytes.Contains(b, []byte{10, 0, 0, 9}) {
+		t.Fatal("wildcard not answered")
+	}
+	if auth.Count("nas.home.") != 0 || auth.Count("x.lab.home.") != 0 {
+		t.Fatal("a local name was sent upstream")
+	}
+	// Blocking the test client's own address: no answer at all.
+	snap, _ := s.Store.Load()
+	out, _ := snap.Doc.Set("access", "deny", config.StrList([]string{"127.0.0.0/8"}))
+	snap2, err := s.Store.Write(out, snap.Hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Apply(snap2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := udpAsk(t, udp[0], dnstest.Query(3, "nas.home", 1, false, false), 500*time.Millisecond); err == nil {
+		t.Fatal("a blocked client got an answer")
+	}
+}

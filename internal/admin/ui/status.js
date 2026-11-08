@@ -8,6 +8,8 @@
 // protocol it came over (nothing else), and /check/<name> says so. Any
 // other DNS never reaches this server, so the name is never seen.
 
+import { guides, tabs } from "./guides.js";
+
 const SVGNS = "http://www.w3.org/2000/svg";
 
 function h(tag, attrs, ...kids) {
@@ -131,82 +133,6 @@ async function runCheck(info, box) {
   }
 }
 
-// ---------- setup guides ----------
-
-function guides(info) {
-  const doh = info.doh, dot = info.dot && !info.dot.includes(":") ? info.dot : "", ip = (info.plain || [])[0] || "";
-  const step = (...kids) => h("li", null, ...kids);
-  const bare = (el) => (el ? h("li", { class: "bare" }, el) : null);
-  const path = (...p) => h("span", { class: "path" }, p.join(" › "));
-  const list = [];
-  if (dot) list.push(["Android", [
-    h("ol", { class: "steps-list" },
-      step("Open ", path("Settings", "Network & internet", "Private DNS"), "."),
-      step("Choose ", h("strong", null, "Private DNS provider hostname"), " and enter:"),
-      bare(copyrow("Hostname", dot)),
-      step("Save. Android 9 or later; menu names vary by maker.")),
-  ]]);
-  if (doh || dot) list.push(["iPhone & Mac", [
-    h("ol", { class: "steps-list" },
-      step("Download the profile on the device:"),
-      bare(h("div", { class: "row" },
-        doh ? h("a", { class: "btn primary", href: "/dnsnova.mobileconfig?p=doh" }, "Profile, DNS over HTTPS") : null,
-        dot ? h("a", { class: "btn", href: "/dnsnova.mobileconfig?p=dot" }, "Profile, DNS over TLS") : null)),
-      step("iPhone and iPad: ", path("Settings", "Profile Downloaded"), ", then Install."),
-      step("Mac: ", path("System Settings", "Privacy & Security", "Profiles"), ", then Install."),
-      step("The profile is not signed, so the system says “Unverified”. It only sets DNS; remove it there at any time.")),
-  ]]);
-  if (doh) list.push(["Windows", [
-    h("ol", { class: "steps-list" },
-      step("Open ", path("Settings", "Network & internet", "Wi-Fi or Ethernet", "Hardware properties"), "."),
-      step("Next to DNS server assignment choose ", h("strong", null, "Edit"), ", then Manual, and turn on IPv4."),
-      ip ? bare(copyrow("Preferred DNS", ip)) : step("Preferred DNS: this server's IP address."),
-      step("DNS over HTTPS: ", h("strong", null, "On (manual template)"), ", with:"),
-      bare(copyrow("Template", doh)),
-      step("Windows 11.")),
-  ]]);
-  if (doh) list.push(["Browsers", [
-    h("ol", { class: "steps-list" },
-      step("Chrome and Edge: ", path("Settings", "Privacy and security", "Security", "Use secure DNS"), ", choose Custom."),
-      step("Firefox: ", path("Settings", "Privacy & Security", "DNS over HTTPS"), ", Max Protection, Custom."),
-      bare(copyrow("Address", doh)),
-      step("Only the browser uses it; other apps keep the system's DNS.")),
-  ]]);
-  list.push(["Routers & Linux", [
-    h("ol", { class: "steps-list" },
-      step("Use the encrypted addresses where the router or client supports them:"),
-      info.dot ? bare(copyrow("DoT", info.dot)) : null,
-      info.doq ? bare(copyrow("DoQ", info.doq)) : null,
-      doh ? bare(copyrow("DoH", doh)) : null,
-      ip && dot ? step("systemd-resolved: ", h("code", null, `DNS=${ip}#${dot}`), " and ", h("code", null, "DNSOverTLS=yes"), ".") : null,
-      info.plain?.length ? step("Plain DNS (port 53, not encrypted): ", h("code", null, info.plain.join(", ")), ".") : null),
-  ]]);
-  return list;
-}
-
-function tabs(list) {
-  const body = h("div", { class: "tabbody" });
-  const bar = h("div", { class: "seg tabs", role: "tablist", "aria-label": "Device" });
-  const pick = (i) => {
-    [...bar.children].forEach((b, j) => { b.setAttribute("aria-selected", String(i === j)); b.setAttribute("aria-pressed", String(i === j)); b.tabIndex = i === j ? 0 : -1; });
-    fill(body, list[i][1]);
-  };
-  list.forEach(([name], i) => bar.append(h("button", { type: "button", role: "tab", onclick: () => pick(i) }, name)));
-  bar.addEventListener("keydown", (ev) => {
-    const cur = [...bar.children].findIndex((b) => b.getAttribute("aria-selected") === "true");
-    if (ev.key === "ArrowRight" || ev.key === "ArrowLeft") {
-      const n = (cur + (ev.key === "ArrowRight" ? 1 : list.length - 1)) % list.length;
-      pick(n);
-      bar.children[n].focus();
-    }
-  });
-  // Start on the visitor's platform when it is obvious.
-  const ua = navigator.userAgent;
-  const guess = /Android/.test(ua) ? "Android" : /iPhone|iPad|Macintosh/.test(ua) ? "iPhone & Mac" : /Windows/.test(ua) ? "Windows" : null;
-  pick(Math.max(0, list.findIndex(([n]) => n === guess)));
-  return [bar, body];
-}
-
 // ---------- page ----------
 
 function dcard(span, title, ic, ...body) {
@@ -250,7 +176,7 @@ async function boot() {
     addrRows.length ? h("div", { class: "addrs" }, addrRows.map(([k, v]) => copyrow(k, v))) : h("p", { class: "empty small" }, "No addresses are published."),
     h("footer", { class: "dfoot" }, h("span", null, info.http3 ? "HTTPS also over HTTP/3" : "HTTPS over HTTP/1.1 and HTTP/2"), h("span", null, info.mode === "public" ? "Open to everyone" : "Private")));
 
-  const guide = dcard("s7", "Use this server", "phone", ...tabs(guides(info)),
+  const guide = dcard("s7", "Use this server", "phone", ...tabs(guides(info, { h, copyrow }), { h, fill }),
     h("footer", { class: "dfoot" }, h("span", null, info.check ? "After changing the setting, check above that it works." : "Settings take effect within a minute."), h("span")));
 
   const privRows = [

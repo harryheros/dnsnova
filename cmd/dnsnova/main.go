@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/harryheros/dnsnova/internal/admin"
 	"github.com/harryheros/dnsnova/internal/config"
 	"github.com/harryheros/dnsnova/internal/server"
 )
@@ -24,8 +26,9 @@ func main() {
 	cfgPath := flag.String("c", "/etc/dnsnova/dnsnova.toml", "configuration file")
 	check := flag.Bool("t", false, "check the configuration file and exit")
 	showVersion := flag.Bool("v", false, "print the version and exit")
+	resetAdmin := flag.Bool("reset-admin", false, "forgot the password: remove the administrator account, then restart dnsnova")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: dnsnova [-c file] [-t] [-v]\n")
+		fmt.Fprintf(os.Stderr, "usage: dnsnova [-c file] [-t] [-v] [-reset-admin]\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -36,6 +39,30 @@ func main() {
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	store := config.NewStore(*cfgPath)
+
+	if *resetAdmin {
+		snap, err := store.Load()
+		if err != nil {
+			printConfigError(*cfgPath, err)
+			os.Exit(1)
+		}
+		if err := admin.ResetAccount(snap.Config.Server.DataDir); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v (run it as root)\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("The administrator account was removed; settings are kept.")
+		if _, err := os.Stat("/run/systemd/system"); err == nil {
+			if out, err := exec.Command("systemctl", "try-restart", "dnsnova").CombinedOutput(); err != nil {
+				fmt.Fprintf(os.Stderr, "could not restart dnsnova: %v %s\nRestart it yourself: systemctl restart dnsnova\n", err, out)
+				os.Exit(1)
+			}
+			fmt.Println("dnsnova was restarted.")
+		} else {
+			fmt.Println("Restart dnsnova now.")
+		}
+		fmt.Println("Open the web interface and create the administrator again.")
+		return
+	}
 
 	if *check {
 		snap, err := store.Load()

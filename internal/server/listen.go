@@ -521,7 +521,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		}
 	}
 	status, code := "ok", http.StatusOK
-	if healthy == 0 {
+	switch {
+	case total == 0 && !st.cfg.ServesDNS():
+		status = "setup" // a fresh install: only the web interface runs
+	case healthy == 0:
 		status, code = "unhealthy", http.StatusServiceUnavailable
 	}
 	w.Header().Set("Content-Type", "application/json")

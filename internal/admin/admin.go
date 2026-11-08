@@ -26,6 +26,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/harryheros/dnsnova/internal/config"
@@ -48,6 +49,10 @@ type Backend interface {
 	ConfigHistory() ([]config.HistoryEntry, error)
 	ConfigHistoryFile(name string) ([]byte, error)
 	Report(span time.Duration) stats.Report
+	// Guide describes the server for the setup guide.
+	Guide() GuideInfo
+	// ClearStats forgets the statistics and the domain lists.
+	ClearStats()
 	// Tops lists popular domains, domains that do not exist and networks
 	// that hit the limits over span.
 	Tops(span time.Duration) Tops
@@ -104,12 +109,13 @@ type Upstream struct {
 
 // Admin serves the API.
 type Admin struct {
-	b    Backend
-	log  *slog.Logger
-	sec  *secrets
-	sess sessions
-	lock lockout
-	mux  *http.ServeMux
+	setupFails atomic.Int32 // wrong setup codes since the code was made
+	b          Backend
+	log        *slog.Logger
+	sec        *secrets
+	sess       sessions
+	lock       lockout
+	mux        *http.ServeMux
 
 	// Now is the clock (tests).
 	Now func() time.Time
@@ -136,6 +142,10 @@ func New(b Backend, dataDir string, log *slog.Logger) (*Admin, error) {
 }
 
 // SetupCode returns the one-time setup code, or "" once setup is done.
+// setupFailLimit is how many wrong setup codes, from any address, replace
+// the code with a new one.
+const setupFailLimit = 20
+
 func (a *Admin) SetupCode() string {
 	c, _ := a.sec.setupCode()
 	return c
@@ -155,6 +165,8 @@ func (a *Admin) routes() {
 	m.Handle("GET /api/v1/upstreams", auth(a.upstreams))
 	m.Handle("GET /api/v1/events", auth(a.events))
 	m.Handle("POST /api/v1/cache/clear", auth(a.clearCache))
+	m.Handle("POST /api/v1/stats/clear", auth(a.clearStats))
+	m.Handle("GET /api/v1/guide", auth(func(w http.ResponseWriter, r *http.Request, c *call) { writeJSON(w, http.StatusOK, a.b.Guide()) }))
 	m.Handle("GET /api/v1/querylog", auth(a.getQueryLog))
 	m.Handle("POST /api/v1/querylog", auth(a.startQueryLog))
 	m.Handle("DELETE /api/v1/querylog", auth(a.stopQueryLog))

@@ -67,3 +67,27 @@ func TestHistory(t *testing.T) {
 		t.Fatalf("week: %d", r.Queries["udp"])
 	}
 }
+
+func TestHistoryRetentionAndReset(t *testing.T) {
+	s := New()
+	t0 := s.Started
+	h := NewHistory(s)
+	h.SetHours(30*24 + 1)
+	for hr := 1; hr <= 40*24; hr++ { // 40 days of one query an hour
+		s.Queries[UDP].Add(1)
+		h.Tick(t0.Add(time.Duration(hr) * time.Hour))
+	}
+	now := t0.Add(40*24*time.Hour + time.Minute)
+	if r := h.Report(30*24*time.Hour, now); r.Queries["udp"] != 30*24 {
+		t.Fatalf("30 days: %d", r.Queries["udp"])
+	}
+	h.SetHours(7*24 + 1) // shrinking keeps the latest week
+	if r := h.Report(7*24*time.Hour, now); r.Queries["udp"] != 7*24 {
+		t.Fatalf("7 days after shrinking: %d", r.Queries["udp"])
+	}
+	h.Reset(now)
+	s.Queries[UDP].Add(3)
+	if r := h.Report(7*24*time.Hour, now.Add(time.Minute)); r.Queries["udp"] != 3 {
+		t.Fatalf("after reset: %d", r.Queries["udp"])
+	}
+}

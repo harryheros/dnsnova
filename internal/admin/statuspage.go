@@ -26,6 +26,15 @@ type PublicInfo struct {
 	QueryLogFullIP bool     `json:"query_log_full_ip"`
 }
 
+// GuideInfo feeds the admin interface's setup guide: the public addresses
+// plus every address DNS listens on (a home server's are private), and
+// where the Apple profile can be downloaded (null: nowhere, the status
+// page is off).
+type GuideInfo struct {
+	PublicInfo
+	Profile *string `json:"profile"`
+}
+
 // PublicBackend feeds the status page.
 type PublicBackend interface {
 	PublicStatus() PublicInfo
@@ -43,7 +52,7 @@ type StatusPage struct {
 }
 
 // statusAssets are the files the status page may load.
-var statusAssets = map[string]bool{"app.css": true, "theme.js": true, "logo.svg": true, "status.js": true}
+var statusAssets = map[string]bool{"app.css": true, "theme.js": true, "logo.svg": true, "status.js": true, "guides.js": true}
 
 // NewStatusPage returns the page's handler.
 func NewStatusPage(b PublicBackend) *StatusPage {

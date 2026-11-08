@@ -9,7 +9,6 @@ import (
 	"encoding/base32"
 	"encoding/base64"
 	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -62,6 +61,20 @@ func openSecrets(dataDir string) (*secrets, error) {
 	return s, nil
 }
 
+// ResetAccount removes the administrator account of the server whose data
+// directory is dataDir, for a forgotten password. Settings are untouched;
+// once DNSNova restarts, the web interface offers to create the account
+// again, as after installing.
+func ResetAccount(dataDir string) error {
+	dir := filepath.Join(dataDir, "secrets")
+	for _, f := range []string{"admin.json", "setup-code", "setup-trust"} {
+		if err := os.Remove(filepath.Join(dir, f)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *secrets) account() *account {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -90,22 +103,83 @@ func (s *secrets) save(a *account) error {
 
 // setupCode returns the one-time setup code, creating it when no account
 // exists. It is empty once an account exists.
+//
+// The code is short enough to read out and type (8 characters, about 40
+// bits, shown as XXXX-XXXX); guessing is limited by the per-address lockout
+// and by setupFailLimit, after which a new code replaces it.
 func (s *secrets) setupCode() (string, error) {
 	if s.account() != nil {
 		return "", nil
 	}
 	path := filepath.Join(s.dir, "setup-code")
-	if b, err := os.ReadFile(path); err == nil && len(strings.TrimSpace(string(b))) >= 32 {
-		return strings.TrimSpace(string(b)), nil
+	if b, err := os.ReadFile(path); err == nil {
+		if c := strings.TrimSpace(string(b)); len(normalizeCode(c)) >= 8 {
+			return c, nil
+		}
 	}
-	code := hex.EncodeToString(randomBytes(16))
-	if err := writeSecret(path, []byte(code+"\n")); err != nil {
+	return s.newSetupCode()
+}
+
+// codeAlphabet leaves out characters that are easy to confuse (0 O 1 I L).
+const codeAlphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+
+func (s *secrets) newSetupCode() (string, error) {
+	b := randomBytes(8)
+	out := make([]byte, 0, 9)
+	for i, x := range b {
+		if i == 4 {
+			out = append(out, '-')
+		}
+		out = append(out, codeAlphabet[int(x)%len(codeAlphabet)])
+	}
+	code := string(out)
+	if err := writeSecret(filepath.Join(s.dir, "setup-code"), []byte(code+"\n")); err != nil {
 		return "", err
 	}
 	return code, nil
 }
 
-func (s *secrets) clearSetupCode() { os.Remove(filepath.Join(s.dir, "setup-code")) }
+// normalizeCode makes typing forgiving: case, spaces and dashes don't
+// matter. (The code itself has no 0, O, 1, I or L to confuse.)
+func normalizeCode(c string) string {
+	var b strings.Builder
+	for _, r := range strings.ToUpper(c) {
+		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func (s *secrets) clearSetupCode() {
+	os.Remove(filepath.Join(s.dir, "setup-code"))
+	os.Remove(filepath.Join(s.dir, "setup-trust"))
+}
+
+// trustLocalSetup is off in tests that check the setup code itself.
+var trustLocalSetup = true
+
+// setupTrusted reports whether ip may create the administrator without the
+// setup code: the server itself, a private network (the usual home or
+// office install), or an address the installer was run from over SSH
+// (listed in setup-trust). Anyone else on the internet needs the code, so a
+// scanner that finds a fresh install first cannot take it over.
+func (s *secrets) setupTrusted(ip netip.Addr) bool {
+	ip = ip.Unmap()
+	if trustLocalSetup && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()) {
+		return true
+	}
+	b, err := os.ReadFile(filepath.Join(s.dir, "setup-trust"))
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Fields(string(b)) {
+		if a, err := netip.ParseAddr(line); err == nil && a.Unmap() == ip {
+			return true
+		}
+	}
+	return false
+}
 
 // writeSecret writes a 0600 file atomically.
 func writeSecret(path string, data []byte) error {

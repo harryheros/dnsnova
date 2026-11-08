@@ -22,7 +22,8 @@ func subtleEq(a, b string) bool { return subtle.ConstantTimeCompare([]byte(a), [
 // ---- setup, login, session ----
 
 func (a *Admin) getSetup(w http.ResponseWriter, r *http.Request, c *call) {
-	writeJSON(w, http.StatusOK, map[string]any{"needed": a.sec.account() == nil, "secure": r.TLS != nil})
+	needed := a.sec.account() == nil
+	writeJSON(w, http.StatusOK, map[string]any{"needed": needed, "code_required": needed && !a.sec.setupTrusted(c.ip), "secure": r.TLS != nil})
 }
 
 func (a *Admin) postSetup(w http.ResponseWriter, r *http.Request, c *call) {
@@ -38,9 +39,19 @@ func (a *Admin) postSetup(w http.ResponseWriter, r *http.Request, c *call) {
 		return
 	}
 	code := a.SetupCode()
-	if code == "" || !constEq(strings.TrimSpace(req.Code), code) {
+	if a.sec.setupTrusted(c.ip) {
+		// no code needed from here
+	} else if code == "" || !constEq(normalizeCode(req.Code), normalizeCode(code)) {
 		a.lock.fail(c.ip, a.Now())
-		writeError(w, http.StatusForbidden, "wrong setup code; it is in the address the installer printed, or in <data_dir>/secrets/setup-code")
+		if a.setupFails.Add(1) >= setupFailLimit {
+			// Too many wrong codes from anywhere: replace the code, so
+			// guessing from many addresses gets nowhere.
+			a.setupFails.Store(0)
+			if _, err := a.sec.newSetupCode(); err == nil {
+				a.log.Warn("admin: too many wrong setup codes; a new code was written to " + a.sec.dir + "/setup-code")
+			}
+		}
+		writeError(w, http.StatusForbidden, "wrong setup code; the installer printed it, and it is in <data_dir>/secrets/setup-code")
 		return
 	}
 	if err := validUsername(req.Username); err != nil {
@@ -246,6 +257,8 @@ func (a *Admin) status(w http.ResponseWriter, r *http.Request, c *call) {
 		"listeners":      a.b.Listeners(),
 		"certificate":    a.b.Certificate(),
 		"cache":          map[string]int{"positive": pos, "negative": neg, "capacity": cfg.Cache.Size},
+		"retention":      cfg.Stats.Retention,
+		"serves_dns":     cfg.ServesDNS(),
 		"privacy": map[string]any{
 			"query_log":            ql.On,
 			"query_log_full_ip":    ql.On && ql.FullIP,
@@ -266,7 +279,7 @@ func nonNil[T any](s []T) []T {
 }
 
 func (a *Admin) stats(w http.ResponseWriter, r *http.Request, c *call) {
-	spans := map[string]time.Duration{"1h": time.Hour, "24h": 24 * time.Hour, "7d": 7 * 24 * time.Hour}
+	spans := map[string]time.Duration{"1h": time.Hour, "24h": 24 * time.Hour, "7d": 7 * 24 * time.Hour, "30d": 30 * 24 * time.Hour}
 	name := r.URL.Query().Get("range")
 	if name == "" {
 		name = "24h"
@@ -280,6 +293,12 @@ func (a *Admin) stats(w http.ResponseWriter, r *http.Request, c *call) {
 		stats.Report
 		Tops
 	}{a.b.Report(span), a.b.Tops(span)})
+}
+
+func (a *Admin) clearStats(w http.ResponseWriter, r *http.Request, c *call) {
+	a.b.ClearStats()
+	a.log.Info("admin: statistics cleared", "user", c.sess.user)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // ---- query log ----

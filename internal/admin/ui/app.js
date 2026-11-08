@@ -3,6 +3,8 @@
 // holds no privileges of its own. Text from the server is always inserted as
 // text, never as HTML.
 
+import { guides, tabs } from "./guides.js";
+
 // ---------- small helpers ----------
 
 const SVGNS = "http://www.w3.org/2000/svg";
@@ -64,6 +66,7 @@ const LINE = {
   power: [["path", { d: "M12 2v10M18.4 6.6a9 9 0 1 1-12.77.04" }]],
   alert: [["path", { d: "m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3M12 9v4M12 17h.01" }]],
   info: [["circle", { cx: 12, cy: 12, r: 10 }], ["path", { d: "M12 16v-4M12 8h.01" }]],
+  phone: [["rect", { x: 5, y: 2, width: 14, height: 20, rx: 2 }], ["path", { d: "M12 18h.01" }]],
 };
 
 function line(name, size = 16) {
@@ -166,7 +169,7 @@ async function api(method, path, body) {
   }
   if (r.status === 401 && state.session && !path.startsWith("/login")) {
     state.session = null;
-    showLogin("Your session ended. Log in again.");
+    showLogin("Your session ended. Sign in again.");
     throw new APIError(401, data);
   }
   if (!r.ok) throw new APIError(r.status, data);
@@ -194,7 +197,7 @@ function stopTimer() {
 async function boot() {
   try {
     const st = await api("GET", "/setup");
-    if (st.needed) return showWizard(setupCodeFromURL());
+    if (st.needed) return showWizard(setupCodeFromURL(), st.code_required);
     try {
       state.session = await api("GET", "/session");
     } catch (e) {
@@ -207,7 +210,7 @@ async function boot() {
 }
 
 function setupCodeFromURL() {
-  const m = /setup=([0-9a-f]{32})/i.exec(location.hash + location.search);
+  const m = /setup=([A-Za-z0-9-]{8,40})/.exec(location.hash + location.search);
   if (m) history.replaceState(null, "", location.pathname); // keep the code out of history
   return m ? m[1] : "";
 }
@@ -232,11 +235,11 @@ function appearance() {
 function showLogin(note) {
   let needCode = false;
   const err = h("p", { class: "err small", role: "alert" });
-  const user = h("input", { type: "text", name: "username", autocomplete: "username", required: true });
-  const pass = h("input", { type: "password", name: "password", autocomplete: "current-password", required: true });
+  const user = h("input", { type: "text", name: "username", autocomplete: "username", placeholder: "Enter user name", required: true });
+  const pass = h("input", { type: "password", name: "password", autocomplete: "current-password", placeholder: "Enter password", required: true });
   const code = h("input", { type: "text", name: "totp", inputmode: "numeric", autocomplete: "one-time-code", pattern: "[0-9 ]*" });
   const codeRow = h("label", { hidden: true }, "Code from your authenticator app", code);
-  const submit = h("button", { type: "submit", class: "btn primary" }, "Log in");
+  const submit = h("button", { type: "submit", class: "btn primary" }, "Sign in");
   const form = h("form", {
     onsubmit: async (ev) => {
       ev.preventDefault();
@@ -263,21 +266,44 @@ function showLogin(note) {
     h("label", null, "Password", pass),
     codeRow, err, submit);
   const insecure = location.protocol !== "https:" && !/^(localhost|127\.|\[::1\])/.test(location.host);
-  mount(h("main", { class: "center" }, h("div", { class: "signin" },
-    brandBig(),
-    note ? h("p", { class: "notice" }, note) : null,
-    h("div", { class: "card" }, h("h1", null, "Log in"), form),
-    insecure ? h("p", { class: "muted small" }, "This connection is not encrypted. Set up a domain to use HTTPS.") : null,
-    appearance())));
+  const help = h("p", { class: "notice small", hidden: true },
+    "On the server, as root, run ", h("code", null, "dnsnova -reset-admin"),
+    ". DNSNova restarts and this page offers to create the administrator again. Your settings are kept.");
+  mount(h("div", { class: "signpage" },
+    h("main", { class: "center" }, h("div", { class: "signin plain" },
+      brandBig(),
+      h("div", { class: "card" }, note ? h("p", { class: "small muted", style: { margin: 0, textAlign: "center" } }, note) : null, form),
+      h("div", { class: "forgot" }, h("button", { type: "button", onclick: () => { help.hidden = !help.hidden; } }, "Forgot password?")),
+      help,
+      insecure ? h("p", { class: "foot" }, "Not encrypted until a domain is set up.") : null)),
+    signFooter()));
   user.focus();
+}
+
+const PROJECT = "https://github.com/harryheros/dnsnova";
+
+// signFooter: links, and the appearance as three icons, as on the sign-in
+// page of AdGuard Home.
+function signFooter() {
+  const seg = h("div", { class: "iconseg", role: "group", "aria-label": "Appearance" });
+  const draw = () => fill(seg, ...[["auto", "Follow the system", icon.auto], ["dark", "Dark", icon.moon], ["light", "Light", icon.sun]].map(([id, label, ic]) =>
+    h("button", { type: "button", title: label, "aria-label": label, "aria-pressed": String(window.dnsnovaTheme.get() === id), onclick: () => { window.dnsnovaTheme.set(id); draw(); } }, ic())));
+  draw();
+  return h("footer", { class: "signfoot" }, h("div", { class: "inner" },
+    h("nav", { class: "links", "aria-label": "About DNSNova" },
+      h("a", { href: PROJECT, rel: "noopener noreferrer", target: "_blank" }, "Homepage"),
+      h("a", { href: PROJECT + "/blob/main/PRIVACY.md", rel: "noopener noreferrer", target: "_blank" }, "Privacy"),
+      h("a", { class: "outline", href: PROJECT + "/issues", rel: "noopener noreferrer", target: "_blank" }, "Report an issue")),
+    seg,
+    h("div", { class: "copy" }, "DNSNova · free software under the AGPL-3.0")));
 }
 
 // ---------- setup wizard ----------
 
 const WIZ_STEPS = ["Administrator", "Who can use it", "Addresses", "Upstreams", "Encrypted DNS", "Review"];
 
-async function showWizard(code) {
-  const w = { step: 0, code, cfg: null, hash: "", values: {}, addrs: [], clientIP: "" };
+async function showWizard(code, codeRequired) {
+  const w = { step: 0, code, codeRequired, cfg: null, hash: "", values: {}, addrs: [], clientIP: "" };
   const render = () => {
     const body = h("section", { class: "card wizbody", "aria-labelledby": "step-h" });
     const steps = h("ol", { class: "steps", "aria-label": "Steps" }, WIZ_STEPS.map((t, i) =>
@@ -335,16 +361,34 @@ const WIZ_VIEWS = [
     const user = h("input", { type: "text", value: "admin", autocomplete: "username" });
     const pass = h("input", { type: "password", autocomplete: "new-password" });
     const pass2 = h("input", { type: "password", autocomplete: "new-password" });
+    const port = h("input", { type: "number", min: 1, max: 65535, value: location.port || (location.protocol === "https:" ? 443 : 80), inputmode: "numeric" });
+    port.style.maxWidth = "140px";
+    const portRow = h("label", { class: "block" }, "Port", port);
+    const access = h("div", { class: "choices", role: "radiogroup", "aria-label": "Who can open this web interface" });
+    const drawAccess = () => fill(access, ...[
+      [false, "From the network", "Open it from any computer or phone that can reach this server, with your password."],
+      [true, "Only through an SSH tunnel", "More secure on a server on the internet. You will need: ssh -L port:127.0.0.1:port user@server"],
+    ].map(([local, t, d]) => h("button", {
+      type: "button", class: "choice", role: "radio", "aria-checked": String(!!w.adminLocal === local),
+      onclick: () => { w.adminLocal = local; drawAccess(); },
+    }, h("strong", null, t), h("span", null, d))));
+    w.adminLocal = /^(127\.|\[::1\]|localhost)/.test(location.hostname);
+    drawAccess();
     put(body, wizHead(w, "Create the administrator", "Only this account can sign in to DNSNova."),
-      w.code ? null : h("label", { class: "block" }, "Setup code (printed by the installer, or in /var/lib/dnsnova/secrets/setup-code)", codeIn),
+      w.code || !w.codeRequired ? null : h("label", { class: "block" }, ["Setup code: the installer printed it, or run ", h("code", null, "sudo cat /var/lib/dnsnova/secrets/setup-code"), " on the server. It is asked only when this page is opened from outside your network."], codeIn),
       h("label", { class: "block" }, "User name", user),
       h("label", { class: "block" }, "Password (at least 10 characters)", pass),
       h("label", { class: "block" }, "Password again", pass2),
+      h("h2", { style: { margin: "8px 0 0", fontSize: "15px" } }, "This web interface"),
+      access, portRow,
       wizNav(w, render, async () => {
         if (pass.value !== pass2.value) throw new Error("The passwords do not match.");
+        const p = Number(port.value);
+        if (!Number.isInteger(p) || p < 1 || p > 65535) throw new Error("The port must be a number from 1 to 65535.");
         state.session = await api("POST", "/setup", { code: (w.code || codeIn.value).trim(), username: user.value.trim(), password: pass.value });
         w.clientIP = state.session.client_ip;
         await wizLoad(w);
+        w.values["admin.listen"] = (w.adminLocal ? "127.0.0.1:" : ":") + p;
       }));
     user.focus();
   },
@@ -362,7 +406,7 @@ const WIZ_VIEWS = [
       onclick: () => { w.values["server.mode"] = id; allowRow.hidden = id !== "private"; draw(); },
     }, h("strong", null, t), h("span", null, d))));
     draw();
-    put(body, wizHead(w, "Who can use this server?", "You can switch later in Settings."), choices, allowRow,
+    put(body, wizHead(w, "Who can use this server?", "At home or in an office behind a router, Public is fine: the router keeps the internet out. You can switch later in Settings."), choices, allowRow,
       wizNav(w, render, () => {
         w.values["access.allow"] = w.values["server.mode"] === "private" ? lines(allow.value) : w.values["access.allow"];
         if (w.values["server.mode"] === "private" && !w.values["access.allow"].length) throw new Error("List at least one network.");
@@ -371,14 +415,17 @@ const WIZ_VIEWS = [
   // 2: addresses
   (w, body, render) => {
     const current = new Set(w.values["server.listen"].map(hostOf));
-    const all = [...new Set([...w.addrs.filter((a) => !a.loopback).map((a) => a.address), ...current])];
+    const virtual = /^(docker|veth|br-|virbr|cni|flannel|lxc|lxd|vmnet|vboxnet|zt)/;
+    const usable = w.addrs.filter((a) => !a.loopback && !/^fe80/i.test(a.address));
+    const all = [...new Set([...usable.map((a) => a.address), ...current])];
     const boxes = all.map((ip) => {
       const info = w.addrs.find((a) => a.address === ip);
-      const cb = h("input", { type: "checkbox", value: ip, checked: current.has(ip) || (!current.size && info?.public) });
+      const pre = current.size ? current.has(ip) : info && !virtual.test(info.interface);
+      const cb = h("input", { type: "checkbox", value: ip, checked: pre });
       return h("label", { class: "check" }, cb, h("span", { class: "mono" }, ip),
         h("span", { class: "small muted", style: { marginLeft: "auto" } }, info ? `${info.public ? "public" : "private"} · ${info.interface}` : "configured"));
     });
-    put(body, wizHead(w, "Addresses", "DNSNova answers on port 53 of each address you pick. Each one is bound on its own so replies leave from the right address."),
+    put(body, wizHead(w, "Addresses", "DNSNova answers on port 53 of each address you pick. Devices and your router will use these addresses as their DNS server."),
       h("fieldset", { style: { border: 0, margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: "8px" } },
         h("legend", { class: "sr-only" }, "Addresses"), boxes.length ? boxes : h("p", { class: "empty" }, "No addresses found.")),
       wizNav(w, render, () => {
@@ -392,7 +439,7 @@ const WIZ_VIEWS = [
   // 3: upstreams
   (w, body, render) => {
     const prim = h("textarea", { "aria-label": "Primary upstreams" });
-    prim.value = w.values["upstream.primary"].join("\n");
+    prim.value = (w.values["upstream.primary"].length ? w.values["upstream.primary"] : ["https://cloudflare-dns.com/dns-query", "https://dns.quad9.net/dns-query"]).join("\n");
     const fb = h("textarea", { "aria-label": "Fallback upstreams" });
     fb.value = w.values["upstream.fallback"].join("\n");
     const presets = [
@@ -400,7 +447,7 @@ const WIZ_VIEWS = [
       ["Google", ["https://dns.google/dns-query", "tls://dns.google"]],
       ["Quad9", ["https://dns.quad9.net/dns-query", "tls://dns.quad9.net"]],
     ];
-    put(body, wizHead(w, "Upstreams", "Where queries go when the answer is not cached. The fastest healthy one answers."),
+    put(body, wizHead(w, "Upstreams", "Where queries go when the answer is not cached; the fastest healthy one answers. Cloudflare and Quad9 are filled in, both over encrypted DNS. Keep them or choose others."),
       h("div", { class: "chips" }, h("span", { class: "small muted" }, "Add:"), presets.map(([n, list]) =>
         h("button", { type: "button", class: "btn small", onclick: () => { prim.value = [...new Set([...lines(prim.value), list[0]])].join("\n"); } }, n))),
       h("label", { class: "block" }, "Primary, one per line: https://…/dns-query, tls://host, quic://host or an IP address", prim),
@@ -451,14 +498,55 @@ const WIZ_VIEWS = [
     }
     put(body, wizNav(w, render, async () => {
       if (!ok) return false;
-      if (Object.keys(set).length) await api("PATCH", "/config", { hash: w.hash, set });
-      toast("DNSNova is set up");
-      location.hash = "#/overview";
-      showApp();
+      if (Object.keys(set).length) {
+        try {
+          await api("PATCH", "/config", { hash: w.hash, set });
+        } catch (e) {
+          fill(box, problemsBox(e, labelFor));
+          return false;
+        }
+      }
+      wizDone(w);
       return false;
     }, "Start DNSNova"));
   },
 ];
+
+// wizDone tells the user what to do next: point devices at DNSNova, and
+// open the dashboard (on its new address if setup moved it).
+function wizDone(w) {
+  const ips = (w.values["server.listen"] || []).map(hostOf);
+  const adminL = w.values["admin.listen"] || "";
+  const port = adminL.slice(adminL.lastIndexOf(":") + 1);
+  const local = adminL.startsWith("127.") || adminL.startsWith("[::1]");
+  const herePort = location.port || (location.protocol === "https:" ? "443" : "80");
+  const hereLocal = /^(127\.|\[::1\]|localhost)/.test(location.hostname);
+  const stays = !adminL || (port === herePort && local === hereLocal);
+  const url = local ? `http://127.0.0.1:${port}/` : `${location.protocol}//${location.hostname}:${port}/`;
+  const open = h("button", {
+    type: "button", class: "btn primary", onclick: () => {
+      if (stays) { location.hash = "#/overview"; showApp(); } else location.href = url;
+    },
+  }, "Open the dashboard");
+  const ssh = local && !hereLocal ? `ssh -L ${port}:127.0.0.1:${port} user@${location.hostname}` : "";
+  mount(h("main", { class: "wizard" }, h("div", { class: "inner" },
+    h("div", { class: "wizhead" }, h("div", { class: "brand" }, icon.logo(28), h("span", null, "DNSNova"))),
+    h("section", { class: "card wizbody done" },
+      h("div", { class: "result ok" }, h("span", { class: "badge" }, s("svg", { width: 22, height: 22, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" }, s("path", { d: "M20 6 9 17l-5-5" }))),
+        h("div", null, h("h1", { style: { margin: 0 } }, "DNSNova is running"), h("div", { class: "muted" }, "Now point your devices at it."))),
+      ips.length ? [
+        h("p", { style: { margin: 0 } }, "Use this as the DNS server:"),
+        ips.map((ip) => h("div", { class: "copyrow" }, h("span", { class: "k" }, "DNS server"), h("code", null, ip), h("button", { type: "button", class: "btn small", onclick: () => copy(ip) }, "Copy"))),
+        h("ul", { class: "small", style: { margin: 0, paddingLeft: "18px", display: "flex", flexDirection: "column", gap: "6px" } },
+          h("li", null, h("strong", null, "Every device at once: "), "in your router's settings, set this address as the DNS server it hands out (often under DHCP or LAN)."),
+          h("li", null, h("strong", null, "One device: "), "in its network or Wi-Fi settings, change DNS from automatic to manual and enter this address."),
+          (w.values["tls.domains"] || []).length ? h("li", null, h("strong", null, "Encrypted DNS: "), "once the certificate is issued, Settings › Encrypted DNS lists the addresses for phones and browsers.") : null),
+      ] : null,
+      stays ? null : h("p", { class: "notice" }, local
+        ? ["The web interface now listens only on this server. ", ssh ? ["Open a tunnel first: ", h("code", null, ssh), ", then "] : "", "open ", h("code", null, url), "."]
+        : ["The web interface moved to ", h("code", null, url), "."]),
+      h("div", { class: "wiznav" }, h("span"), open)))));
+}
 
 const lines = (t) => t.split(/[\n,]/).map((x) => x.trim()).filter(Boolean);
 
@@ -475,7 +563,7 @@ function changedValues(before, after) {
 const NAV = [
   ["Status", [["Overview", "overview", "overview"], ["Upstreams", "upstreams", "upstreams"], ["Query log", "querylog", "querylog"]]],
   ["Settings", [["DNS & upstreams", "settings/dns", "dns"], ["Encrypted DNS", "settings/encryption", "lock"], ["Access & limits", "settings/access", "shield"], ["Admin", "settings/admin", "user"]]],
-  ["Tools", [["Compare upstreams", "tools/lookup", "compare"]]],
+  ["Tools", [["Setup guide", "tools/guide", "phone"], ["Compare upstreams", "tools/lookup", "compare"]]],
 ];
 
 function route() {
@@ -512,14 +600,14 @@ async function showApp() {
     state.status = await api("GET", "/status");
     fill(server, h("div", null, h("div", { class: "ellipsis" }, state.status.domains[0] || location.hostname),
       h("div", { class: "mono" }, `${state.status.version} · up ${fmt.uptime(state.status.uptime_seconds)}`)),
-      h("button", { type: "button", class: "btn link small", onclick: logout }, "Log out"));
+      h("button", { type: "button", class: "btn link small", onclick: logout }, "Sign out"));
   } catch (e) { /* the page shows the error */ }
 }
 
 async function logout() {
   try { await api("POST", "/logout"); } catch (e) { /* ignore */ }
   state.session = null;
-  showLogin("You are logged out.");
+  showLogin("You are signed out.");
 }
 
 // "/" jumps to any page or setting.
@@ -605,7 +693,8 @@ function overview(main) {
   let range = sessionStorage.getItem("dnsnova-range") || "24h";
   const body = h("div", null, h("p", { class: "muted" }, "Loading…"));
   const seg = h("div", { class: "seg", role: "group", "aria-label": "Time range" });
-  const drawSeg = () => fill(seg, ...["1h", "24h", "7d"].map((r) => h("button", {
+  const ranges = () => ({ "24h": ["1h", "24h"], "30d": ["1h", "24h", "7d", "30d"] })[state.status?.retention] || ["1h", "24h", "7d"];
+  const drawSeg = () => fill(seg, ...ranges().map((r) => h("button", {
     type: "button", "aria-pressed": String(r === range),
     onclick: () => { range = r; sessionStorage.setItem("dnsnova-range", r); drawSeg(); load(); },
   }, r)));
@@ -614,7 +703,9 @@ function overview(main) {
   const load = async () => {
     try {
       const [st, stats, ups, ev] = await Promise.all([api("GET", "/status"), api("GET", "/stats?range=" + range), api("GET", "/upstreams"), api("GET", "/events?limit=40")]);
+      const had = ranges().join();
       state.status = st;
+      if (ranges().join() !== had) drawSeg();
       fill(body, ...drawOverview(st, stats, ups.upstreams, ev.events, range));
     } catch (e) {
       if (e.status !== 401) fill(body, errorBox(e));
@@ -692,7 +783,7 @@ function meter(frac) {
 }
 
 function drawOverview(st, stats, ups, events, range) {
-  const label = { "1h": "last hour", "24h": "last 24 hours", "7d": "last 7 days" }[range];
+  const label = { "1h": "last hour", "24h": "last 24 hours", "7d": "last 7 days", "30d": "last 30 days" }[range];
   const total = Object.values(stats.queries).reduce((a, b) => a + b, 0);
   const rejected = Object.values(stats.rejected).reduce((a, b) => a + b, 0);
   const answered = Object.values(stats.answers).reduce((a, b) => a + b, 0);
@@ -798,7 +889,8 @@ function drawOverview(st, stats, ups, events, range) {
     h("dl", { class: "kvs" }, privRows.map(([k, v, cls]) => h("div", null, h("dt", null, k), h("dd", { class: cls }, v)))),
     h("footer", { class: "dfoot" }, h("span", null, "In memory only"), h("a", { href: "#/querylog" }, "Query log")));
 
-  return [h("div", { class: "dash" }, summary, chart, upCard, protos,
+  const notServing = st.serves_dns === false ? h("p", { class: "notice warn s12" }, "DNS is not served yet: no address is set. Choose addresses and upstreams in ", h("a", { href: "#/settings/access" }, "Access & limits"), " and ", h("a", { href: "#/settings/dns" }, "DNS & upstreams"), ".") : null;
+  return [h("div", { class: "dash" }, notServing, summary, chart, upCard, protos,
     topCard("Top domains", "dns", stats.top_domains || [], "Nothing listed yet"),
     topCard("Not found", "alert", stats.top_nxdomains || [], "None"),
     rejCard, evCard, certCard, privCard)];
@@ -839,7 +931,7 @@ function responseChart(ser, total, range, label) {
     cursor.setAttribute("x1", x(i));
     cursor.setAttribute("x2", x(i));
     cursor.setAttribute("visibility", "visible");
-    fill(tip, h("div", { class: "mono small" }, fmt.time(p.t, range === "7d" ? "full" : false)),
+    fill(tip, h("div", { class: "mono small" }, fmt.time(p.t, range === "7d" || range === "30d" ? "full" : false)),
       h("div", null, h("span", { class: "swatch" }), " median ", h("strong", { class: "num" }, fmt.ms(p.latency.p50_ms) + " ms")),
       h("div", null, h("span", { class: "swatch dash" }), " 95th ", h("strong", { class: "num" }, fmt.ms(p.latency.p95_ms) + " ms")),
       h("div", { class: "muted" }, fmt.int(p.queries) + " queries"));
@@ -850,7 +942,7 @@ function responseChart(ser, total, range, label) {
   svg.addEventListener("pointermove", show);
   svg.addEventListener("pointerdown", show);
   svg.addEventListener("pointerleave", () => { tip.hidden = true; cursor.setAttribute("visibility", "hidden"); });
-  const names = ticks.map((t, i) => (i === 4 ? "now" : fmt.time(t, range === "7d")));
+  const names = ticks.map((t, i) => (i === 4 ? "now" : fmt.time(t, range === "7d" || range === "30d")));
   return [wrap, h("div", { class: "axis" }, names.map((n, i) => h("span", null, i && n === names[i - 1] ? "" : n)))];
 }
 
@@ -991,6 +1083,30 @@ function queryLogPage(main) {
   state.timer = setInterval(() => { if (document.visibilityState === "visible" && st && st.on) load(); }, 5000);
 }
 
+// ---------- setup guide ----------
+
+function guidePage(main) {
+  const body = h("div", { style: { display: "flex", flexDirection: "column", gap: "16px" } }, h("p", { class: "muted" }, "Loading…"));
+  main.classList.add("narrow");
+  main.append(pageHead("Setup guide", "Tools"), body);
+  const copyrow = (k, v) => h("div", { class: "copyrow" }, h("span", { class: "k" }, k), h("code", null, v), h("button", { type: "button", class: "btn small", onclick: () => copy(v) }, "Copy"));
+  (async () => {
+    try {
+      const info = await api("GET", "/guide");
+      if (!(info.plain || []).length && !info.doh && !info.dot) {
+        fill(body, h("p", { class: "notice" }, "DNS is not listening on any address yet. Choose addresses in ", h("a", { href: "#/settings/access" }, "Access & limits"), "."));
+        return;
+      }
+      const addrs = [...(info.plain || []).map((ip) => ["DNS server", ip]), info.doh ? ["DNS over HTTPS", info.doh] : null, info.dot ? ["DNS over TLS", info.dot] : null, info.doq ? ["DNS over QUIC", info.doq] : null].filter(Boolean);
+      fill(body,
+        h("section", { class: "card" }, h("h2", null, "Addresses"), h("div", { class: "addrs" }, addrs.map(([k, v]) => copyrow(k, v)))),
+        h("section", { class: "card" }, h("h2", null, "Point a device or your router at DNSNova"),
+          h("p", { class: "small muted", style: { margin: 0 } }, "Setting it once on the router covers every device on the network. Set it on a device to use it there only, or when away from home with encrypted DNS."),
+          ...tabs(guides(info, { h, copyrow }), { h, fill })));
+    } catch (e) { if (e.status !== 401) fill(body, errorBox(e)); }
+  })();
+}
+
 // ---------- settings ----------
 
 // Field types: text, list (one per line), bool, number, select, listen (a
@@ -1014,6 +1130,9 @@ const SETTINGS = {
         { key: "cache.min_ttl", label: "Minimum TTL", type: "text", help: "Answers are kept at least this long." },
         { key: "cache.max_ttl", label: "Maximum TTL", type: "text", help: "Answers are kept at most this long." },
         { key: "cache.max_negative_ttl", label: "Maximum negative TTL", type: "text", help: "Longest time to remember that a name does not exist." },
+      ] },
+      { title: "Local names", fields: [
+        { key: "local.records", label: "Names answered here", type: "list", help: "One per line: a name and an address, such as \u201cnas.home 192.168.1.5\u201d. \u201c*.dev.home 192.168.1.9\u201d covers every name under dev.home. Give a name both an IPv4 and an IPv6 address on two lines. 0.0.0.0 makes a name unreachable." },
       ] },
       { title: "Clients", fields: [
         { key: "ddr.enabled", label: "Discovery (DDR)", type: "bool", help: "Devices asking over plain DNS learn the encrypted addresses and switch automatically." },
@@ -1051,6 +1170,7 @@ const SETTINGS = {
       { title: "Who can use it", fields: [
         { key: "server.mode", label: "Mode", type: "select", options: [["public", "Public: anyone, with limits"], ["private", "Private: listed networks only"]], help: "Private mode answers no one else, not even with an error." },
         { key: "access.allow", label: "Allowed networks", type: "list", help: "Addresses or networks, one per line.", show: (v) => v["server.mode"] === "private" },
+        { key: "access.deny", label: "Blocked clients", type: "list", help: "Addresses or networks that never get an answer, in either mode, such as 203.0.113.7 or 198.51.100.0/24. One per line." },
         { key: "server.listen", label: "DNS addresses", type: "list", help: "UDP and TCP, usually port 53. List each address rather than 0.0.0.0." },
       ] },
       { title: "Limits", fields: [
@@ -1069,17 +1189,20 @@ const SETTINGS = {
   admin: {
     title: "Admin",
     sections: [
+      { title: "Statistics", action: ["Clear statistics", async () => { await api("POST", "/stats/clear"); toast("Statistics cleared"); }], fields: [
+        { key: "stats.retention", label: "Keep statistics for", type: "select", options: [["24h", "24 hours"], ["7d", "7 days"], ["30d", "30 days"]], help: "Kept in memory only, so a restart starts them again. Counts and response times, and the domain lists; never client addresses." },
+      ] },
       { title: "Access", fields: [
         { key: "admin.listen", label: "Admin address", type: "text", help: "127.0.0.1:7000 = only through an SSH tunnel (more secure); :7000 = from anywhere, with a password." },
         { key: "metrics.listen", label: "Metrics address", type: "text", help: "Prometheus metrics and the health check. Keep it on a private address." },
       ] },
     ],
-    extra: ["Password", "Two-step verification", "Configuration history", "Edit the configuration file"],
+    extra: ["Password", "Two-step verification", "Configuration history", "Edit the configuration file", "Clear statistics"],
   },
 };
 
 const PAGES_BY_ROUTE = {
-  overview, upstreams: upstreamsPage, querylog: queryLogPage, "tools/lookup": lookupPage,
+  overview, upstreams: upstreamsPage, querylog: queryLogPage, "tools/lookup": lookupPage, "tools/guide": guidePage,
   "settings/dns": (m) => settingsPage(m, "dns"),
   "settings/encryption": (m) => settingsPage(m, "encryption"),
   "settings/access": (m) => settingsPage(m, "access"),

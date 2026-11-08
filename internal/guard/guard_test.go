@@ -116,3 +116,18 @@ func TestRRL(t *testing.T) {
 		t.Fatal("nil RRL sends everything")
 	}
 }
+
+func TestDenyList(t *testing.T) {
+	deny := ACL{netip.MustParsePrefix("198.51.100.0/24"), netip.MustParsePrefix("2001:db8:bad::/48")}
+	pub := New(Limits{Deny: deny})
+	for ip, want := range map[string]Verdict{"198.51.100.7": DenyACL, "2001:db8:bad::1": DenyACL, "::ffff:198.51.100.8": DenyACL, "203.0.113.1": Allow} {
+		if v := pub.Admit(netip.MustParseAddr(ip)); v != want {
+			t.Errorf("public %s: %v, want %v", ip, v, want)
+		}
+	}
+	// In private mode the deny list wins over the allow list.
+	priv := New(Limits{Private: true, Allow: ACL{netip.MustParsePrefix("198.51.0.0/16")}, Deny: deny})
+	if priv.Permitted(netip.MustParseAddr("198.51.100.7")) || !priv.Permitted(netip.MustParseAddr("198.51.1.1")) {
+		t.Error("private mode with a deny list")
+	}
+}
