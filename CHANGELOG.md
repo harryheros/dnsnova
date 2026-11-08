@@ -51,6 +51,15 @@ First development release of the 1.0 core.
   every upstream the same question and shows each answer and its time. Light and dark appearance, or follow the system.
 - Admin API: `GET /system/addresses`, `POST /tools/lookup`, and `client_ip`
   in session responses.
+- Public status page (`[status] enabled`, off by default) at the DoH
+  address: addresses with copy buttons, setup steps per platform (Android,
+  iPhone and Mac with a downloadable configuration profile, Windows,
+  browsers, routers and Linux), what the server keeps, whether the query
+  log is on, and "is this device using it?", answered with a one-time check
+  name under check.<domain> that DNSNova notes (token and protocol only) for
+  five minutes. No statistics; private mode limits it to allowed networks.
+- Overview as a fixed grid: equal card heights, fixed list lengths with
+  placeholders, so it looks the same with little data as with a lot.
 - Interface polish: navigation and event icons (line icons in the style of
   Lucide, ISC), a clearer summary with three key figures, a response-time
   chart with an area, a pointer readout and an empty state, upstream states

@@ -90,3 +90,21 @@ func matchZone(n string) (string, bool) {
 	}
 	return "", false
 }
+
+// isProbe reports whether name (wire format) is a single label directly
+// under zone.
+func isProbe(name, zone string) bool {
+	if len(name) <= len(zone) || !strings.HasSuffix(name, zone) {
+		return false
+	}
+	label := name[:len(name)-len(zone)]
+	return int(label[0]) == len(label)-1
+}
+
+// ProbeToken returns the token of a probe name: its first label.
+func ProbeToken(name string) string {
+	if name == "" || int(name[0]) >= len(name) {
+		return ""
+	}
+	return name[1 : 1+int(name[0])]
+}

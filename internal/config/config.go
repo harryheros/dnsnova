@@ -99,6 +99,9 @@ type Config struct {
 	Admin struct {
 		Listen string // web interface and API; "" = off
 	}
+	Status struct {
+		Enabled bool // public status page on the DoH addresses
+	}
 	Log struct {
 		Queries bool // no longer used: the query log runs from the admin interface, in memory
 	}
@@ -318,6 +321,14 @@ func (c *Config) validate(lines map[string]int) (Errors, []string) {
 	case ModePublic:
 		if len(c.Access.Allow) > 0 {
 			warns = append(warns, "access.allow is ignored in public mode")
+		}
+	}
+	if c.Status.Enabled {
+		if len(c.DoH.HTTPSListen) == 0 && c.DoH.Listen == "" {
+			warns = append(warns, "status.enabled: the status page is served on the DNS-over-HTTPS addresses, and none is set (doh.https_listen or doh.listen)")
+		}
+		if len(c.TLS.Domains) == 0 {
+			warns = append(warns, "status.enabled: without tls.domains the status page cannot offer encrypted addresses or the check")
 		}
 	}
 	if c.Log.Queries {
@@ -593,12 +604,13 @@ var fields = map[string]field{
 
 	"metrics.listen": str(func(c *Config) *string { return &c.Metrics.Listen }),
 	"admin.listen":   str(func(c *Config) *string { return &c.Admin.Listen }),
+	"status.enabled": boolean(func(c *Config) *bool { return &c.Status.Enabled }),
 	"log.queries":    boolean(func(c *Config) *bool { return &c.Log.Queries }),
 }
 
 var knownTables = map[string]bool{
 	"server": true, "doh": true, "dot": true, "doq": true, "tls": true, "ddr": true, "upstream": true, "cache": true,
-	"access": true, "limits": true, "metrics": true, "log": true, "admin": true,
+	"access": true, "limits": true, "metrics": true, "log": true, "admin": true, "status": true,
 }
 
 func want(v Value, k Kind) error {

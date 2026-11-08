@@ -140,6 +140,17 @@ The interface is built into the binary and makes no requests to other sites.
 Everything it does goes through the [admin API](./docs/api.md), which scripts
 can use too. Its design rules are in [docs/design.md](./docs/design.md).
 
+### Status page
+
+With `[status] enabled = true` (or the switch in Settings › Encrypted DNS),
+`https://your-domain/` shows a public page: the server's addresses, setup
+steps for Android, iPhone and Mac (with a profile to download), Windows,
+browsers and routers, what the server keeps, and whether the query log is
+on. A check on the page tells visitors whether their device is actually
+using this server, and over which protocol: the page looks up a one-time
+name under `check.your-domain`, and DNSNova notes only that name and the
+protocol, for five minutes. No statistics are shown.
+
 ### Metrics and health
 
 With `[metrics] listen = "127.0.0.1:9153"`:
