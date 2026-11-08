@@ -55,7 +55,7 @@ curl -fsSL https://raw.githubusercontent.com/harryheros/dnsnova/main/install.sh 
 | **Local answers** | Reverse lookups of private, loopback and link-local addresses (RFC 6303) and `localhost.` never leave the server. |
 | **DNSSEC** | Signatures passed through to clients that ask; validation is left to the upstream resolver. |
 | **Configuration** | One TOML file with line-numbered errors, applied without restart on save or `SIGHUP`; cache and statistics are kept. |
-| **Operations** | Prometheus metrics and a `/healthz` endpoint. |
+| **Operations** | Prometheus metrics, a `/healthz` endpoint, and an [admin API](./docs/api.md) for status, statistics, upstream health, recent events and editing the configuration with preview, conflict detection and history. |
 | **Privacy** | No telemetry; queries are not logged unless you turn it on — see [PRIVACY.md](./PRIVACY.md). |
 | **Dependencies** | Go standard library plus [quic-go](https://github.com/quic-go/quic-go) (MIT). The ACME client and TOML parser are built in. |
 
@@ -113,6 +113,32 @@ sudo sysctl --system
 ```
 
 **Behind nginx**: set `[doh] listen = "127.0.0.1:8053"` and proxy to it — see [`deploy/nginx-doh.conf`](./deploy/nginx-doh.conf). nginx must send `X-Real-IP` so limits and access lists apply to the real client.
+
+### Web interface
+
+The installer asks whether the admin interface (port 7000) should be
+reachable only from the server itself, through an SSH tunnel, or from
+anywhere with a password; `--admin local|public|off` answers without asking.
+It then prints a one-time setup link. The wizard creates the administrator
+and walks through who may use the server, its addresses, upstreams and
+encrypted DNS.
+
+Afterwards the interface shows response times, traffic by protocol,
+upstream health, the most queried domains, recent events and the
+certificate, and every setting can be
+changed there: each change is listed before it is applied, keeps the file's
+comments, refuses to overwrite someone else's edit, is put back if it cannot
+be applied, and can be undone from the history. Two-step verification is
+optional. Light and dark appearance, or follow the system.
+
+Queries and client addresses are never written to disk. For
+troubleshooting, a query log can be started from the interface: it is kept
+in memory, shortens client addresses, and stops by itself (see
+[PRIVACY.md](./PRIVACY.md)).
+
+The interface is built into the binary and makes no requests to other sites.
+Everything it does goes through the [admin API](./docs/api.md), which scripts
+can use too. Its design rules are in [docs/design.md](./docs/design.md).
 
 ### Metrics and health
 

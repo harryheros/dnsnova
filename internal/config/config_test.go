@@ -213,3 +213,48 @@ func TestTLSValidation(t *testing.T) {
 		t.Fatalf("without 443 the challenge should be http-01: %v %v", c, err)
 	}
 }
+
+// Every setting reads back in a form the file accepts, and writing that
+// value into a file loads to the same value.
+func TestGetRoundTrip(t *testing.T) {
+	base := "[server]\nmode = \"private\"\nlisten = [\"127.0.0.1:53\"]\n\n[access]\nallow = [\"10.0.0.0/8\", \"192.0.2.1\"]\n\n[upstream]\nprimary = [\"udp://192.0.2.53\"]\nbootstrap = []\n\n[limits]\nclient_qps = 2.5\nrrl_rate = 7\n"
+	cfg, doc, _, err := Load([]byte(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := cfg.Get("access.allow"); Format(v) != `["10.0.0.0/8", "192.0.2.1"]` {
+		t.Fatalf("access.allow reads back as %s", Format(v))
+	}
+	if v, _ := cfg.Get("upstream.timeout"); v.Str != "3s" {
+		t.Fatalf("durations read back as %q", v.Str)
+	}
+	for _, key := range Keys() {
+		v, ok := cfg.Get(key)
+		if !ok {
+			t.Fatalf("%s: no getter", key)
+		}
+		table, k := SplitKey(key)
+		src, err := doc.Set(table, k, v)
+		if err != nil {
+			t.Fatalf("%s = %s: %v", key, Format(v), err)
+		}
+		cfg2, _, _, err := Load(src)
+		if err != nil {
+			t.Fatalf("%s = %s does not load back: %v", key, Format(v), err)
+		}
+		if v2, _ := cfg2.Get(key); Format(v2) != Format(v) {
+			t.Fatalf("%s: %s became %s", key, Format(v), Format(v2))
+		}
+	}
+	if _, ok := cfg.Get("no.such"); ok {
+		t.Fatal("unknown key has a value")
+	}
+	for _, c := range []struct {
+		d time.Duration
+		s string
+	}{{0, "0s"}, {90 * time.Second, "90s"}, {2 * time.Hour, "2h"}, {1500 * time.Millisecond, "1.5s"}, {250 * time.Millisecond, "250ms"}, {10 * time.Minute, "10m"}} {
+		if got := FormatDuration(c.d); got != c.s {
+			t.Fatalf("FormatDuration(%v) = %q, want %q", c.d, got, c.s)
+		}
+	}
+}
