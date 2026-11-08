@@ -1,10 +1,10 @@
 # Privacy
 
-dnsnova runs on your server. This page describes what the software itself
-does with data. If you operate a dnsnova server for other people, you are
+DNSNova runs on your server. This page describes what the software itself
+does with data. If you operate a DNSNova server for other people, you are
 responsible for telling them how you run it.
 
-## What dnsnova never does
+## What DNSNova never does
 
 - It sends no telemetry, usage statistics or crash reports, to anyone.
 - It does not forward client IP addresses to upstream resolvers. Upstreams
