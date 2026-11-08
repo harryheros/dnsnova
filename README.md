@@ -23,11 +23,11 @@ When it finishes, it prints the addresses of the web interface:
 ```
 DNSNova is installed and running.
 Open one of these addresses and follow the setup wizard:
-  http://192.168.0.9:7000
+  http://192.168.1.10:7000
   http://127.0.0.1:7000
 ```
 
-Open one and follow the wizard: administrator password, who may use the server, the addresses to answer on, upstreams, and optionally a domain for encrypted DNS. DNS starts when you finish, and the last page says what to set on your router or devices.
+Open one and follow the wizard: administrator password, the addresses and port to answer on, upstreams, and optionally a domain for encrypted DNS. DNS starts when you finish, and the last page says what to set on your router or devices.
 
 ## Uninstall
 

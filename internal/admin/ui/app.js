@@ -284,11 +284,17 @@ const PROJECT = "https://github.com/harryheros/dnsnova";
 
 // signFooter: links, and the appearance as three icons, as on the sign-in
 // page of AdGuard Home.
-function signFooter() {
+// themeIcons: the appearance as three small icon buttons.
+function themeIcons() {
   const seg = h("div", { class: "iconseg", role: "group", "aria-label": "Appearance" });
   const draw = () => fill(seg, ...[["auto", "Follow the system", icon.auto], ["dark", "Dark", icon.moon], ["light", "Light", icon.sun]].map(([id, label, ic]) =>
     h("button", { type: "button", title: label, "aria-label": label, "aria-pressed": String(window.dnsnovaTheme.get() === id), onclick: () => { window.dnsnovaTheme.set(id); draw(); } }, ic())));
   draw();
+  return seg;
+}
+
+function signFooter() {
+  const seg = themeIcons();
   return h("footer", { class: "signfoot" }, h("div", { class: "inner" },
     h("nav", { class: "links", "aria-label": "About DNSNova" },
       h("a", { href: PROJECT, rel: "noopener noreferrer", target: "_blank" }, "Homepage"),
@@ -300,7 +306,7 @@ function signFooter() {
 
 // ---------- setup wizard ----------
 
-const WIZ_STEPS = ["Administrator", "Who can use it", "Addresses", "Upstreams", "Encrypted DNS", "Review"];
+const WIZ_STEPS = ["Administrator", "Addresses", "Upstreams", "Encrypted DNS", "Review"];
 
 async function showWizard(code, codeRequired) {
   const w = { step: 0, code, codeRequired, cfg: null, hash: "", values: {}, addrs: [], clientIP: "" };
@@ -308,9 +314,9 @@ async function showWizard(code, codeRequired) {
     const body = h("section", { class: "card wizbody", "aria-labelledby": "step-h" });
     const steps = h("ol", { class: "steps", "aria-label": "Steps" }, WIZ_STEPS.map((t, i) =>
       h("li", { class: i < w.step ? "done" : "", "aria-current": i === w.step ? "step" : null },
-        h("span", { class: "n" }, i < w.step ? "✓" : String(i + 1)), t)));
+        h("span", { class: "n" }, i < w.step ? "✓" : String(i + 1)), h("span", { class: "t" }, t))));
     mount(h("main", { class: "wizard" }, h("div", { class: "inner" },
-      h("div", { class: "wizhead" }, h("div", { class: "brand" }, icon.logo(28), h("span", null, "DNSNova setup")), h("div", { style: { minWidth: "220px" } }, appearance())),
+      h("div", { class: "wizhead" }, h("div", { class: "brand" }, icon.logo(28), h("span", null, "DNSNova setup")), themeIcons()),
       h("div", { class: "row" }, steps, body))));
     WIZ_VIEWS[w.step](w, body, render);
   };
@@ -324,7 +330,7 @@ function wizHead(w, title, desc) {
     desc ? h("p", { class: "muted", style: { margin: 0 } }, desc) : null);
 }
 
-function wizNav(w, render, next, nextLabel = "Continue") {
+function wizNav(w, render, next, nextLabel = "Next") {
   const err = h("p", { class: "err small", role: "alert" });
   const nb = h("button", { type: "button", class: "btn primary" }, nextLabel);
   nb.addEventListener("click", async () => {
@@ -375,7 +381,7 @@ const WIZ_VIEWS = [
     w.adminLocal = /^(127\.|\[::1\]|localhost)/.test(location.hostname);
     drawAccess();
     put(body, wizHead(w, "Create the administrator", "Only this account can sign in to DNSNova."),
-      w.code || !w.codeRequired ? null : h("label", { class: "block" }, ["Setup code: the installer printed it, or run ", h("code", null, "sudo cat /var/lib/dnsnova/secrets/setup-code"), " on the server. It is asked only when this page is opened from outside your network."], codeIn),
+      w.code || !w.codeRequired ? null : h("label", { class: "block" }, ["Setup code: the installer printed it, or run ", h("code", null, "cat /var/lib/dnsnova/secrets/setup-code"), " on the server. It is asked only when this page is opened from outside your network."], codeIn),
       h("label", { class: "block" }, "User name", user),
       h("label", { class: "block" }, "Password (at least 10 characters)", pass),
       h("label", { class: "block" }, "Password again", pass2),
@@ -392,51 +398,45 @@ const WIZ_VIEWS = [
       }));
     user.focus();
   },
-  // 1: mode
+  // 1: addresses
   (w, body, render) => {
-    const allow = h("textarea", { "aria-label": "Allowed networks, one per line" });
-    allow.value = (w.values["access.allow"].length ? w.values["access.allow"] : [w.clientIP].filter(Boolean)).join("\n");
-    const allowRow = h("label", { class: "block", hidden: w.values["server.mode"] !== "private" }, "Networks allowed to query, one per line (your address is filled in)", allow);
-    const choices = h("div", { class: "choices", role: "radiogroup", "aria-label": "Who can use this server" });
-    const draw = () => fill(choices, ...[
-      ["public", "Public", "Anyone may query. Limits per client, per network and in total keep it from being abused."],
-      ["private", "Private", "Only networks you list may query. Everyone else gets no reply at all."],
-    ].map(([id, t, d]) => h("button", {
-      type: "button", class: "choice", role: "radio", "aria-checked": String(w.values["server.mode"] === id),
-      onclick: () => { w.values["server.mode"] = id; allowRow.hidden = id !== "private"; draw(); },
-    }, h("strong", null, t), h("span", null, d))));
-    draw();
-    put(body, wizHead(w, "Who can use this server?", "At home or in an office behind a router, Public is fine: the router keeps the internet out. You can switch later in Settings."), choices, allowRow,
-      wizNav(w, render, () => {
-        w.values["access.allow"] = w.values["server.mode"] === "private" ? lines(allow.value) : w.values["access.allow"];
-        if (w.values["server.mode"] === "private" && !w.values["access.allow"].length) throw new Error("List at least one network.");
-      }));
-  },
-  // 2: addresses
-  (w, body, render) => {
-    const current = new Set(w.values["server.listen"].map(hostOf));
+    const cur = w.values["server.listen"];
+    const allNow = cur.length > 0 && cur.every((x) => /^(:|0\.0\.0\.0:|\[::\]:)/.test(x));
+    const current = new Set(allNow ? [] : cur.map(hostOf));
     const virtual = /^(docker|veth|br-|virbr|cni|flannel|lxc|lxd|vmnet|vboxnet|zt)/;
     const usable = w.addrs.filter((a) => !a.loopback && !/^fe80/i.test(a.address));
-    const all = [...new Set([...usable.map((a) => a.address), ...current])];
-    const boxes = all.map((ip) => {
+    const list = [...new Set([...usable.map((a) => a.address), ...current])];
+    const curPort = cur.length ? cur[0].slice(cur[0].lastIndexOf(":") + 1) : "53";
+    const port = h("input", { type: "number", min: 1, max: 65535, value: curPort, inputmode: "numeric", "aria-label": "Port" });
+    port.style.maxWidth = "120px";
+    const all = h("input", { type: "checkbox", checked: allNow || !list.length });
+    const boxes = list.map((ip) => {
       const info = w.addrs.find((a) => a.address === ip);
       const pre = current.size ? current.has(ip) : info && !virtual.test(info.interface);
       const cb = h("input", { type: "checkbox", value: ip, checked: pre });
       return h("label", { class: "check" }, cb, h("span", { class: "mono" }, ip),
         h("span", { class: "small muted", style: { marginLeft: "auto" } }, info ? `${info.public ? "public" : "private"} · ${info.interface}` : "configured"));
     });
-    put(body, wizHead(w, "Addresses", "DNSNova answers on port 53 of each address you pick. Devices and your router will use these addresses as their DNS server."),
-      h("fieldset", { style: { border: 0, margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: "8px" } },
-        h("legend", { class: "sr-only" }, "Addresses"), boxes.length ? boxes : h("p", { class: "empty" }, "No addresses found.")),
+    const listBox = h("fieldset", { style: { border: 0, margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: "8px" } },
+      h("legend", { class: "sr-only" }, "Addresses"), boxes);
+    const sync = () => { listBox.hidden = all.checked; };
+    all.addEventListener("change", sync);
+    sync();
+    put(body, wizHead(w, "Addresses", "Devices and your router will use these addresses as their DNS server."),
+      h("label", { class: "check" }, all, h("span", null, h("strong", null, "All addresses of this server"), h("span", { class: "small muted", style: { display: "block" } }, "Also ones it gets later. Good when the address can change."))),
+      boxes.length ? listBox : null,
+      h("label", { class: "block" }, "Port (53 is the standard DNS port; devices and routers expect it)", port),
+      h("p", { class: "small muted", style: { margin: 0 } }, "If another DNS server, such as AdGuard Home, already uses this port, stop it first or choose another port."),
       wizNav(w, render, () => {
+        const p = Number(port.value);
+        if (!Number.isInteger(p) || p < 1 || p > 65535) throw new Error("The port must be a number from 1 to 65535.");
+        if (all.checked) { w.values["server.listen"] = [":" + p]; return; }
         const ips = boxes.map((b) => b.querySelector("input")).filter((c) => c.checked).map((c) => c.value);
-        if (!ips.length) throw new Error("Pick at least one address.");
-        // Keep the port of addresses already configured; new ones get 53.
-        const port = (ip) => { const a = w.cfg["server.listen"].find((x) => hostOf(x) === ip); return a ? a.slice(a.lastIndexOf(":") + 1) : 53; };
-        w.values["server.listen"] = ips.map((ip) => withPort(ip, port(ip)));
+        if (!ips.length) throw new Error("Pick at least one address, or All addresses.");
+        w.values["server.listen"] = ips.map((ip) => withPort(ip, p));
       }));
   },
-  // 3: upstreams
+  // 2: upstreams
   (w, body, render) => {
     const prim = h("textarea", { "aria-label": "Primary upstreams" });
     prim.value = (w.values["upstream.primary"].length ? w.values["upstream.primary"] : ["https://cloudflare-dns.com/dns-query", "https://dns.quad9.net/dns-query"]).join("\n");
@@ -458,7 +458,7 @@ const WIZ_VIEWS = [
         if (!w.values["upstream.primary"].length) throw new Error("Add at least one primary upstream.");
       }));
   },
-  // 4: encrypted DNS
+  // 3: encrypted DNS
   (w, body, render) => {
     const dom = h("input", { type: "text", class: "mono", value: w.values["tls.domains"][0] || "", placeholder: "dns.example.com", spellcheck: "false" });
     const mail = h("input", { type: "email", value: w.values["tls.email"] || "", placeholder: "optional" });
@@ -478,7 +478,7 @@ const WIZ_VIEWS = [
         });
       }));
   },
-  // 5: review
+  // 4: review
   async (w, body, render) => {
     put(body, wizHead(w, "Ready to start", "Check the changes. Everything can be changed later in Settings."));
     const set = changedValues(w.cfg, w.values);
@@ -515,7 +515,10 @@ const WIZ_VIEWS = [
 // wizDone tells the user what to do next: point devices at DNSNova, and
 // open the dashboard (on its new address if setup moved it).
 function wizDone(w) {
-  const ips = (w.values["server.listen"] || []).map(hostOf);
+  let ips = (w.values["server.listen"] || []).map(hostOf).filter((x) => x && x !== "0.0.0.0" && x !== "::");
+  if (!ips.length) ips = w.addrs.filter((a) => !a.loopback && !/^fe80/i.test(a.address)).map((a) => a.address);
+  const l0 = (w.values["server.listen"] || [""])[0] || ":53";
+  const dnsPort = l0.slice(l0.lastIndexOf(":") + 1);
   const adminL = w.values["admin.listen"] || "";
   const port = adminL.slice(adminL.lastIndexOf(":") + 1);
   const local = adminL.startsWith("127.") || adminL.startsWith("[::1]");
@@ -536,6 +539,7 @@ function wizDone(w) {
         h("div", null, h("h1", { style: { margin: 0 } }, "DNSNova is running"), h("div", { class: "muted" }, "Now point your devices at it."))),
       ips.length ? [
         h("p", { style: { margin: 0 } }, "Use this as the DNS server:"),
+        dnsPort !== "53" ? h("p", { class: "notice warn small", style: { margin: 0 } }, `On port ${dnsPort}. Most devices and routers can only use port 53.`) : null,
         ips.map((ip) => h("div", { class: "copyrow" }, h("span", { class: "k" }, "DNS server"), h("code", null, ip), h("button", { type: "button", class: "btn small", onclick: () => copy(ip) }, "Copy"))),
         h("ul", { class: "small", style: { margin: 0, paddingLeft: "18px", display: "flex", flexDirection: "column", gap: "6px" } },
           h("li", null, h("strong", null, "Every device at once: "), "in your router's settings, set this address as the DNS server it hands out (often under DHCP or LAN)."),
@@ -1099,7 +1103,8 @@ function guidePage(main) {
       }
       const addrs = [...(info.plain || []).map((ip) => ["DNS server", ip]), info.doh ? ["DNS over HTTPS", info.doh] : null, info.dot ? ["DNS over TLS", info.dot] : null, info.doq ? ["DNS over QUIC", info.doq] : null].filter(Boolean);
       fill(body,
-        h("section", { class: "card" }, h("h2", null, "Addresses"), h("div", { class: "addrs" }, addrs.map(([k, v]) => copyrow(k, v)))),
+        h("section", { class: "card" }, h("h2", null, "Addresses"), h("div", { class: "addrs" }, addrs.map(([k, v]) => copyrow(k, v))),
+          info.port && info.port !== 53 ? h("p", { class: "notice warn small", style: { margin: 0 } }, `Plain DNS is on port ${info.port}. Most phones, computers and routers can only use port 53; set the port where they allow it.`) : null),
         h("section", { class: "card" }, h("h2", null, "Point a device or your router at DNSNova"),
           h("p", { class: "small muted", style: { margin: 0 } }, "Setting it once on the router covers every device on the network. Set it on a device to use it there only, or when away from home with encrypted DNS."),
           ...tabs(guides(info, { h, copyrow }), { h, fill })));
