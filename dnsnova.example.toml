@@ -129,5 +129,15 @@ block_any = true            # answer ANY queries with NOTIMP
 # Prometheus metrics at /metrics and a health check at /healthz.
 listen = "127.0.0.1:9153"
 
-[log]
-queries = false             # log every query (for troubleshooting only)
+[admin]
+# The web interface and its API (docs/api.md). Leave it on 127.0.0.1 and reach it through an SSH tunnel
+# (ssh -L 7000:127.0.0.1:7000 you@server), or listen on ":7000" to reach it
+# from anywhere, protected by a password, login lockout and optional
+# two-step verification. It uses HTTPS on the same port once a certificate
+# exists. Leave empty to turn it off.
+listen = "127.0.0.1:7000"
+
+# There is no setting to log queries. DNSNova writes no queries or client
+# addresses to disk; for troubleshooting, start the query log in the admin
+# interface: it is kept in memory, hides the last part of client addresses
+# unless asked not to, and stops by itself.
