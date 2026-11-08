@@ -89,7 +89,7 @@ func (s *Server) serveUDP(l *udpListener) {
 		go func() {
 			defer func() { <-s.udpInflight; s.wg.Done() }()
 			start := time.Now()
-			res := s.res.Resolve(pkt, true)
+			res := s.resolve(pkt, true, "udp")
 			if res.Resp == nil {
 				return
 			}
@@ -281,7 +281,7 @@ func (s *Server) serveTCPConn(c net.Conn, ip netip.Addr, proto, pipeline int, id
 		go func() {
 			defer func() { <-inflight; wg.Done() }()
 			start := time.Now()
-			res := s.res.Resolve(msg, false)
+			res := s.resolve(msg, false, name)
 			if res.Resp != nil {
 				writeTCP(c, &wmu, res.Resp)
 				s.logQuery(st, ip, name, res, start)
@@ -325,6 +325,7 @@ func (s *Server) serveHTTP(ln net.Listener, addr, path string, h http.Handler, t
 	if path != "" {
 		mux := http.NewServeMux()
 		mux.Handle(path, h)
+		mux.Handle("/", http.HandlerFunc(s.handlePublic))
 		h = mux
 	}
 	srv := &http.Server{
@@ -457,7 +458,7 @@ func (s *Server) handleDoH(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	start := time.Now()
-	res := s.res.Resolve(msg, false)
+	res := s.resolve(msg, false, name)
 	if res.Resp == nil {
 		http.Error(w, "malformed dns message", http.StatusBadRequest)
 		return

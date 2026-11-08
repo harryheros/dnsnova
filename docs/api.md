@@ -97,6 +97,22 @@ length and `full_ip`. `GET /status` reports `privacy.query_log` and
 | `GET /system/addresses` | | `{"addresses": [{"address", "interface", "public", "loopback"}]}`: the server's IP addresses, for choosing `server.listen`. |
 | `POST /tools/lookup` | `{"name", "type", "upstreams"}` | `{"results": [{"upstream", "rcode", "answers", "ms", "error"}]}`: asks each upstream directly, bypassing the cache, in parallel with a 5-second limit. `type` is a record type such as `A` or `HTTPS`; `upstreams` is optional; by default the configured ones are asked. |
 
+## Public status page
+
+Not part of the admin API: when `[status] enabled = true`, these are served
+on the DNS-over-HTTPS addresses, without sign-in. In private mode they are
+404 for clients outside `access.allow`.
+
+| Method and path | Result |
+| --- | --- |
+| `GET /` | The page. |
+| `GET /status.json` | `{"domain", "mode", "healthy", "encrypted", "doh", "http3", "dot", "doq", "plain", "check", "query_log", "query_log_full_ip"}`. `plain` lists public port-53 addresses in public mode. |
+| `GET /check/{token}` | `{"seen", "proto"}`: whether a query for `{token}.check.<domain>` reached this server in the last five minutes, and over `udp`, `tcp`, `dot`, `doh`, `doh3` or `doq`. Tokens are 16 to 40 letters and digits. |
+| `GET /dnsnova.mobileconfig?p=doh` | An Apple configuration profile for DNS over HTTPS (`p=dot`: DNS over TLS, only when it listens on port 853). |
+
+Queries for `{token}.check.<domain>` are answered by DNSNova itself
+(NXDOMAIN, not cached) and never sent upstream.
+
 ## Configuration
 
 The API edits the same file you would edit by hand,

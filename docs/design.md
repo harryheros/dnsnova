@@ -99,6 +99,10 @@ replace a label.
   count, time right aligned.
 - **Settings**: label and help on the left, control on the right; changes
   are listed in the review panel before anything is applied.
+- **Public status page**: the same tokens and cards on a centered page,
+  no sidebar. A hero with the state, the domain and the check; a tabbed
+  setup guide that opens on the visitor's platform; addresses with copy
+  buttons; what the server keeps. Numbered steps use small accent circles.
 - **Toasts**: short confirmations at the bottom right; errors stay longer.
 
 ## Writing

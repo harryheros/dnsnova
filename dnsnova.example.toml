@@ -137,6 +137,14 @@ listen = "127.0.0.1:9153"
 # exists. Leave empty to turn it off.
 listen = "127.0.0.1:7000"
 
+[status]
+# A public page at the DoH address (https://your-domain/): the addresses,
+# setup steps for Android, iPhone and Mac (a profile to download), Windows,
+# browsers and routers, what the server keeps, and a check that shows a
+# visitor whether their device is using this server. No statistics. In
+# private mode only allowed networks can open it.
+enabled = false
+
 # There is no setting to log queries. DNSNova writes no queries or client
 # addresses to disk; for troubleshooting, start the query log in the admin
 # interface: it is kept in memory, hides the last part of client addresses
