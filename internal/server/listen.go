@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -130,21 +131,27 @@ func (s *Server) logQuery(st *state, ip netip.Addr, proto string, res resolver.R
 // ---- TCP (pipelined queries are answered concurrently) ----
 
 type tcpListener struct {
+	proto int
 	ln    net.Listener
 	wg    sync.WaitGroup
 	mu    sync.Mutex
 	conns map[net.Conn]struct{}
 }
 
-func (s *Server) listenTCP(addr string) (*tcpListener, error) {
+// listenTCP serves length-prefixed DNS over TCP, or over TLS (DoT) when
+// tlsConf is set.
+func (s *Server) listenTCP(addr string, tlsConf *tls.Config, proto int, name string) (*tcpListener, error) {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
-	l := &tcpListener{ln: ln, conns: map[net.Conn]struct{}{}}
+	if tlsConf != nil {
+		ln = tls.NewListener(ln, tlsConf)
+	}
+	l := &tcpListener{proto: proto, ln: ln, conns: map[net.Conn]struct{}{}}
 	l.wg.Add(1)
 	go s.serveTCP(l)
-	s.Log.Info("listening", "proto", "tcp", "addr", ln.Addr().String())
+	s.Log.Info("listening", "proto", name, "addr", ln.Addr().String())
 	return l, nil
 }
 
@@ -199,12 +206,23 @@ func (s *Server) serveTCP(l *tcpListener) {
 				s.tcpConns.Add(-1)
 				l.wg.Done()
 			}()
-			s.serveTCPConn(c, ip, st.cfg.Limits.TCPPipeline, st.cfg.Limits.TCPIdleTimeout)
+			s.serveTCPConn(c, ip, l.proto, st.cfg.Limits.TCPPipeline, st.cfg.Limits.TCPIdleTimeout)
 		}()
 	}
 }
 
-func (s *Server) serveTCPConn(c net.Conn, ip netip.Addr, pipeline int, idle time.Duration) {
+func (s *Server) serveTCPConn(c net.Conn, ip netip.Addr, proto, pipeline int, idle time.Duration) {
+	name := "tcp"
+	if proto == stats.DoT {
+		name = "dot"
+		// the TLS handshake must finish within the idle timeout too
+		c.SetDeadline(time.Now().Add(idle))
+		if err := c.(*tls.Conn).Handshake(); err != nil {
+			c.Close()
+			return
+		}
+		c.SetDeadline(time.Time{})
+	}
 	var wmu sync.Mutex
 	var wg sync.WaitGroup
 	inflight := make(chan struct{}, pipeline)
@@ -226,7 +244,7 @@ func (s *Server) serveTCPConn(c net.Conn, ip netip.Addr, pipeline int, idle time
 		if _, err := io.ReadFull(c, msg); err != nil {
 			return
 		}
-		s.Stats.Queries[stats.TCP].Add(1)
+		s.Stats.Queries[proto].Add(1)
 		st := s.state.Load()
 		if v := st.guard.Admit(ip); v != guard.Allow {
 			s.reject(v)
@@ -246,7 +264,7 @@ func (s *Server) serveTCPConn(c net.Conn, ip netip.Addr, pipeline int, idle time
 			res := s.res.Resolve(msg, false)
 			if res.Resp != nil {
 				writeTCP(c, &wmu, res.Resp)
-				s.logQuery(st, ip, "tcp", res, start)
+				s.logQuery(st, ip, name, res, start)
 			}
 		}()
 	}
@@ -272,7 +290,9 @@ type httpListener struct {
 	srv        *http.Server
 }
 
-func (s *Server) listenHTTP(addr, path string, h http.Handler) (*httpListener, error) {
+// listenHTTP serves h on addr: plain HTTP, or HTTPS with HTTP/2 when
+// tlsConf is set.
+func (s *Server) listenHTTP(addr, path string, h http.Handler, tlsConf *tls.Config) (*httpListener, error) {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, err
@@ -290,8 +310,15 @@ func (s *Server) listenHTTP(addr, path string, h http.Handler) (*httpListener, e
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    16 << 10,
 	}
-	go srv.Serve(ln)
-	s.Log.Info("listening", "proto", "http", "addr", ln.Addr().String(), "path", path)
+	proto := "http"
+	if tlsConf != nil {
+		proto = "https"
+		srv.TLSConfig = tlsConf
+		go srv.ServeTLS(ln, "", "") // ServeTLS enables HTTP/2
+	} else {
+		go srv.Serve(ln)
+	}
+	s.Log.Info("listening", "proto", proto, "addr", ln.Addr().String(), "path", path)
 	return &httpListener{addr: addr, path: path, ln: ln, srv: srv}, nil
 }
 

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,13 +25,32 @@ const (
 // Config is the validated configuration.
 type Config struct {
 	Server struct {
-		Mode   string
-		Listen []string
+		Mode    string
+		Listen  []string
+		DataDir string
 	}
 	DoH struct {
-		Listen         string
+		Listen         string   // plain HTTP behind a reverse proxy
+		HTTPSListen    []string // built-in HTTPS (HTTP/1.1 and HTTP/2)
 		Path           string
 		TrustedProxies []netip.Prefix
+	}
+	DoT struct {
+		Listen []string
+	}
+	TLS struct {
+		Certificate         string // off, acme or files
+		Domains             []string
+		IPAddresses         bool // also certify the public addresses in server.listen (for DDR)
+		Email               string
+		Challenge           string // http-01 or tls-alpn-01; empty = chosen automatically
+		HTTPChallengeListen string
+		ACMEDirectory       string
+		CertFile            string
+		KeyFile             string
+	}
+	DDR struct {
+		Enabled bool
 	}
 	Upstream struct {
 		Primary       []string
@@ -77,7 +98,12 @@ type Config struct {
 // Defaults returns a Config with every optional setting at its default.
 func Defaults() *Config {
 	c := &Config{}
+	c.Server.DataDir = "/var/lib/dnsnova"
 	c.DoH.Path = "/dns-query"
+	c.TLS.Certificate = "off"
+	c.TLS.HTTPChallengeListen = ":80"
+	c.TLS.ACMEDirectory = "https://acme-v02.api.letsencrypt.org/directory"
+	c.DDR.Enabled = true
 	c.DoH.TrustedProxies = []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8"), netip.MustParsePrefix("::1/128")}
 	c.Upstream.Bootstrap = []string{"1.1.1.1:53", "8.8.8.8:53"}
 	c.Upstream.Parallel = 2
@@ -194,8 +220,11 @@ func (c *Config) validate(lines map[string]int) (Errors, []string) {
 	default:
 		bad("server.mode", fmt.Sprintf(`must be "public" or "private", got %q`, c.Server.Mode))
 	}
-	if len(c.Server.Listen) == 0 && c.DoH.Listen == "" {
-		bad("server.listen", "nothing to listen on: set server.listen and/or doh.listen")
+	if len(c.Server.Listen) == 0 && c.DoH.Listen == "" && len(c.DoH.HTTPSListen) == 0 && len(c.DoT.Listen) == 0 {
+		bad("server.listen", "nothing to listen on: set server.listen, dot.listen or doh.https_listen")
+	}
+	if !strings.HasPrefix(c.Server.DataDir, "/") {
+		bad("server.data_dir", "must be an absolute path")
 	}
 	for _, a := range c.Server.Listen {
 		if err := checkListen(a); err != nil {
@@ -217,6 +246,8 @@ func (c *Config) validate(lines map[string]int) (Errors, []string) {
 			bad("metrics.listen", err.Error())
 		}
 	}
+
+	errs, warns = c.validateTLS(lines, errs, warns)
 
 	if len(c.Upstream.Primary) == 0 {
 		bad("upstream.primary", "at least one upstream is required")
@@ -308,6 +339,125 @@ func (c *Config) validate(lines map[string]int) (Errors, []string) {
 	return errs, warns
 }
 
+// PublicListenIPs returns the public addresses named in server.listen: the
+// ones a certificate authority can reach and clients use for DDR.
+func (c *Config) PublicListenIPs() []netip.Addr {
+	var out []netip.Addr
+	for _, l := range c.Server.Listen {
+		ap, err := netip.ParseAddrPort(l)
+		if err != nil {
+			continue
+		}
+		a := ap.Addr().Unmap()
+		if a.IsGlobalUnicast() && !a.IsPrivate() && !slices.Contains(out, a) {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+func (c *Config) validateTLS(lines map[string]int, errs Errors, warns []string) (Errors, []string) {
+	bad := func(key, msg string) { errs = append(errs, &Error{Line: lines[key], Key: key, Msg: msg}) }
+	for _, l := range []struct {
+		key  string
+		list []string
+	}{{"dot.listen", c.DoT.Listen}, {"doh.https_listen", c.DoH.HTTPSListen}} {
+		for _, a := range l.list {
+			if err := checkListen(a); err != nil {
+				bad(l.key, err.Error())
+			}
+		}
+		if len(l.list) > 0 && c.TLS.Certificate == "off" {
+			bad(l.key, `needs a certificate: set tls.certificate to "acme" or "files"`)
+		}
+	}
+	t := &c.TLS
+	switch t.Certificate {
+	case "off":
+	case "files":
+		if t.CertFile == "" || t.KeyFile == "" {
+			bad("tls.cert_file", "files mode needs tls.cert_file and tls.key_file")
+		}
+	case "acme":
+		for _, d := range t.Domains {
+			if !validDomain(d) {
+				bad("tls.domains", fmt.Sprintf("%q is not a valid domain name", d))
+			}
+		}
+		if t.IPAddresses && len(c.PublicListenIPs()) == 0 {
+			bad("tls.ip_addresses", "no public IP address is listed in server.listen")
+		}
+		if len(t.Domains) == 0 && !t.IPAddresses {
+			bad("tls.domains", "acme needs at least one domain (or tls.ip_addresses = true)")
+		}
+		u, err := url.Parse(t.ACMEDirectory)
+		if err != nil || (u.Scheme != "https" && !(u.Scheme == "http" && isLoopbackHost(u.Hostname()))) {
+			bad("tls.acme_directory", "must be an https URL")
+		}
+		if t.Challenge == "" {
+			t.Challenge = "http-01"
+			for _, a := range append(slices.Clone(c.DoH.HTTPSListen), c.DoT.Listen...) {
+				if strings.HasSuffix(a, ":443") {
+					t.Challenge = "tls-alpn-01" // the CA can reach us on 443: no port 80 needed
+				}
+			}
+		}
+		switch t.Challenge {
+		case "http-01":
+			if err := checkListen(t.HTTPChallengeListen); err != nil {
+				bad("tls.http_challenge_listen", err.Error())
+			}
+		case "tls-alpn-01":
+			on443 := false
+			for _, a := range append(slices.Clone(c.DoH.HTTPSListen), c.DoT.Listen...) {
+				on443 = on443 || strings.HasSuffix(a, ":443")
+			}
+			if !on443 {
+				bad("tls.challenge", "tls-alpn-01 needs doh.https_listen (or dot.listen) on port 443")
+			}
+		default:
+			bad("tls.challenge", `must be "http-01" or "tls-alpn-01"`)
+		}
+	default:
+		bad("tls.certificate", fmt.Sprintf(`must be "off", "acme" or "files", got %q`, t.Certificate))
+	}
+	if c.DDR.Enabled && (len(c.DoT.Listen) > 0 || len(c.DoH.HTTPSListen) > 0) {
+		if t.Certificate == "acme" && len(t.Domains) == 0 {
+			warns = append(warns, "ddr needs tls.domains to name the encrypted resolver; DDR answers are disabled")
+		} else if t.Certificate == "acme" && !t.IPAddresses {
+			warns = append(warns, "ddr: without tls.ip_addresses = true, clients cannot verify the upgrade and most will not use it")
+		}
+	}
+	return errs, warns
+}
+
+func isLoopbackHost(h string) bool {
+	if h == "localhost" {
+		return true
+	}
+	a, err := netip.ParseAddr(h)
+	return err == nil && a.IsLoopback()
+}
+
+func validDomain(d string) bool {
+	d = strings.TrimSuffix(d, ".")
+	if len(d) == 0 || len(d) > 253 || !strings.Contains(d, ".") {
+		return false
+	}
+	for _, l := range strings.Split(d, ".") {
+		if l == "" || len(l) > 63 || l[0] == '-' || l[len(l)-1] == '-' {
+			return false
+		}
+		for i := 0; i < len(l); i++ {
+			ch := l[i]
+			if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '-') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func checkListen(a string) error {
 	host, port, err := net.SplitHostPort(a)
 	if err != nil {
@@ -329,8 +479,23 @@ func checkListen(a string) error {
 type setter func(c *Config, v Value) error
 
 var fields = map[string]setter{
-	"server.mode":   str(func(c *Config) *string { return &c.Server.Mode }),
-	"server.listen": strList(func(c *Config) *[]string { return &c.Server.Listen }),
+	"server.mode":     str(func(c *Config) *string { return &c.Server.Mode }),
+	"server.listen":   strList(func(c *Config) *[]string { return &c.Server.Listen }),
+	"server.data_dir": str(func(c *Config) *string { return &c.Server.DataDir }),
+
+	"doh.https_listen": strList(func(c *Config) *[]string { return &c.DoH.HTTPSListen }),
+	"dot.listen":       strList(func(c *Config) *[]string { return &c.DoT.Listen }),
+
+	"tls.certificate":           str(func(c *Config) *string { return &c.TLS.Certificate }),
+	"tls.domains":               strList(func(c *Config) *[]string { return &c.TLS.Domains }),
+	"tls.ip_addresses":          boolean(func(c *Config) *bool { return &c.TLS.IPAddresses }),
+	"tls.email":                 str(func(c *Config) *string { return &c.TLS.Email }),
+	"tls.challenge":             str(func(c *Config) *string { return &c.TLS.Challenge }),
+	"tls.http_challenge_listen": str(func(c *Config) *string { return &c.TLS.HTTPChallengeListen }),
+	"tls.acme_directory":        str(func(c *Config) *string { return &c.TLS.ACMEDirectory }),
+	"tls.cert_file":             str(func(c *Config) *string { return &c.TLS.CertFile }),
+	"tls.key_file":              str(func(c *Config) *string { return &c.TLS.KeyFile }),
+	"ddr.enabled":               boolean(func(c *Config) *bool { return &c.DDR.Enabled }),
 
 	"doh.listen":          str(func(c *Config) *string { return &c.DoH.Listen }),
 	"doh.path":            str(func(c *Config) *string { return &c.DoH.Path }),
@@ -372,7 +537,7 @@ var fields = map[string]setter{
 }
 
 var knownTables = map[string]bool{
-	"server": true, "doh": true, "upstream": true, "cache": true,
+	"server": true, "doh": true, "dot": true, "tls": true, "ddr": true, "upstream": true, "cache": true,
 	"access": true, "limits": true, "metrics": true, "log": true,
 }
 

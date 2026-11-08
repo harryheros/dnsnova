@@ -14,14 +14,52 @@ mode = "public"
 # query was sent to.
 listen = ["203.0.113.10:53", "[2001:db8::10]:53"]
 
+# Certificates, the ACME account and other state.
+data_dir = "/var/lib/dnsnova"
+
+[dot]
+# DNS over TLS. Needs a certificate (see [tls]).
+listen = ["203.0.113.10:853", "[2001:db8::10]:853"]
+
 [doh]
-# DNS over HTTPS behind a reverse proxy (nginx) that handles TLS, HTTP/2 and
-# HTTP/3. Leave listen empty to disable.
-listen = "127.0.0.1:8053"
+# DNS over HTTPS, built in (HTTP/1.1 and HTTP/2). Needs a certificate.
+https_listen = ["203.0.113.10:443", "[2001:db8::10]:443"]
+# Or behind a reverse proxy such as nginx, which then handles TLS, HTTP/2 and
+# HTTP/3: plain HTTP on a local address. Leave empty to disable.
+listen = ""
 path = "/dns-query"
 # The client address is taken from X-Real-IP only when the request comes
 # from one of these proxies.
 trusted_proxies = ["127.0.0.1/32", "::1/128"]
+
+[tls]
+# Where the certificate for DoT and DoH comes from:
+#   "acme"  obtain and renew one automatically from Let's Encrypt
+#   "files" use files another program manages (e.g. nginx or certbot);
+#           they are reloaded when they change
+#   "off"   no encrypted DNS
+certificate = "acme"
+domains = ["dns.example.com"]   # must point to this server
+# Also certify the public addresses in server.listen. Clients such as
+# Windows 11, iOS and macOS then upgrade from port 53 to encrypted DNS by
+# themselves (DDR). Such certificates last about 6 days and are renewed
+# automatically.
+ip_addresses = true
+email = ""                      # optional contact for Let's Encrypt
+# How Let's Encrypt checks that you control the names. Chosen automatically:
+# "tls-alpn-01" when DoH or DoT listens on port 443, otherwise "http-01",
+# which needs port 80 (http_challenge_listen) during issuance.
+# challenge = "tls-alpn-01"
+# http_challenge_listen = ":80"
+# acme_directory = "https://acme-v02.api.letsencrypt.org/directory"
+# For "files":
+# cert_file = "/etc/letsencrypt/live/dns.example.com/fullchain.pem"
+# key_file = "/etc/letsencrypt/live/dns.example.com/privkey.pem"
+
+[ddr]
+# Answer _dns.resolver.arpa so clients can discover the encrypted endpoints
+# (RFC 9462). Uses the first name in tls.domains.
+enabled = true
 
 [upstream]
 # Where queries are forwarded. Formats:
