@@ -31,21 +31,25 @@ accent stays blue.
 
 | Token | Light | Dark | Use |
 | --- | --- | --- | --- |
-| `--bg` | `#f5f7fa` | `#0f141b` | Page background, inputs |
-| `--surface` | `#ffffff` | `#161c25` | Cards, sidebar |
-| `--raised` | `#e9edf3` | `#202834` | Hover, empty bar tracks |
-| `--border` | `#dde3eb` | `#2a3441` | Card borders, dividers, grid lines |
-| `--text` | `#111821` | `#e4e9f0` | Body text |
-| `--muted` | `#5a6576` | `#97a3b4` | Labels, help, secondary text |
-| `--accent` | `#2063b0` | `#70adfb` | Links, primary buttons, selection, chart median |
-| `--soft` | `#e5f1ff` | `#183152` | Selected item background, pending changes |
-| `--ok` | `#1d7d3e` | `#5ac576` | Healthy |
-| `--warn` | `#a46311` | `#f2af48` | Slow, attention needed |
-| `--err` | `#be2f2c` | `#f66d67` | Failing, errors only |
-| `--idle` | `#6b7686` | `#8b97a8` | Standing by, inactive |
+| `--bg` | `#f4f6fa` | `#121821` | Page background, inputs |
+| `--surface` | `#ffffff` | `#19202b` | Cards, sidebar |
+| `--raised` | `#eef1f6` | `#232c39` | Hover, empty bar tracks |
+| `--border` | `#e2e6ed` | `#2c3644` | Card borders, dividers, grid lines |
+| `--text` | `#2d3440` | `#dfe5ec` | Body text (a deep grey, not black) |
+| `--muted` | `#636c7b` | `#9aa6b6` | Labels, help, secondary text |
+| `--accent` | `#3769b5` | `#78aef5` | Links, selected navigation, chart median |
+| `--soft` | `#edf3fc` | `#1c3150` | Selected item background |
+| `--go` | `#2b8443` | `#2b8443` | Main action buttons and switches that are on (white text) |
+| `--ok` | `#1f7a3e` | `#5cc27a` | Healthy |
+| `--warn` | `#a15f0e` | `#f0ad4e` | Slow, attention needed |
+| `--err` | `#c0392b` | `#f2726b` | Failing, errors only |
+| `--idle` | `#626c7b` | `#8b97a8` | Standing by, inactive |
+| `--c1` `--c2` `--c3` | blue, purple, orange | lighter versions | Marks of the three key figures |
 
-Red is for errors only. Ordinary events are neutral; the accent marks what
-can be clicked or is selected.
+Colors have jobs, as in AdGuard Home: green for the main action on a page
+(sign in, apply, continue) and switches that are on, blue for links and
+where you are, green/amber/red/grey for state, and one color mark per key
+figure. Red is for errors only.
 
 ## Type
 
@@ -63,8 +67,8 @@ can be clicked or is selected.
 - Spacing comes in steps of 4 px: 4, 8, 12, 16, 20, 24.
 - Radius: 6 px for small controls and nav items, 8 px for buttons, inputs
   and choices, 12 px for cards.
-- Cards are separated by a 1 px border, not by shadows. Only floating
-  layers (the chart readout, search results) cast a light shadow.
+- Cards have a 1 px border and a very light shadow; floating layers (the
+  chart readout, search results) a stronger one.
 - Controls are at least 32 px high (38 px for main buttons and inputs).
 - Motion: color changes take 150 ms. Nothing else moves.
 

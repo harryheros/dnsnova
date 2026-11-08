@@ -42,6 +42,8 @@ type Settings struct {
 	// answered locally (NXDOMAIN, not cached) with Status "probe", so the
 	// server can tell the status page that it was asked. Empty: off.
 	CheckZone string
+	// Local answers names from local.records (see NewLocalNames).
+	Local *LocalNames
 }
 
 var (
@@ -123,6 +125,11 @@ func (r *Resolver) Resolve(req []byte, udp bool) Result {
 	}
 	if s.CheckZone != "" && isProbe(q.Name, s.CheckZone) {
 		return r.done(Result{Resp: r.fit(m.NegativeSOA(req, q, s.CheckZone, 0, m.RcodeNXDomain), req, q, udp, s), Q: q, Source: stats.SourceLocal, Status: "probe"})
+	}
+	if s.Local != nil {
+		if resp := s.Local.answer(req, q); resp != nil {
+			return r.done(Result{Resp: r.fit(resp, req, q, udp, s), Q: q, Source: stats.SourceLocal, Status: "local"})
+		}
 	}
 	if resp := localAnswer(req, q, s); resp != nil {
 		return r.done(Result{Resp: r.fit(resp, req, q, udp, s), Q: q, Source: stats.SourceLocal, Status: "local"})

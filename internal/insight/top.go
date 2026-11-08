@@ -30,7 +30,7 @@ const MinNetworks = 5
 const (
 	shards    = 16
 	shardCap  = 4096 // live entries per shard
-	keepPerHr = 500  // entries kept per finished hour
+	keepPerHr = 200  // entries kept per finished hour
 )
 
 // Entry is one line of a list.
@@ -157,6 +157,30 @@ func (t *Top) Roll(now time.Time) {
 		t.past = t.past[len(t.past)-t.maxPast:]
 	}
 	t.hour = h
+}
+
+// SetHours changes how many finished hours are kept.
+func (t *Top) SetHours(n int) {
+	t.hourMu.Lock()
+	defer t.hourMu.Unlock()
+	t.maxPast = n
+	if len(t.past) > n {
+		t.past = t.past[len(t.past)-n:]
+	}
+}
+
+// Reset forgets everything counted so far.
+func (t *Top) Reset(now time.Time) {
+	t.hourMu.Lock()
+	defer t.hourMu.Unlock()
+	for i := range t.live {
+		sh := &t.live[i]
+		sh.mu.Lock()
+		sh.m = map[string]*cell{}
+		sh.mu.Unlock()
+	}
+	t.past = nil
+	t.hour = now.Truncate(time.Hour)
 }
 
 // List returns up to n entries for the hours that overlap the last span,

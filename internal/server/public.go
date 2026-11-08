@@ -152,3 +152,20 @@ func (s *Server) PublicStatus() admin.PublicInfo {
 
 // ProbeSeen implements admin.PublicBackend.
 func (s *Server) ProbeSeen(token string) (string, bool) { return s.probes.seen(token, time.Now()) }
+
+// Guide implements admin.Backend.
+func (s *Server) Guide() admin.GuideInfo {
+	c := s.state.Load().cfg
+	g := admin.GuideInfo{PublicInfo: s.PublicStatus()}
+	g.Plain = nil
+	for _, a := range c.Server.Listen {
+		if ap, err := netip.ParseAddrPort(a); err == nil && !ap.Addr().IsUnspecified() && !ap.Addr().IsLoopback() {
+			g.Plain = append(g.Plain, ap.Addr().Unmap().String())
+		}
+	}
+	if c.Status.Enabled && g.Domain != "" && g.DoH != "" {
+		base := strings.TrimSuffix(g.DoH, c.DoH.Path)
+		g.Profile = &base
+	}
+	return g
+}

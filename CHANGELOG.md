@@ -51,6 +51,53 @@ First development release of the 1.0 core.
   every upstream the same question and shows each answer and its time. Light and dark appearance, or follow the system.
 - Admin API: `GET /system/addresses`, `POST /tools/lookup`, and `client_ip`
   in session responses.
+- Colors with jobs, as in AdGuard Home: green main buttons and switches,
+  softer blue for links and the current page, a color mark per key figure,
+  deep-grey text and lightly shadowed cards, in light and dark.
+- Sign-in page as in AdGuard Home: the form, "Forgot password?" with what
+  to do, and a footer with links and the appearance as three icons.
+- `dnsnova -reset-admin`: for a forgotten password, removes the
+  administrator account and restarts DNSNova; settings are kept and the
+  web interface offers to create the account again.
+- Install as root with `curl ... | sh` (no sudo needed, as many Debian
+  systems have none); as a normal user it uses sudo when there is one.
+- The name in the sidebar is larger.
+- Installer: lists every address of the web interface when it finishes,
+  with the service and uninstall commands; `-u` uninstalls; it also works
+  when piped to `sh`. A silent exit after installing, when no SSH session
+  was found, is fixed.
+- README shortened to install, uninstall, what DNSNova does and where to
+  read more.
+- Local names (`[local] records`, Settings › DNS & upstreams): names such
+  as "nas.home 192.168.1.5" or "*.lab.home 10.0.0.9" answered by DNSNova
+  itself, never sent upstream.
+- Blocked clients (`access.deny`, Settings › Access & limits): addresses or
+  networks that never get an answer, in either mode.
+- Setup guide (Tools › Setup guide): the server's addresses and steps for
+  Android, iPhone and Mac, Windows, browsers, the router and Linux, for
+  plain DNS on a home network as well as encrypted DNS. Shared with the
+  public status page.
+- Statistics retention (`[stats] retention`: 24h, 7d or 30d, in memory) and
+  "Clear statistics" (Settings › Admin); the overview offers 30d when kept.
+- Setup without a code from the server itself, private networks, and the
+  address the installer was run from over SSH; the installer prints a
+  plain address. Only visitors from elsewhere on the internet are asked for
+  the setup code.
+- Installing is like AdGuard Home: the installer asks nothing, starts only
+  the web interface (port 7000) and prints its address with the setup code,
+  using the server's LAN or public address. The wizard sets the
+  administrator, the interface's port and reach, who may use the server,
+  addresses (all real interfaces preselected), upstreams (Cloudflare and
+  Quad9 over DoH filled in) and encrypted DNS; DNS starts when it is
+  finished, and a last page says what address to give devices or the
+  router. The configure-everything options remain for scripts.
+- A configuration without DNS listeners is valid while the admin interface
+  is on (a fresh install); /healthz reports "setup".
+- The setup code, when it is asked for, is short: 8 characters as
+  XXXX-XXXX (no 0/O/1/I/L), case and dashes ignored; 20 wrong codes from
+  anywhere replace it.
+- The admin layout no longer drops the sidebar above the page at widths
+  between phone and desktop (landscape phones, "desktop site" mode).
 - Public status page (`[status] enabled`, off by default) at the DoH
   address: addresses with copy buttons, setup steps per platform (Android,
   iPhone and Mac with a downloadable configuration profile, Windows,

@@ -54,6 +54,43 @@ func (r *ring) each(f func(*sample)) {
 	}
 }
 
+// SetHours keeps n hourly samples (the longest range shown is n-1 hours),
+// keeping the most recent ones when the ring shrinks.
+func (h *History) SetHours(n int) {
+	if n < 2 {
+		n = 2
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.hour.buf) == n {
+		return
+	}
+	nr := newRing(n, time.Hour)
+	var keep []sample
+	h.hour.each(func(s *sample) { keep = append(keep, *s) })
+	if len(keep) > n {
+		keep = keep[len(keep)-n:]
+	}
+	for _, s := range keep {
+		nr.add(s)
+	}
+	h.hour = nr
+}
+
+// Reset forgets every sample; totals and charts start again from now. The
+// counters themselves (and the Prometheus metrics) are not touched.
+func (h *History) Reset(now time.Time) {
+	smp := h.s.sample(now)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.minute = newRing(len(h.minute.buf), time.Minute)
+	h.five = newRing(len(h.five.buf), 5*time.Minute)
+	h.hour = newRing(len(h.hour.buf), time.Hour)
+	h.minute.add(smp)
+	h.five.add(smp)
+	h.hour.add(smp)
+}
+
 // NewHistory starts a history with a zero sample at the server's start.
 func NewHistory(s *Stats) *History {
 	h := &History{s: s, minute: newRing(61, time.Minute), five: newRing(289, 5*time.Minute), hour: newRing(169, time.Hour)}
@@ -126,7 +163,7 @@ type Report struct {
 	Series []Point `json:"series"`
 }
 
-// Report sums the last span (at most a week) and returns a chart with one
+// Report sums the last span (at most the hourly ring's length) and returns a chart with one
 // point per minute (span up to an hour), five minutes (up to a day) or hour.
 // The range starts at the server's start if that is more recent.
 func (h *History) Report(span time.Duration, now time.Time) Report {
