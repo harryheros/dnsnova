@@ -26,6 +26,7 @@ func writeConfig(t *testing.T, path, upstream, extra string) {
 	src := fmt.Sprintf(`[server]
 mode = "public"
 listen = ["127.0.0.1:0"]
+data_dir = %q
 
 [doh]
 listen = "127.0.0.1:0"
@@ -43,7 +44,7 @@ client_qps = 0
 prefix_qps = 0
 global_qps = 0
 rrl_rate = 0
-%s`, upstream, extra)
+%s`, filepath.Dir(path), upstream, extra)
 	if err := os.WriteFile(path, []byte(src), 0o640); err != nil {
 		t.Fatal(err)
 	}
