@@ -274,7 +274,7 @@ func (s *Server) serveDoQStream(c *quic.Conn, str *quic.Stream, ip netip.Addr) {
 		return
 	}
 	start := time.Now()
-	res := s.res.Resolve(msg, false)
+	res := s.resolve(msg, false, "doq")
 	if res.Resp == nil {
 		c.CloseWithError(doqProtocolError, "malformed query")
 		return
@@ -308,6 +308,7 @@ func (s *Server) listenH3(addr, path string, h http.Handler, tlsConf *tls.Config
 	if path != "" {
 		mux := http.NewServeMux()
 		mux.Handle(path, h)
+		mux.Handle("/", http.HandlerFunc(s.handlePublic))
 		h = mux
 	}
 	l.h3 = &http3.Server{

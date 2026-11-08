@@ -1039,6 +1039,7 @@ const SETTINGS = {
         { key: "doh.https_listen", label: "DNS over HTTPS", type: "listen", port: 443, help: "Browsers, Windows and iOS profiles. TCP 443." },
         { key: "doh.http3", label: "Also over HTTP/3", type: "bool", sub: true, help: "The same address and port over UDP." },
         { key: "doh.path", label: "DoH path", type: "text", help: "Usually /dns-query." },
+        { key: "status.enabled", label: "Public status page", type: "bool", help: "A page at the domain's address (https://domain/) with the addresses, setup steps for each kind of device, what this server keeps, and a check that a device is using it. It shows no statistics." },
         { key: "doh.listen", label: "Behind a reverse proxy", type: "text", help: "Plain HTTP for nginx or Caddy, such as 127.0.0.1:8053. Leave empty if unused." },
       ] },
     ],
@@ -1308,6 +1309,7 @@ function clientAddresses(cur) {
   if (d && cur["dot.listen"].length) rows.push(["DNS over TLS", d]);
   if (d && cur["doq.listen"].length) rows.push(["DNS over QUIC", "quic://" + d]);
   if (d && cur["doh.https_listen"].length) rows.push(["DNS over HTTPS", `https://${d}${cur["doh.path"]}`]);
+  if (d && cur["status.enabled"] && (cur["doh.https_listen"].length || cur["doh.listen"])) rows.push(["Status page", `https://${d}/`]);
   return h("section", { class: "card", "aria-label": "Addresses for clients" }, h("h2", null, "Addresses for clients"),
     rows.length ? rows.map(([k, v]) => h("div", { class: "copyrow" }, h("span", { class: "k" }, k), h("code", null, v), h("button", { type: "button", class: "btn small", onclick: () => copy(v) }, "Copy")))
       : h("p", { class: "empty small", style: { margin: 0 } }, "Set a domain and turn on a protocol to get addresses for your devices."));

@@ -12,12 +12,14 @@ import (
 	"net/http"
 	"net/netip"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/harryheros/dnsnova/internal/admin"
 	"github.com/harryheros/dnsnova/internal/config"
+	m "github.com/harryheros/dnsnova/internal/dnsmsg"
 	"github.com/harryheros/dnsnova/internal/events"
 	"github.com/harryheros/dnsnova/internal/guard"
 	"github.com/harryheros/dnsnova/internal/insight"
@@ -50,6 +52,9 @@ type Server struct {
 	// Domains, NXDomains and Limited count popular domains, domains that
 	// do not exist and networks that hit the limits, in memory only.
 	Domains, NXDomains, Limited *insight.Top
+	probes                      probes
+	statusPage                  *admin.StatusPage
+
 	// QLog records queries while an administrator has it running.
 	QLog *insight.QueryLog
 
@@ -110,6 +115,7 @@ func New(store *config.Store, log *slog.Logger) (*Server, error) {
 		https:       map[string]*httpListener{},
 		udpInflight: make(chan struct{}, 20000),
 	}
+	s.statusPage = admin.NewStatusPage(s)
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	return s, nil
 }
@@ -166,9 +172,19 @@ func ddrFrom(c *config.Config) [][]byte {
 	return d.Records()
 }
 
+// checkZone is the zone of the status page's check names, when the status
+// page is on and there is a domain.
+func checkZone(c *config.Config) string {
+	if !c.Status.Enabled || len(c.TLS.Domains) == 0 {
+		return ""
+	}
+	return m.WireName(append([]string{"check"}, strings.Split(strings.ToLower(c.TLS.Domains[0]), ".")...)...)
+}
+
 func settingsFrom(c *config.Config) resolver.Settings {
 	return resolver.Settings{
 		DDR:                 ddrFrom(c),
+		CheckZone:           checkZone(c),
 		CacheSize:           c.Cache.Size,
 		MinTTL:              c.Cache.MinTTL,
 		MaxTTL:              c.Cache.MaxTTL,
@@ -595,6 +611,7 @@ func (s *Server) recordHistory() {
 			s.Domains.Roll(now)
 			s.NXDomains.Roll(now)
 			s.Limited.Roll(now)
+			s.probes.sweep(now)
 		}
 	}
 }

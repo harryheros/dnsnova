@@ -27,6 +27,7 @@ responsible for telling them how you run it.
 | Statistics history for the admin charts (totals and response times, no addresses or names) | Memory | Up to 7 days; lost on restart |
 | Most queried domains and domains that do not exist (domain and count only; see below) | Memory | Up to 7 days; lost on restart |
 | Networks that hit the rate limits (IPv4 /24, IPv6 /48, and a count) | Memory | 24 hours; lost on restart |
+| Status page check names (random token and protocol, no address) | Memory | 5 minutes |
 | Query log, only while an administrator runs it (see below) | Memory | At most 10,000 queries; deleted an hour after it stops |
 | Recent log records shown in the admin interface | Memory | The last 200; lost on restart |
 | Administrator name, password hash (Argon2id) and two-step verification secret | `/var/lib/dnsnova/secrets/admin.json`, mode 0600 | Until you remove them |
@@ -57,6 +58,15 @@ storing addresses, each domain carries a 64-bit sketch: a network sets one
 bit, chosen by a hash with a random key. The key is replaced every hour and
 never stored, so the sketch cannot be turned back into addresses, and it is
 discarded with the hour.
+
+## Status page check
+
+The public status page (off by default) can tell a visitor whether their
+device uses this server. The page makes the browser look up a random,
+one-time name under `check.<domain>`. If that query reaches DNSNova, it
+keeps the name and the protocol it arrived over, in memory, for five
+minutes, so the page can ask about it. It does not keep the address it came
+from. Queries for these names are answered locally and never sent upstream.
 
 ## Query log
 
