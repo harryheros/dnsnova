@@ -352,10 +352,82 @@ func (s *Server) Apply(snap *config.Snapshot) error {
 func (s *Server) syncListeners(c *config.Config) error {
 	type change struct{ undo func() }
 	var changes []change
+	var reopen []func() // put back listeners closed early to make room
 	rollback := func() {
 		for _, ch := range changes {
 			ch.undo()
 		}
+		for _, f := range reopen {
+			f()
+		}
+	}
+	// A wildcard address and a specific one on the same port cannot both be
+	// bound (":53" and "192.168.1.9:53"). When the configuration swaps one
+	// for the other, close the old listener first.
+	room := func(name string, m map[string]func(), want map[string]bool, open func(string) error) {
+		for old, closeOld := range m {
+			if want[old] {
+				continue
+			}
+			for a := range want {
+				if _, ok := m[a]; !ok && collide(old, a) {
+					closeOld()
+					o := old
+					reopen = append(reopen, func() {
+						if err := open(o); err != nil {
+							s.Log.Error("could not reopen listener", "proto", name, "addr", o, "err", err)
+						}
+					})
+					break
+				}
+			}
+		}
+	}
+	{
+		um := map[string]func(){}
+		for a, l := range s.udp {
+			a, l := a, l
+			um[a] = func() { l.close(); delete(s.udp, a) }
+		}
+		room("udp", um, wantSet(c.Server.Listen), func(a string) error {
+			l, err := s.listenUDP(a)
+			if err == nil {
+				s.udp[a] = l
+			}
+			return err
+		})
+		for _, x := range []struct {
+			m     map[string]*tcpListener
+			addrs []string
+			tls   *tls.Config
+			proto int
+			name  string
+		}{{s.tcp, c.Server.Listen, nil, stats.TCP, "tcp"}, {s.dot, c.DoT.Listen, s.tlsDoT, stats.DoT, "dot"}} {
+			tm := map[string]func(){}
+			for a, l := range x.m {
+				a, l, m := a, l, x.m
+				tm[a] = func() { l.close(); delete(m, a) }
+			}
+			room(x.name, tm, wantSet(x.addrs), func(a string) error {
+				l, err := s.listenTCP(a, x.tls, x.proto, x.name)
+				if err == nil {
+					x.m[a] = l
+				}
+				return err
+			})
+		}
+		qm := map[string]func(){}
+		for a, l := range s.doq {
+			a, l := a, l
+			qm[a] = func() { l.close(); delete(s.doq, a) }
+		}
+		room("doq", qm, wantSet(c.DoQ.Listen), func(a string) error {
+			l, err := s.listenDoQ(a, s.tlsDoQ)
+			if err == nil {
+				s.doq[a] = l
+			}
+			return err
+		})
 	}
 	// stream listeners: plain TCP and DoT share one implementation
 	streams := []struct {
@@ -441,7 +513,20 @@ func (s *Server) syncListeners(c *config.Config) error {
 	var newAdmin *adminListener
 	if c.Admin.Listen != "" && (s.adminL == nil || s.adminL.addr != c.Admin.Listen) {
 		var err error
-		if newAdmin, err = s.listenAdmin(c.Admin.Listen); err != nil {
+		newAdmin, err = s.listenAdmin(c.Admin.Listen)
+		if err != nil && s.adminL != nil && collide(s.adminL.addr, c.Admin.Listen) {
+			// ":7000" to "127.0.0.1:7000": stop accepting on the old socket
+			// (the request making this change still finishes) and bind again.
+			s.adminL.ln.Close()
+			if newAdmin, err = s.listenAdmin(c.Admin.Listen); err != nil {
+				if back, e2 := s.listenAdmin(s.adminL.addr); e2 == nil {
+					old := s.adminL
+					s.adminL = back
+					go old.close()
+				}
+			}
+		}
+		if err != nil {
 			rollback()
 			if newDoH != nil {
 				newDoH.close()
@@ -515,6 +600,17 @@ func (s *Server) syncListeners(c *config.Config) error {
 		s.adminL = newAdmin
 	}
 	return nil
+}
+
+// collide reports whether two listen addresses cannot be bound together:
+// the same port, and one of them on every address.
+func collide(a, b string) bool {
+	ia, ib := strings.LastIndex(a, ":"), strings.LastIndex(b, ":")
+	if ia < 0 || ib < 0 || a[ia:] != b[ib:] {
+		return false
+	}
+	wild := func(h string) bool { return h == "" || h == "0.0.0.0" || h == "[::]" || h == "::" }
+	return wild(a[:ia]) || wild(b[:ib])
 }
 
 func wantSet(list []string) map[string]bool {

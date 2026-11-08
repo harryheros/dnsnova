@@ -261,3 +261,37 @@ func TestLocalNamesAndDenyList(t *testing.T) {
 		t.Fatal("a blocked client got an answer")
 	}
 }
+
+// Switching between one address and all addresses on the same port works
+// for DNS and for the web interface (they cannot be bound side by side).
+func TestSwitchToAllAddresses(t *testing.T) {
+	dnsAddr, adminAddr := freeAddr(t), freeAddr(t)
+	dnsPort, adminPort := dnsAddr[strings.LastIndex(dnsAddr, ":"):], adminAddr[strings.LastIndex(adminAddr, ":"):]
+	s, _, _ := start(t, "")
+	set := func(table, key string, v config.Value) {
+		t.Helper()
+		snap, _ := s.Store.Load()
+		out, err := snap.Doc.Set(table, key, v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		snap2, err := s.Store.Write(out, snap.Hash)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Apply(snap2); err != nil {
+			t.Fatalf("%s.%s: %v", table, key, err)
+		}
+	}
+	set("server", "listen", config.StrList([]string{dnsAddr}))
+	set("admin", "listen", config.Str(adminPort))
+	set("server", "listen", config.StrList([]string{dnsPort})) // one address -> all
+	set("admin", "listen", config.Str("127.0.0.1"+adminPort))  // all -> one
+	set("server", "listen", config.StrList([]string{dnsAddr})) // and back
+	if b, err := udpAsk(t, dnsAddr, dnstest.Query(1, "a.test", 1, false, false), 2*time.Second); err != nil || dnstest.Parse(t, b).AN != 1 {
+		t.Fatalf("query after switching: %v", err)
+	}
+	if got := s.AdminAddr(); !strings.HasPrefix(got, "127.0.0.1") {
+		t.Fatalf("admin on %q", got)
+	}
+}

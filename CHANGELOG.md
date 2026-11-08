@@ -62,6 +62,16 @@ First development release of the 1.0 core.
 - Install as root with `curl ... | sh` (no sudo needed, as many Debian
   systems have none); as a normal user it uses sudo when there is one.
 - The name in the sidebar is larger.
+- Setup wizard: the address list was empty under systemd, because the
+  sandbox did not allow the netlink socket that lists network interfaces
+  (the unit now allows AF_NETLINK). The wizard also offers "All addresses
+  of this server" (and falls back to it when none are listed) and a port
+  other than 53. The public/private step is gone (Public is the default;
+  Private stays in Settings › Access & limits). "Next" instead of
+  "Continue". On phones the steps are a compact bar.
+- Changing between one address and all addresses on the same port (DNS or
+  the web interface, for example ":7000" to "127.0.0.1:7000") no longer
+  fails with "address already in use".
 - Installer: lists every address of the web interface when it finishes,
   with the service and uninstall commands; `-u` uninstalls; it also works
   when piped to `sh`. A silent exit after installing, when no SSH session

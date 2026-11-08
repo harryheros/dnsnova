@@ -138,6 +138,13 @@ func (s *Server) PublicStatus() admin.PublicInfo {
 		for _, ip := range c.PublicListenIPs() {
 			info.Plain = append(info.Plain, ip.String())
 		}
+		if len(info.Plain) == 0 && listensOnAll(c) {
+			for _, a := range s.Addresses() {
+				if a.Public {
+					info.Plain = append(info.Plain, a.Address)
+				}
+			}
+		}
 	}
 	ups := s.Upstreams()
 	for _, u := range ups {
@@ -163,9 +170,35 @@ func (s *Server) Guide() admin.GuideInfo {
 			g.Plain = append(g.Plain, ap.Addr().Unmap().String())
 		}
 	}
+	if listensOnAll(c) { // ":53": every address of the machine
+		for _, a := range s.Addresses() {
+			if !a.Loopback && !strings.HasPrefix(a.Interface, "docker") && !strings.HasPrefix(a.Interface, "veth") && !strings.HasPrefix(a.Interface, "br-") {
+				g.Plain = append(g.Plain, a.Address)
+			}
+		}
+	}
+	g.Port = 53
+	for _, a := range c.Server.Listen {
+		if i := strings.LastIndex(a, ":"); i >= 0 {
+			if p, err := strconv.Atoi(a[i+1:]); err == nil {
+				g.Port = p
+				break
+			}
+		}
+	}
 	if c.Status.Enabled && g.Domain != "" && g.DoH != "" {
 		base := strings.TrimSuffix(g.DoH, c.DoH.Path)
 		g.Profile = &base
 	}
 	return g
+}
+
+// listensOnAll reports whether server.listen has a wildcard address.
+func listensOnAll(c *config.Config) bool {
+	for _, a := range c.Server.Listen {
+		if strings.HasPrefix(a, ":") || strings.HasPrefix(a, "0.0.0.0:") || strings.HasPrefix(a, "[::]:") {
+			return true
+		}
+	}
+	return false
 }
