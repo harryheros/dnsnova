@@ -18,12 +18,21 @@ listen = ["203.0.113.10:53", "[2001:db8::10]:53"]
 data_dir = "/var/lib/dnsnova"
 
 [dot]
-# DNS over TLS. Needs a certificate (see [tls]).
+# DNS over TLS (TCP). Needs a certificate (see [tls]).
+listen = ["203.0.113.10:853", "[2001:db8::10]:853"]
+
+[doq]
+# DNS over QUIC (RFC 9250, UDP). Needs a certificate. Usually the same
+# addresses as [dot]: DoT uses TCP 853 and DoQ UDP 853.
 listen = ["203.0.113.10:853", "[2001:db8::10]:853"]
 
 [doh]
-# DNS over HTTPS, built in (HTTP/1.1 and HTTP/2). Needs a certificate.
+# DNS over HTTPS, built in: HTTP/1.1 and HTTP/2 over TCP. Needs a certificate.
 https_listen = ["203.0.113.10:443", "[2001:db8::10]:443"]
+# Also serve HTTP/3 on the same addresses and ports over UDP (443/UDP for the
+# addresses above). HTTP/1.1 and HTTP/2 responses then tell clients about it
+# with an Alt-Svc header.
+http3 = true
 # Or behind a reverse proxy such as nginx, which then handles TLS, HTTP/2 and
 # HTTP/3: plain HTTP on a local address. Leave empty to disable.
 listen = ""
@@ -33,7 +42,7 @@ path = "/dns-query"
 trusted_proxies = ["127.0.0.1/32", "::1/128"]
 
 [tls]
-# Where the certificate for DoT and DoH comes from:
+# Where the certificate for DoT, DoQ and DoH comes from:
 #   "acme"  obtain and renew one automatically from Let's Encrypt
 #   "files" use files another program manages (e.g. nginx or certbot);
 #           they are reloaded when they change
@@ -58,7 +67,8 @@ email = ""                      # optional contact for Let's Encrypt
 
 [ddr]
 # Answer _dns.resolver.arpa so clients can discover the encrypted endpoints
-# (RFC 9462). Uses the first name in tls.domains.
+# (RFC 9462): DoT, DoH (with h3 when http3 is on) and DoQ. Uses the first
+# name in tls.domains.
 enabled = true
 
 [upstream]
@@ -67,6 +77,7 @@ enabled = true
 #   tcp://1.1.1.1                    plain DNS over TCP
 #   tls://one.one.one.one            DNS over TLS
 #   https://cloudflare-dns.com/dns-query    DNS over HTTPS
+#   quic://dns.example                DNS over QUIC (port 853)
 # A host name can be pinned to an address to skip the bootstrap lookup:
 #   https://dns.google/dns-query#8.8.8.8
 primary = ["https://1.1.1.1/dns-query", "https://1.0.0.1/dns-query"]
@@ -104,9 +115,11 @@ prefix_burst = 2000
 global_qps = 50000          # whole server; 0 = no limit
 upstream_concurrency = 2000 # upstream queries in flight
 zone_concurrency = 50       # upstream queries in flight per domain
-tcp_connections = 1000
-tcp_pipeline = 16           # concurrent queries per TCP connection
-tcp_idle_timeout = "10s"
+tcp_connections = 1000      # TCP and DoT
+quic_connections = 1000     # DoQ and HTTP/3; above half of it, new clients
+                            # must first prove their address (QUIC Retry)
+tcp_pipeline = 16           # concurrent queries per TCP, DoT, DoQ or HTTP/3 connection
+tcp_idle_timeout = "10s"    # also the idle timeout of QUIC connections
 udp_max_size = 1232
 rrl_rate = 20               # identical UDP responses per second per network
 rrl_slip = 2                # send every 2nd limited response truncated

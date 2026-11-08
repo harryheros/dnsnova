@@ -4,9 +4,9 @@ A forwarding DNS server for people who run public or private resolvers on
 their own servers: secure by default, light on resources, and easy to
 operate.
 
-> **Status: under development.** This is a pre-release of 1.0. DNS over
-> QUIC, DNS over HTTP/3 (served directly), the web interface and the setup
-> wizard are planned for later stages and are not in this release yet.
+> **Status: under development.** This is a pre-release of 1.0. The web
+> interface and the setup wizard are planned for a later stage and are not
+> in this release yet.
 
 ## Quick start
 
@@ -51,18 +51,21 @@ safe to expose to the internet without becoming a DDoS amplifier.
 
 ## Features in this release
 
-- **Protocols:** DNS over UDP and TCP (with pipelining), DNS over TLS, and
-  DNS over HTTPS (HTTP/1.1 and HTTP/2) built in. DoH can also run behind a
-  reverse proxy such as nginx, which can then add HTTP/3.
+- **Protocols:** DNS over UDP and TCP (with pipelining), DNS over TLS, DNS
+  over QUIC (RFC 9250), and DNS over HTTPS over HTTP/1.1, HTTP/2 and HTTP/3,
+  all built in. DoH can also run behind a reverse proxy such as nginx.
 - **Certificates:** obtained and renewed automatically from Let's Encrypt
   with a built-in ACME client (tls-alpn-01 or http-01), or loaded from files
-  managed elsewhere and reloaded when they change. 0-RTT is never accepted.
+  managed elsewhere and reloaded when they change. One certificate serves
+  DoT, DoQ and DoH. 0-RTT is never accepted, over TLS or QUIC: it saves one
+  round trip but would let queries be replayed.
 - **Automatic upgrade to encrypted DNS (DDR, RFC 9462):** dnsnova answers
-  `_dns.resolver.arpa` with its DoT and DoH endpoints. With
+  `_dns.resolver.arpa` with its DoT, DoH (h2 and h3) and DoQ endpoints. With
   `tls.ip_addresses = true` the certificate also covers the server's IP
   addresses, which lets Windows 11, iOS and macOS verify the upgrade and switch
   to encrypted DNS by themselves.
-- **Upstreams:** UDP, TCP, DNS over TLS and DNS over HTTPS. The fastest
+- **Upstreams:** UDP, TCP, DNS over TLS, DNS over HTTPS and DNS over QUIC
+  (`quic://`). The fastest
   primaries are queried in parallel; fallback upstreams are used only when
   every primary fails or is slow. Upstream host names are resolved through
   fixed bootstrap servers (plain or encrypted), or pinned to an address.
@@ -72,9 +75,11 @@ safe to expose to the internet without becoming a DDoS amplifier.
   - `public`: anyone may query, protected by limits per client, per network
     and for the whole server, response rate limiting (RRL), caps on
     upstream concurrency in total and per domain, refusal of ANY and zone
-    transfers, and UDP response size limits.
+    transfers, UDP response size limits, and caps on TCP and QUIC
+    connections (QUIC asks clients to prove their address when busy).
   - `private`: only listed networks may query; everyone else is dropped
-    without a reply.
+    without a reply. QUIC connections from other addresses are refused at
+    their first packet, with one packet smaller than the client's own.
 - **Local answers:** reverse lookups of private, loopback and link-local
   addresses (RFC 6303) and `localhost.` are answered locally and never sent
   upstream.
@@ -88,15 +93,16 @@ safe to expose to the internet without becoming a DDoS amplifier.
 - **Observability:** Prometheus metrics and a `/healthz` endpoint.
 - **Privacy:** no telemetry; queries are not logged unless you turn it on.
   See [PRIVACY.md](PRIVACY.md).
-- **No external dependencies:** only the Go standard library, including the
-  ACME client.
+- **Few dependencies:** the Go standard library, plus
+  [quic-go](https://github.com/quic-go/quic-go) (MIT) for DNS over QUIC and
+  HTTP/3. The ACME client and the configuration parser are built in.
 
 ## Manual installation
 
 Requirements: Linux with systemd, amd64 or arm64.
 
 ```sh
-# build (Go 1.24 or later)
+# build (Go 1.27 or later)
 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o dnsnova ./cmd/dnsnova
 
 sudo install -m 755 dnsnova /usr/local/bin/dnsnova
@@ -145,10 +151,13 @@ configuration stays in place. Previous versions are kept in
 
 ```toml
 [dot]
-listen = ["203.0.113.10:853"]
+listen = ["203.0.113.10:853"]     # TCP 853
+
+[doq]
+listen = ["203.0.113.10:853"]     # UDP 853
 
 [doh]
-https_listen = ["203.0.113.10:443"]
+https_listen = ["203.0.113.10:443"]   # TCP 443, and UDP 443 for HTTP/3
 
 [tls]
 certificate = "acme"
@@ -161,6 +170,28 @@ internet while the certificate is issued (or port 80, if nothing listens on
 443). Progress is logged with a `tls:` prefix. Certificates and the ACME
 account are stored in `/var/lib/dnsnova`.
 
+Open the ports in your firewall for both protocols where they apply: TCP 853
+(DoT), UDP 853 (DoQ), TCP and UDP 443 (DoH over HTTP/2 and HTTP/3). HTTP/3
+is on by default for `https_listen`; set `[doh] http3 = false` to serve only
+HTTP/1.1 and HTTP/2.
+
+Clients connect with:
+
+| Protocol | Address |
+|---|---|
+| DNS over TLS | `dns.example.com` (port 853) |
+| DNS over QUIC | `quic://dns.example.com` |
+| DNS over HTTPS | `https://dns.example.com/dns-query` |
+
+QUIC works better with larger UDP socket buffers. If the log shows a
+warning about the receive buffer size, raise the limits once:
+
+```sh
+echo 'net.core.rmem_max=7500000
+net.core.wmem_max=7500000' | sudo tee /etc/sysctl.d/90-dnsnova-quic.conf
+sudo sysctl --system
+```
+
 ### DNS over HTTPS with nginx
 
 Set `[doh] listen = "127.0.0.1:8053"` and proxy to it; see
@@ -171,9 +202,10 @@ Set `[doh] listen = "127.0.0.1:8053"` and proxy to it; see
 
 With `[metrics] listen = "127.0.0.1:9153"`:
 
-- `GET /metrics`: Prometheus metrics (queries by protocol, answers by
-  source, response codes, rejections by reason, response time histograms,
-  cache size, per-upstream queries, errors, latency and health).
+- `GET /metrics`: Prometheus metrics: queries by protocol (`udp`, `tcp`,
+  `dot`, `doh`, `doh3`, `doq`), answers by source, response codes,
+  rejections by reason, response time histograms, cache size, open TCP and
+  QUIC connections, and per-upstream queries, errors, latency and health.
 - `GET /healthz`: `200` with a small JSON body when at least one upstream is
   healthy, `503` otherwise. It contains no addresses, so it can be exposed to
   an external monitor.

@@ -32,6 +32,26 @@ func TestDDRRecordsAndAnswer(t *testing.T) {
 		t.Fatalf("doh params: %v", doh)
 	}
 
+	// HTTP/3 joins the DoH record; DoQ gets its own record (priority 3)
+	d.HTTP3, d.DoQPort = true, 853
+	full := d.Records()
+	if len(full) != 3 {
+		t.Fatalf("%d records with DoQ", len(full))
+	}
+	if doh := parseParams(t, full[1][2+len(target):]); string(doh[m.SvcALPN]) != "\x02h2\x02h3" {
+		t.Fatalf("doh alpn with http3: %q", doh[m.SvcALPN])
+	}
+	if m.U16(full[2], 0) != 3 {
+		t.Fatal("DoQ has priority 3")
+	}
+	doq := parseParams(t, full[2][2+len(target):])
+	if string(doq[m.SvcALPN]) != "\x03doq" || doq[m.SvcPort] != nil || len(doq[m.SvcIPv4Hint]) != 4 || len(doq[m.SvcIPv6Hint]) != 16 {
+		t.Fatalf("doq params: %v", doq)
+	}
+	if only := (DDR{Name: "dns.example.com", DoQPort: 8853}).Records(); len(only) != 1 || m.U16(parseParams(t, only[0][2+len(target):])[m.SvcPort], 0) != 8853 {
+		t.Fatalf("DoQ alone on a non-default port: %v", only)
+	}
+
 	r, auth, _ := newTest(t)
 	s := settings()
 	s.DDR = recs

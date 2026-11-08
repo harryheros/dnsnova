@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/netip"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -288,6 +289,7 @@ type httpListener struct {
 	addr, path string
 	ln         net.Listener
 	srv        *http.Server
+	h3         *quicListener // HTTP/3 on the same address over UDP, if enabled
 }
 
 // listenHTTP serves h on addr: plain HTTP, or HTTPS with HTTP/2 when
@@ -297,6 +299,10 @@ func (s *Server) listenHTTP(addr, path string, h http.Handler, tlsConf *tls.Conf
 	if err != nil {
 		return nil, err
 	}
+	return s.serveHTTP(ln, addr, path, h, tlsConf), nil
+}
+
+func (s *Server) serveHTTP(ln net.Listener, addr, path string, h http.Handler, tlsConf *tls.Config) *httpListener {
 	if path != "" {
 		mux := http.NewServeMux()
 		mux.Handle(path, h)
@@ -319,13 +325,45 @@ func (s *Server) listenHTTP(addr, path string, h http.Handler, tlsConf *tls.Conf
 		go srv.Serve(ln)
 	}
 	s.Log.Info("listening", "proto", proto, "addr", ln.Addr().String(), "path", path)
-	return &httpListener{addr: addr, path: path, ln: ln, srv: srv}, nil
+	return &httpListener{addr: addr, path: path, ln: ln, srv: srv}
+}
+
+// listenHTTPS serves h over HTTPS on TCP addr and, when h3Conf is set, over
+// HTTP/3 on the same address and port over UDP. HTTP/1.1 and HTTP/2
+// responses then advertise HTTP/3 with Alt-Svc.
+func (s *Server) listenHTTPS(addr, path string, h http.Handler, tlsConf, h3Conf *tls.Config) (*httpListener, error) {
+	if h3Conf == nil {
+		return s.listenHTTP(addr, path, h, tlsConf)
+	}
+	// Bind TCP first: with port 0 (tests) UDP must use the port TCP got.
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	host, _, _ := net.SplitHostPort(addr)
+	port := ln.Addr().(*net.TCPAddr).Port
+	q, err := s.listenH3(net.JoinHostPort(host, strconv.Itoa(port)), path, h, h3Conf)
+	if err != nil {
+		ln.Close()
+		return nil, fmt.Errorf("http3 (udp): %w (set doh.http3 = false to serve HTTP/1.1 and HTTP/2 only)", err)
+	}
+	altSvc := fmt.Sprintf(`h3=":%d"; ma=86400`, port)
+	withAltSvc := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Alt-Svc", altSvc)
+		h.ServeHTTP(w, r)
+	})
+	l := s.serveHTTP(ln, addr, path, withAltSvc, tlsConf)
+	l.h3 = q
+	return l, nil
 }
 
 func (l *httpListener) close() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	l.srv.Shutdown(ctx)
+	if l.h3 != nil {
+		l.h3.close()
+	}
 }
 
 // clientIP returns the real client address. X-Real-IP (or the last
@@ -381,7 +419,11 @@ func (s *Server) handleDoH(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "message too short", http.StatusBadRequest)
 		return
 	}
-	s.Stats.Queries[stats.DoH].Add(1)
+	proto, name := stats.DoH, "doh"
+	if r.ProtoMajor == 3 {
+		proto, name = stats.DoH3, "doh3"
+	}
+	s.Stats.Queries[proto].Add(1)
 	st := s.state.Load()
 	ip := clientIP(r, st.cfg.DoH.TrustedProxies)
 	switch v := st.guard.Admit(ip); v {
@@ -404,7 +446,7 @@ func (s *Server) handleDoH(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/dns-message")
 	w.Header().Set("Cache-Control", fmt.Sprintf("max-age=%d", m.ResponseMinTTL(res.Resp)))
 	w.Write(res.Resp)
-	s.logQuery(st, ip, "doh", res, start)
+	s.logQuery(st, ip, name, res, start)
 }
 
 func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
@@ -415,6 +457,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	fmt.Fprintf(w, "dnsnova_cache_entries{kind=\"positive\"} %d\n", pos)
 	fmt.Fprintf(w, "dnsnova_cache_entries{kind=\"negative\"} %d\n", neg)
 	fmt.Fprintf(w, "# TYPE dnsnova_tcp_connections gauge\ndnsnova_tcp_connections %d\n", s.tcpConns.Load())
+	fmt.Fprintf(w, "# TYPE dnsnova_quic_connections gauge\ndnsnova_quic_connections %d\n", s.quicConns.Load())
 	st := s.state.Load()
 	fmt.Fprintf(w, "# TYPE dnsnova_upstream_queries_total counter\n")
 	for _, u := range st.group.Members() {

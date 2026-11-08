@@ -28,6 +28,8 @@ func TestParseSpec(t *testing.T) {
 		"https://dns.google/dns-query":        {Scheme: "https", Host: "dns.google", Port: 443, URL: "https://dns.google/dns-query"},
 		"https://1.1.1.1":                     {Scheme: "https", Host: "1.1.1.1", Port: 443, URL: "https://1.1.1.1/dns-query"},
 		"https://doh.example:8443/q#10.0.0.1": {Scheme: "https", Host: "doh.example", Port: 8443, URL: "https://doh.example:8443/q", Pin: netip.MustParseAddr("10.0.0.1")},
+		"quic://dns.adguard.example":          {Scheme: "quic", Host: "dns.adguard.example", Port: 853},
+		"quic://9.9.9.9:8853":                 {Scheme: "quic", Host: "9.9.9.9", Port: 8853},
 	}
 	for raw, want := range ok {
 		got, err := ParseSpec(raw)
@@ -42,7 +44,7 @@ func TestParseSpec(t *testing.T) {
 	}
 	for _, raw := range []string{
 		"ftp://x", "dns.google", "tcp://dns.google", "tls://1.1.1.1#8.8.8.8", "tls://bad_host",
-		"https://user:pw@dns.example/q", "https://dns.example/q?x=1", "tls://x:99999", "tls://dns.google#nope", "",
+		"https://user:pw@dns.example/q", "https://dns.example/q?x=1", "quic://dns.example/path", "quic://1.1.1.1#8.8.8.8", "tls://x:99999", "tls://dns.google#nope", "",
 	} {
 		if _, err := ParseSpec(raw); err == nil {
 			t.Errorf("%q should be rejected", raw)
