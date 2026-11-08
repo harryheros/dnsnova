@@ -77,6 +77,8 @@ First development release of the 1.0 core.
   (by registrable domain, only once 5 networks asked within an hour, using
   an hourly-keyed sketch instead of addresses), and the networks that hit
   the rate limits most. All in memory.
+- CI: actions/checkout v5 and actions/setup-go v6 (Node 24). The QUIC
+  connection-cap test now allows for a lost close packet on busy runners.
 - golang.org/x/net is now a direct dependency (public suffix list).
 - Durations of a second or more read back as `1.5s` rather than `1500ms`.
 - The installer asks whether the admin interface is local (SSH tunnel) or

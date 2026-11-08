@@ -412,7 +412,11 @@ func TestQUICAccessLimitsAndReload(t *testing.T) {
 		t.Fatal("connection over limits.quic_connections accepted")
 	}
 	c1.CloseWithError(0, "")
-	deadline := time.Now().Add(2 * time.Second)
+	// The client's CONNECTION_CLOSE is a single UDP packet. On a busy
+	// machine (CI with -race, small socket buffers) it can be dropped; the
+	// server then frees the slot when the idle timeout (limits.
+	// tcp_idle_timeout, 10s by default) expires. Either way it must free it.
+	deadline := time.Now().Add(q.snapIdle() + 3*time.Second)
 	for q.quicConns.Load() != 0 {
 		if time.Now().After(deadline) {
 			t.Fatalf("closed connection still counted: %d", q.quicConns.Load())
@@ -481,4 +485,9 @@ func TestDoQUpstreamChain(t *testing.T) {
 	if n := front.quicConns.Load(); n != 1 {
 		t.Fatalf("upstream used %d connections, want 1 reused connection", n)
 	}
+}
+
+// snapIdle is the QUIC idle timeout the server runs with.
+func (q *quicServer) snapIdle() time.Duration {
+	return q.state.Load().cfg.Limits.TCPIdleTimeout
 }
