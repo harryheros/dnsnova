@@ -1,0 +1,446 @@
+package server
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/netip"
+	"runtime"
+	"strings"
+	"sync"
+	"time"
+
+	m "github.com/harryheros/dnsnova/internal/dnsmsg"
+	"github.com/harryheros/dnsnova/internal/guard"
+	"github.com/harryheros/dnsnova/internal/resolver"
+	"github.com/harryheros/dnsnova/internal/stats"
+)
+
+// ---- UDP ----
+
+type udpListener struct {
+	conn *net.UDPConn
+	wg   sync.WaitGroup
+}
+
+func (s *Server) listenUDP(addr string) (*udpListener, error) {
+	ua, err := net.ResolveUDPAddr("udp", addr)
+	if err != nil {
+		return nil, err
+	}
+	c, err := net.ListenUDP("udp", ua)
+	if err != nil {
+		return nil, err
+	}
+	c.SetReadBuffer(4 << 20)
+	c.SetWriteBuffer(4 << 20)
+	l := &udpListener{conn: c}
+	for i := 0; i < max(runtime.NumCPU(), 2); i++ {
+		l.wg.Add(1)
+		go s.serveUDP(l)
+	}
+	s.Log.Info("listening", "proto", "udp", "addr", c.LocalAddr().String())
+	return l, nil
+}
+
+func (l *udpListener) close() {
+	l.conn.Close()
+	l.wg.Wait()
+}
+
+func (s *Server) serveUDP(l *udpListener) {
+	defer l.wg.Done()
+	buf := make([]byte, 65535)
+	for {
+		n, addr, err := l.conn.ReadFromUDPAddrPort(buf)
+		if err != nil {
+			if isClosed(err) {
+				return
+			}
+			continue
+		}
+		if n < m.HeaderLen {
+			continue
+		}
+		s.Stats.Queries[stats.UDP].Add(1)
+		st := s.state.Load()
+		ip := addr.Addr().Unmap()
+		if v := st.guard.Admit(ip); v != guard.Allow {
+			s.reject(v) // never answer over UDP: that is what an attacker wants
+			continue
+		}
+		select {
+		case s.udpInflight <- struct{}{}:
+		default:
+			s.Stats.Rejected[stats.RejectOverload].Add(1)
+			continue
+		}
+		pkt := make([]byte, n)
+		copy(pkt, buf[:n])
+		s.wg.Add(1)
+		go func() {
+			defer func() { <-s.udpInflight; s.wg.Done() }()
+			start := time.Now()
+			res := s.res.Resolve(pkt, true)
+			if res.Resp == nil {
+				return
+			}
+			resp := res.Resp
+			switch st.guard.RRL.Check(ip, res.Q.Name, res.Q.Type, m.Rcode(resp)) {
+			case guard.Drop:
+				s.Stats.Rejected[stats.RejectRRLDrop].Add(1)
+				return
+			case guard.Slip:
+				s.Stats.Rejected[stats.RejectRRLSlip].Add(1)
+				resp = m.Truncated(pkt, res.Q, m.Rcode(resp))
+			}
+			l.conn.WriteToUDPAddrPort(resp, addr)
+			s.logQuery(st, ip, "udp", res, start)
+		}()
+	}
+}
+
+func (s *Server) reject(v guard.Verdict) {
+	switch v {
+	case guard.DenyACL:
+		s.Stats.Rejected[stats.RejectACL].Add(1)
+	case guard.DenyClient:
+		s.Stats.Rejected[stats.RejectClientLimit].Add(1)
+	case guard.DenyNetwork:
+		s.Stats.Rejected[stats.RejectNetworkLimit].Add(1)
+	case guard.DenyGlobal:
+		s.Stats.Rejected[stats.RejectGlobalLimit].Add(1)
+	}
+}
+
+func (s *Server) logQuery(st *state, ip netip.Addr, proto string, res resolver.Result, start time.Time) {
+	if !st.cfg.Log.Queries || res.Q == nil {
+		return
+	}
+	s.Log.Info("query", "client", ip.String(), "proto", proto, "name", m.NameString(res.Q.Name),
+		"type", m.TypeString(res.Q.Type), "rcode", m.RcodeString(m.Rcode(res.Resp)),
+		"status", res.Status, "us", time.Since(start).Microseconds())
+}
+
+// ---- TCP (pipelined queries are answered concurrently) ----
+
+type tcpListener struct {
+	ln    net.Listener
+	wg    sync.WaitGroup
+	mu    sync.Mutex
+	conns map[net.Conn]struct{}
+}
+
+func (s *Server) listenTCP(addr string) (*tcpListener, error) {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	l := &tcpListener{ln: ln, conns: map[net.Conn]struct{}{}}
+	l.wg.Add(1)
+	go s.serveTCP(l)
+	s.Log.Info("listening", "proto", "tcp", "addr", ln.Addr().String())
+	return l, nil
+}
+
+func (l *tcpListener) close() {
+	l.ln.Close()
+	l.mu.Lock()
+	for c := range l.conns {
+		c.Close()
+	}
+	l.mu.Unlock()
+	l.wg.Wait()
+}
+
+func (s *Server) serveTCP(l *tcpListener) {
+	defer l.wg.Done()
+	for {
+		c, err := l.ln.Accept()
+		if err != nil {
+			if isClosed(err) {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
+		st := s.state.Load()
+		ap, err := netip.ParseAddrPort(c.RemoteAddr().String())
+		if err != nil {
+			c.Close()
+			continue
+		}
+		ip := ap.Addr().Unmap()
+		if !st.guard.Permitted(ip) {
+			s.Stats.Rejected[stats.RejectACL].Add(1)
+			c.Close()
+			continue
+		}
+		if s.tcpConns.Add(1) > int64(st.cfg.Limits.TCPConnections) {
+			s.tcpConns.Add(-1)
+			s.Stats.Rejected[stats.RejectOverload].Add(1)
+			c.Close()
+			continue
+		}
+		l.mu.Lock()
+		l.conns[c] = struct{}{}
+		l.mu.Unlock()
+		l.wg.Add(1)
+		go func() {
+			defer func() {
+				l.mu.Lock()
+				delete(l.conns, c)
+				l.mu.Unlock()
+				s.tcpConns.Add(-1)
+				l.wg.Done()
+			}()
+			s.serveTCPConn(c, ip, st.cfg.Limits.TCPPipeline, st.cfg.Limits.TCPIdleTimeout)
+		}()
+	}
+}
+
+func (s *Server) serveTCPConn(c net.Conn, ip netip.Addr, pipeline int, idle time.Duration) {
+	var wmu sync.Mutex
+	var wg sync.WaitGroup
+	inflight := make(chan struct{}, pipeline)
+	defer func() {
+		wg.Wait()
+		c.Close()
+	}()
+	for {
+		c.SetReadDeadline(time.Now().Add(idle))
+		var lb [2]byte
+		if _, err := io.ReadFull(c, lb[:]); err != nil {
+			return
+		}
+		n := int(binary.BigEndian.Uint16(lb[:]))
+		if n < m.HeaderLen {
+			return
+		}
+		msg := make([]byte, n)
+		if _, err := io.ReadFull(c, msg); err != nil {
+			return
+		}
+		s.Stats.Queries[stats.TCP].Add(1)
+		st := s.state.Load()
+		if v := st.guard.Admit(ip); v != guard.Allow {
+			s.reject(v)
+			if v == guard.DenyACL {
+				return
+			}
+			if q, _, err := m.ParseQuery(msg); err == nil {
+				writeTCP(c, &wmu, m.ErrorResponse(msg, q, m.RcodeRefused))
+			}
+			continue
+		}
+		inflight <- struct{}{} // back-pressure: at most `pipeline` queries at once
+		wg.Add(1)
+		go func() {
+			defer func() { <-inflight; wg.Done() }()
+			start := time.Now()
+			res := s.res.Resolve(msg, false)
+			if res.Resp != nil {
+				writeTCP(c, &wmu, res.Resp)
+				s.logQuery(st, ip, "tcp", res, start)
+			}
+		}()
+	}
+}
+
+func writeTCP(c net.Conn, mu *sync.Mutex, resp []byte) {
+	buf := make([]byte, 2+len(resp))
+	binary.BigEndian.PutUint16(buf, uint16(len(resp)))
+	copy(buf[2:], resp)
+	mu.Lock()
+	defer mu.Unlock()
+	c.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	if _, err := c.Write(buf); err != nil {
+		c.Close() // a client that stops reading gets disconnected
+	}
+}
+
+// ---- HTTP listeners (DoH behind a reverse proxy, metrics) ----
+
+type httpListener struct {
+	addr, path string
+	ln         net.Listener
+	srv        *http.Server
+}
+
+func (s *Server) listenHTTP(addr, path string, h http.Handler) (*httpListener, error) {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	if path != "" {
+		mux := http.NewServeMux()
+		mux.Handle(path, h)
+		h = mux
+	}
+	srv := &http.Server{
+		Handler:           h,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    16 << 10,
+	}
+	go srv.Serve(ln)
+	s.Log.Info("listening", "proto", "http", "addr", ln.Addr().String(), "path", path)
+	return &httpListener{addr: addr, path: path, ln: ln, srv: srv}, nil
+}
+
+func (l *httpListener) close() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	l.srv.Shutdown(ctx)
+}
+
+// clientIP returns the real client address. X-Real-IP (or the last
+// X-Forwarded-For entry) is trusted only from configured proxies.
+func clientIP(r *http.Request, trusted []netip.Prefix) netip.Addr {
+	ap, err := netip.ParseAddrPort(r.RemoteAddr)
+	if err != nil {
+		return netip.Addr{}
+	}
+	ip := ap.Addr().Unmap()
+	if !guard.ACL(trusted).Contains(ip) {
+		return ip
+	}
+	if v := strings.TrimSpace(r.Header.Get("X-Real-IP")); v != "" {
+		if a, err := netip.ParseAddr(v); err == nil {
+			return a.Unmap()
+		}
+	}
+	if v := r.Header.Get("X-Forwarded-For"); v != "" {
+		parts := strings.Split(v, ",")
+		if a, err := netip.ParseAddr(strings.TrimSpace(parts[len(parts)-1])); err == nil {
+			return a.Unmap()
+		}
+	}
+	return ip
+}
+
+func (s *Server) handleDoH(w http.ResponseWriter, r *http.Request) {
+	var msg []byte
+	var err error
+	switch r.Method {
+	case http.MethodGet:
+		d := strings.TrimRight(r.URL.Query().Get("dns"), "=")
+		if msg, err = base64.RawURLEncoding.DecodeString(d); err != nil {
+			http.Error(w, "invalid dns parameter", http.StatusBadRequest)
+			return
+		}
+	case http.MethodPost:
+		if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/dns-message") {
+			http.Error(w, "unsupported content type", http.StatusUnsupportedMediaType)
+			return
+		}
+		if msg, err = io.ReadAll(io.LimitReader(r.Body, 65535)); err != nil {
+			http.Error(w, "read error", http.StatusBadRequest)
+			return
+		}
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if len(msg) < m.HeaderLen {
+		http.Error(w, "message too short", http.StatusBadRequest)
+		return
+	}
+	s.Stats.Queries[stats.DoH].Add(1)
+	st := s.state.Load()
+	ip := clientIP(r, st.cfg.DoH.TrustedProxies)
+	switch v := st.guard.Admit(ip); v {
+	case guard.Allow:
+	case guard.DenyACL:
+		s.reject(v)
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	default:
+		s.reject(v)
+		http.Error(w, "too many requests", http.StatusTooManyRequests)
+		return
+	}
+	start := time.Now()
+	res := s.res.Resolve(msg, false)
+	if res.Resp == nil {
+		http.Error(w, "malformed dns message", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/dns-message")
+	w.Header().Set("Cache-Control", fmt.Sprintf("max-age=%d", m.ResponseMinTTL(res.Resp)))
+	w.Write(res.Resp)
+	s.logQuery(st, ip, "doh", res, start)
+}
+
+func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	s.Stats.WritePrometheus(w)
+	pos, neg := s.res.CacheCounts()
+	fmt.Fprintf(w, "# TYPE dnsnova_cache_entries gauge\n")
+	fmt.Fprintf(w, "dnsnova_cache_entries{kind=\"positive\"} %d\n", pos)
+	fmt.Fprintf(w, "dnsnova_cache_entries{kind=\"negative\"} %d\n", neg)
+	fmt.Fprintf(w, "# TYPE dnsnova_tcp_connections gauge\ndnsnova_tcp_connections %d\n", s.tcpConns.Load())
+	st := s.state.Load()
+	fmt.Fprintf(w, "# TYPE dnsnova_upstream_queries_total counter\n")
+	for _, u := range st.group.Members() {
+		fmt.Fprintf(w, "dnsnova_upstream_queries_total{upstream=%q,role=%q} %d\n", u.U.String(), role(u.Fallback), u.Queries())
+	}
+	fmt.Fprintf(w, "# TYPE dnsnova_upstream_errors_total counter\n")
+	for _, u := range st.group.Members() {
+		fmt.Fprintf(w, "dnsnova_upstream_errors_total{upstream=%q,role=%q} %d\n", u.U.String(), role(u.Fallback), u.Errors())
+	}
+	fmt.Fprintf(w, "# TYPE dnsnova_upstream_latency_seconds gauge\n")
+	for _, u := range st.group.Members() {
+		fmt.Fprintf(w, "dnsnova_upstream_latency_seconds{upstream=%q,role=%q} %.6f\n", u.U.String(), role(u.Fallback), u.Latency().Seconds())
+	}
+	fmt.Fprintf(w, "# TYPE dnsnova_upstream_healthy gauge\n")
+	for _, u := range st.group.Members() {
+		h := 0
+		if u.Healthy() {
+			h = 1
+		}
+		fmt.Fprintf(w, "dnsnova_upstream_healthy{upstream=%q,role=%q} %d\n", u.U.String(), role(u.Fallback), h)
+	}
+}
+
+func role(fallback bool) string {
+	if fallback {
+		return "fallback"
+	}
+	return "primary"
+}
+
+// handleHealth answers 200 when at least one upstream is healthy, 503
+// otherwise, for monitors such as Uptime Kuma. Upstream addresses are not
+// included, so the endpoint is safe to expose.
+func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
+	st := s.state.Load()
+	healthy, total := 0, 0
+	for _, u := range st.group.Members() {
+		total++
+		if u.Healthy() {
+			healthy++
+		}
+	}
+	status, code := "ok", http.StatusOK
+	if healthy == 0 {
+		status, code = "unhealthy", http.StatusServiceUnavailable
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":            status,
+		"upstreams_healthy": healthy,
+		"upstreams_total":   total,
+		"uptime_seconds":    int(time.Since(s.Stats.Started).Seconds()),
+	})
+}

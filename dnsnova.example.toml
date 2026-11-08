@@ -1,0 +1,82 @@
+# dnsnova configuration
+#
+# Changes are applied automatically when this file is saved (or on
+# `systemctl reload dnsnova`). Check a file with: dnsnova -t -c <file>
+# Durations accept "500ms", "3s", "24h", or a plain number of seconds.
+
+[server]
+# "public":  anyone may query; abuse is handled by the [limits] below.
+# "private": only the networks in [access] allow may query.
+mode = "public"
+
+# Addresses for plain DNS (UDP and TCP). On hosts with several IP addresses,
+# list each one rather than ":53", so UDP replies leave from the address the
+# query was sent to.
+listen = ["203.0.113.10:53", "[2001:db8::10]:53"]
+
+[doh]
+# DNS over HTTPS behind a reverse proxy (nginx) that handles TLS, HTTP/2 and
+# HTTP/3. Leave listen empty to disable.
+listen = "127.0.0.1:8053"
+path = "/dns-query"
+# The client address is taken from X-Real-IP only when the request comes
+# from one of these proxies.
+trusted_proxies = ["127.0.0.1/32", "::1/128"]
+
+[upstream]
+# Where queries are forwarded. Formats:
+#   1.1.1.1                          plain DNS (UDP, TCP when truncated)
+#   tcp://1.1.1.1                    plain DNS over TCP
+#   tls://one.one.one.one            DNS over TLS
+#   https://cloudflare-dns.com/dns-query    DNS over HTTPS
+# A host name can be pinned to an address to skip the bootstrap lookup:
+#   https://dns.google/dns-query#8.8.8.8
+primary = ["https://1.1.1.1/dns-query", "https://1.0.0.1/dns-query"]
+
+# Used only when every primary upstream fails or has not answered within
+# fallback_delay.
+fallback = ["https://dns.google/dns-query#8.8.8.8"]
+
+# Resolve upstream host names through these IP addresses (plain or encrypted).
+bootstrap = ["1.1.1.1:53", "8.8.8.8:53"]
+
+# Query the fastest N primaries at once and take the first good answer.
+# 0 = all of them.
+parallel = 2
+timeout = "3s"
+fallback_delay = "1.5s"
+
+[cache]
+size = 100000           # entries; 0 disables the cache
+min_ttl = 0             # raise short TTLs to at least this
+max_ttl = "24h"
+max_negative_ttl = "1h" # NXDOMAIN and "no records"
+serve_stale = "24h"     # answer from an expired entry while refreshing it
+prefetch = true         # refresh popular entries before they expire
+
+[access]
+# Private mode only.
+allow = ["198.51.100.0/24", "2001:db8:1000::/48"]
+
+[limits]
+client_qps = 50             # per IPv4 address or IPv6 /56
+client_burst = 200
+prefix_qps = 500            # per IPv4 /24 or IPv6 /48
+prefix_burst = 2000
+global_qps = 50000          # whole server; 0 = no limit
+upstream_concurrency = 2000 # upstream queries in flight
+zone_concurrency = 50       # upstream queries in flight per domain
+tcp_connections = 1000
+tcp_pipeline = 16           # concurrent queries per TCP connection
+tcp_idle_timeout = "10s"
+udp_max_size = 1232
+rrl_rate = 20               # identical UDP responses per second per network
+rrl_slip = 2                # send every 2nd limited response truncated
+block_any = true            # answer ANY queries with NOTIMP
+
+[metrics]
+# Prometheus metrics at /metrics and a health check at /healthz.
+listen = "127.0.0.1:9153"
+
+[log]
+queries = false             # log every query (for troubleshooting only)
