@@ -1,0 +1,158 @@
+package config
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestExampleConfigLoads(t *testing.T) {
+	src, err := os.ReadFile("../../dnsnova.example.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _, warns, err := Load(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Server.Mode != ModePublic || len(c.Server.Listen) != 2 || c.Upstream.FallbackDelay != 1500*time.Millisecond ||
+		c.Cache.MaxTTL != 86400 || c.Cache.MaxNegativeTTL != 3600 || c.Limits.RRLSlip != 2 {
+		t.Fatalf("unexpected values: %+v", c)
+	}
+	if len(warns) != 1 || !strings.Contains(warns[0], "ignored in public mode") {
+		t.Fatalf("warnings: %v", warns)
+	}
+}
+
+func TestLoadReportsEveryProblem(t *testing.T) {
+	src := `[server]
+mode = "privte"
+listen = ["nonsense"]
+
+[upstream]
+primary = ["ftp://x"]
+timeot = "3s"
+
+[limits]
+udp_max_size = 100
+`
+	_, _, _, err := Load([]byte(src))
+	var es Errors
+	if !errors.As(err, &es) {
+		t.Fatalf("want Errors, got %v", err)
+	}
+	got := es.Error()
+	for _, want := range []string{
+		"line 2: server.mode", "line 3: server.listen", "line 6: upstream.primary",
+		"line 7: upstream.timeot: unknown setting (did you mean upstream.timeout?)", "line 10: limits.udp_max_size",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	if es[0].Line != 2 || es[len(es)-1].Line != 10 {
+		t.Fatalf("errors not in line order:\n%s", got)
+	}
+}
+
+func TestPrivateModeNeedsAllowList(t *testing.T) {
+	src := "[server]\nmode = \"private\"\nlisten = [\"127.0.0.1:53\"]\n[upstream]\nprimary = [\"1.1.1.1\"]\n"
+	if _, _, _, err := Load([]byte(src)); err == nil || !strings.Contains(err.Error(), "access.allow") {
+		t.Fatalf("want access.allow error, got %v", err)
+	}
+	src += "[access]\nallow = [\"10.0.0.0/8\", \"192.0.2.7\", \"::ffff:172.16.0.0/108\"]\n"
+	c, _, _, err := Load([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Access.Allow) != 3 || c.Access.Allow[1].Bits() != 32 || c.Access.Allow[2].String() != "172.16.0.0/12" {
+		t.Fatalf("prefixes: %v", c.Access.Allow)
+	}
+}
+
+func minimal() []byte {
+	return []byte("# my comment\n[server]\nmode = \"public\"\nlisten = [\"127.0.0.1:53\"]\n\n[upstream]\nprimary = [\"1.1.1.1\"]\n")
+}
+
+func TestStoreWriteConflictHistoryRestore(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dnsnova.toml")
+	if err := os.WriteFile(path, minimal(), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	s := NewStore(path)
+	snap, err := s.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Changed() {
+		t.Fatal("unchanged file reported as changed")
+	}
+
+	// a web edit: change one value, keep the comment
+	out, err := snap.Doc.Set("server", "mode", Str("private"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Write(out, snap.Hash); err == nil {
+		t.Fatal("invalid config (private without allow) must not be written")
+	}
+	out, _ = snap.Doc.Set("upstream", "parallel", IntV(1))
+	snap2, err := s.Write(out, snap.Hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disk, _ := os.ReadFile(path)
+	if !strings.HasPrefix(string(disk), "# my comment\n") || !strings.Contains(string(disk), "parallel = 1") {
+		t.Fatalf("written file:\n%s", disk)
+	}
+	if fi, _ := os.Stat(path); fi.Mode().Perm() != 0o640 {
+		t.Fatalf("permissions changed to %v", fi.Mode().Perm())
+	}
+
+	// someone edits the file by hand: an edit based on the old hash conflicts
+	time.Sleep(10 * time.Millisecond)
+	hand := append(disk, []byte("\n[cache]\nsize = 10\n")...)
+	os.WriteFile(path, hand, 0o640)
+	if !s.Changed() {
+		t.Fatal("manual edit not detected")
+	}
+	if _, err := s.Write(out, snap2.Hash); !errors.Is(err, ErrConflict) {
+		t.Fatalf("want ErrConflict, got %v", err)
+	}
+
+	hist, err := s.History()
+	if err != nil || len(hist) != 1 {
+		t.Fatalf("history: %v %v", hist, err)
+	}
+	cur, _ := s.Load()
+	restored, err := s.Restore(hist[0].Name, cur.Hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.Config.Upstream.Parallel != 2 {
+		t.Fatal("restore did not bring back the original file")
+	}
+	if _, err := s.Restore("../../etc/passwd", restored.Hash); err == nil {
+		t.Fatal("path traversal accepted")
+	}
+
+	// history is capped
+	for i := 0; i < HistoryLimit+5; i++ {
+		cur, _ := s.Load()
+		out, _ := cur.Doc.Set("cache", "size", IntV(int64(100+i)))
+		if _, err := s.Write(out, cur.Hash); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if hist, _ := s.History(); len(hist) != HistoryLimit {
+		t.Fatalf("history has %d entries, want %d", len(hist), HistoryLimit)
+	}
+	left, _ := filepath.Glob(filepath.Join(dir, ".dnsnova.toml.tmp-*"))
+	if len(left) != 0 {
+		t.Fatalf("temporary files left behind: %v", left)
+	}
+}
