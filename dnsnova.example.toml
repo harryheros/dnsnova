@@ -106,6 +106,21 @@ prefetch = true         # refresh popular entries before they expire
 [access]
 # Private mode only.
 allow = ["198.51.100.0/24", "2001:db8:1000::/48"]
+# Never answered, in either mode (wins over allow).
+deny = []
+
+[local]
+# Names DNSNova answers itself, without asking upstream: "name address".
+# "*.name" covers every name below it. A name listed here answers only the
+# addresses given (A and AAAA); 0.0.0.0 makes it unreachable.
+records = [
+  # "nas.home 192.168.1.5",
+  # "*.lab.home 192.168.1.9",
+]
+
+[stats]
+# How far back the overview goes: "24h", "7d" or "30d". In memory only.
+retention = "7d"
 
 [limits]
 client_qps = 50             # per IPv4 address or IPv6 /56

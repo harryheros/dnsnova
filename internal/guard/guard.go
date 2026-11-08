@@ -206,6 +206,7 @@ func (v Verdict) String() string {
 type Limits struct {
 	Private                  bool
 	Allow                    ACL
+	Deny                     ACL // refused in either mode
 	ClientQPS, ClientBurst   float64
 	NetworkQPS, NetworkBurst float64
 	GlobalQPS                float64
@@ -218,6 +219,7 @@ type Limits struct {
 type Guard struct {
 	private bool
 	allow   ACL
+	deny    ACL
 	client  *Bucket[netip.Addr]
 	network *Bucket[netip.Addr]
 	global  *Global
@@ -229,6 +231,7 @@ func New(l Limits) *Guard {
 	return &Guard{
 		private: l.Private,
 		allow:   l.Allow,
+		deny:    l.Deny,
 		client:  NewBucket[netip.Addr](l.ClientQPS, l.ClientBurst, 1<<18, hashAddr),
 		network: NewBucket[netip.Addr](l.NetworkQPS, l.NetworkBurst, 1<<16, hashAddr),
 		global:  NewGlobal(l.GlobalQPS),
@@ -239,7 +242,7 @@ func New(l Limits) *Guard {
 // Admit checks a client before its query is processed.
 func (g *Guard) Admit(ip netip.Addr) Verdict {
 	ip = ip.Unmap()
-	if g.private && !g.allow.Contains(ip) {
+	if !g.Permitted(ip) {
 		return DenyACL
 	}
 	if !g.client.Allow(ClientKey(ip)) {
@@ -257,7 +260,11 @@ func (g *Guard) Admit(ip netip.Addr) Verdict {
 // Permitted reports whether ip passes the access list (used when a TCP
 // connection is accepted, before any query arrives).
 func (g *Guard) Permitted(ip netip.Addr) bool {
-	return !g.private || g.allow.Contains(ip.Unmap())
+	ip = ip.Unmap()
+	if len(g.deny) > 0 && g.deny.Contains(ip) {
+		return false
+	}
+	return !g.private || g.allow.Contains(ip)
 }
 
 // Sweep drops idle limiter state; call it about once a minute.

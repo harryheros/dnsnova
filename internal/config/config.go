@@ -74,6 +74,7 @@ type Config struct {
 		Prefetch       bool
 	}
 	Access struct {
+		Deny  []netip.Prefix // never answered, in either mode
 		Allow []netip.Prefix
 	}
 	Limits struct {
@@ -102,6 +103,12 @@ type Config struct {
 	Status struct {
 		Enabled bool // public status page on the DoH addresses
 	}
+	Local struct {
+		Records []string // "name address", answered by DNSNova itself
+	}
+	Stats struct {
+		Retention string // how far back statistics go: 24h, 7d or 30d (memory only)
+	}
 	Log struct {
 		Queries bool // no longer used: the query log runs from the admin interface, in memory
 	}
@@ -119,6 +126,7 @@ func Defaults() *Config {
 	c.DDR.Enabled = true
 	c.DoH.TrustedProxies = []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8"), netip.MustParsePrefix("::1/128")}
 	c.Upstream.Bootstrap = []string{"1.1.1.1:53", "8.8.8.8:53"}
+	c.Stats.Retention = "7d"
 	c.Upstream.Parallel = 2
 	c.Upstream.Timeout = 3 * time.Second
 	c.Cache.Size = 100000
@@ -234,8 +242,13 @@ func (c *Config) validate(lines map[string]int) (Errors, []string) {
 	default:
 		bad("server.mode", fmt.Sprintf(`must be "public" or "private", got %q`, c.Server.Mode))
 	}
-	if len(c.Server.Listen) == 0 && c.DoH.Listen == "" && len(c.DoH.HTTPSListen) == 0 && len(c.DoT.Listen) == 0 && len(c.DoQ.Listen) == 0 {
+	dns := c.ServesDNS()
+	if !dns && c.Admin.Listen == "" {
 		bad("server.listen", "nothing to listen on: set server.listen, dot.listen, doq.listen or doh.https_listen")
+	}
+	if !dns {
+		// A fresh install: only the admin interface runs until setup is done.
+		warns = append(warns, "DNS is not served yet: no listen address is set (finish setup in the admin interface)")
 	}
 	if !strings.HasPrefix(c.Server.DataDir, "/") {
 		bad("server.data_dir", "must be an absolute path")
@@ -268,7 +281,7 @@ func (c *Config) validate(lines map[string]int) (Errors, []string) {
 
 	errs, warns = c.validateTLS(lines, errs, warns)
 
-	if len(c.Upstream.Primary) == 0 {
+	if len(c.Upstream.Primary) == 0 && dns {
 		bad("upstream.primary", "at least one upstream is required")
 	}
 	for _, key := range []string{"upstream.primary", "upstream.fallback"} {
@@ -323,6 +336,12 @@ func (c *Config) validate(lines map[string]int) (Errors, []string) {
 			warns = append(warns, "access.allow is ignored in public mode")
 		}
 	}
+	if _, ok := RetentionHours[c.Stats.Retention]; !ok {
+		bad("stats.retention", `must be "24h", "7d" or "30d"`)
+	}
+	if _, err := ParseLocalRecords(c.Local.Records); err != nil {
+		bad("local.records", err.Error())
+	}
 	if c.Status.Enabled {
 		if len(c.DoH.HTTPSListen) == 0 && c.DoH.Listen == "" {
 			warns = append(warns, "status.enabled: the status page is served on the DNS-over-HTTPS addresses, and none is set (doh.https_listen or doh.listen)")
@@ -371,6 +390,12 @@ func (c *Config) validate(lines map[string]int) (Errors, []string) {
 	}
 	sort.Slice(errs, func(i, j int) bool { return errs[i].Line < errs[j].Line })
 	return errs, warns
+}
+
+// ServesDNS reports whether any DNS listener is configured. A fresh
+// install has none until setup is finished in the admin interface.
+func (c *Config) ServesDNS() bool {
+	return len(c.Server.Listen) > 0 || c.DoH.Listen != "" || len(c.DoH.HTTPSListen) > 0 || len(c.DoT.Listen) > 0 || len(c.DoQ.Listen) > 0
 }
 
 // PublicListenIPs returns the public addresses named in server.listen: the
@@ -584,7 +609,10 @@ var fields = map[string]field{
 	"cache.serve_stale":      duration(func(c *Config) *time.Duration { return &c.Cache.ServeStale }),
 	"cache.prefetch":         boolean(func(c *Config) *bool { return &c.Cache.Prefetch }),
 
-	"access.allow": prefixes(func(c *Config) *[]netip.Prefix { return &c.Access.Allow }),
+	"access.allow":    prefixes(func(c *Config) *[]netip.Prefix { return &c.Access.Allow }),
+	"access.deny":     prefixes(func(c *Config) *[]netip.Prefix { return &c.Access.Deny }),
+	"local.records":   strList(func(c *Config) *[]string { return &c.Local.Records }),
+	"stats.retention": str(func(c *Config) *string { return &c.Stats.Retention }),
 
 	"limits.client_qps":           number(func(c *Config) *float64 { return &c.Limits.ClientQPS }),
 	"limits.client_burst":         number(func(c *Config) *float64 { return &c.Limits.ClientBurst }),
@@ -610,7 +638,7 @@ var fields = map[string]field{
 
 var knownTables = map[string]bool{
 	"server": true, "doh": true, "dot": true, "doq": true, "tls": true, "ddr": true, "upstream": true, "cache": true,
-	"access": true, "limits": true, "metrics": true, "log": true, "admin": true, "status": true,
+	"access": true, "limits": true, "metrics": true, "log": true, "admin": true, "status": true, "local": true, "stats": true,
 }
 
 func want(v Value, k Kind) error {
@@ -843,4 +871,42 @@ func levenshtein(a, b string) int {
 		prev = cur
 	}
 	return prev[len(b)]
+}
+
+// RetentionHours maps stats.retention to hours.
+var RetentionHours = map[string]int{"24h": 24, "7d": 7 * 24, "30d": 30 * 24}
+
+// LocalRecord is one entry of local.records: a name and the address DNSNova
+// answers for it. A name starting with "*." covers every name below it.
+type LocalRecord struct {
+	Name string // lowercase, no trailing dot
+	Addr netip.Addr
+}
+
+// ParseLocalRecords reads entries like "nas.home 192.168.1.5". The same name
+// may have several addresses (IPv4 and IPv6, or more than one of each).
+func ParseLocalRecords(list []string) ([]LocalRecord, error) {
+	var out []LocalRecord
+	for _, e := range list {
+		f := strings.Fields(e)
+		if len(f) != 2 {
+			return nil, fmt.Errorf("%q: write a name and an address, such as \"nas.home 192.168.1.5\"", e)
+		}
+		name := strings.ToLower(strings.TrimSuffix(f[0], "."))
+		check := strings.TrimPrefix(name, "*.")
+		if check == "" || len(check) > 253 || strings.Contains(check, "*") || strings.Contains(check, "..") || strings.HasPrefix(check, ".") {
+			return nil, fmt.Errorf("%q: not a valid name", f[0])
+		}
+		for _, l := range strings.Split(check, ".") {
+			if len(l) > 63 || strings.Trim(l, "abcdefghijklmnopqrstuvwxyz0123456789-_") != "" {
+				return nil, fmt.Errorf("%q: not a valid name", f[0])
+			}
+		}
+		a, err := netip.ParseAddr(f[1])
+		if err != nil || a.Zone() != "" {
+			return nil, fmt.Errorf("%q: %q is not an IP address", e, f[1])
+		}
+		out = append(out, LocalRecord{Name: name, Addr: a.Unmap()})
+	}
+	return out, nil
 }

@@ -50,8 +50,8 @@ curl -s -b jar -X POST -H "X-CSRF-Token: $csrf" $api/cache/clear
 
 | Method and path | Body | Result |
 | --- | --- | --- |
-| `GET /setup` | | `{"needed": true, "secure": false}`: whether an administrator still has to be created, and whether this connection is HTTPS |
-| `POST /setup` | `{"code", "username", "password"}` | `201` and a session. `code` is the one-time setup code from `<data_dir>/secrets/setup-code`, which the installer prints. Passwords need at least 10 characters. |
+| `GET /setup` | | `{"needed": true, "code_required": false, "secure": false}`: whether an administrator still has to be created, whether this client must give the setup code (not from loopback, private networks or the installer's SSH address), and whether this connection is HTTPS |
+| `POST /setup` | `{"code", "username", "password"}` | `201` and a session. `code` is the one-time setup code from `<data_dir>/secrets/setup-code`, which the installer prints: 8 letters and digits as `XXXX-XXXX`; case, spaces and dashes are ignored. After 20 wrong codes from any addresses, a new code replaces it. Passwords need at least 10 characters. |
 | `POST /login` | `{"username", "password", "totp"}` | A session: `{"username", "csrf", "totp", "secure", "client_ip"}`. With two-step verification on and no `totp`, `401` with `"totp_required": true`. |
 | `POST /logout` | | `204` |
 | `GET /session` | | `{"username", "csrf", "totp", "secure", "client_ip"}`. `client_ip` is the address DNSNova sees, used by the setup wizard to fill in the allow list. |
@@ -78,6 +78,8 @@ early or late, and each code works only once.
 | `GET /upstreams` | Each upstream: `address`, `role` (`primary` or `fallback`), `healthy`, `latency_ms` (smoothed), `queries`, `errors`, `last_ok`, `last_error`. |
 | `GET /events?limit=50` | Recent log records, newest first (up to 200): start-up, errors, setting changes with the user and keys, certificates. Queries are never among them. |
 | `POST /cache/clear` | `204` |
+| `POST /stats/clear` | `204`: forgets the statistics and domain lists (Prometheus counters keep counting). |
+| `GET /guide` | The setup guide's data: the status page fields, `plain` with every address DNS listens on, and `profile`, where the Apple profile can be downloaded (null when the status page is off). |
 
 ## Query log
 

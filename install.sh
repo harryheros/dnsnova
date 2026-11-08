@@ -1,11 +1,32 @@
 #!/usr/bin/env bash
 # dnsnova installer
 #
-#   curl -fsSL https://raw.githubusercontent.com/harryheros/dnsnova/main/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/harryheros/dnsnova/main/install.sh | sh
 #
-# Installs or upgrades dnsnova, or removes it (--uninstall). Run with --help
-# for the options that allow unattended installs.
+# Installs or upgrades dnsnova, or removes it (--uninstall). With no options
+# it asks nothing: it installs dnsnova, starts the web interface on port 7000
+# and prints its address; everything else is set up in the browser. Run with
+# --help for the options that configure everything here instead.
+# Run by sh (curl ... | sh): fetch the script again and run it with bash.
+if [ -z "${BASH_VERSION:-}" ]; then
+    if command -v bash >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
+        exec bash -c "$(curl -fsSL https://raw.githubusercontent.com/harryheros/dnsnova/main/install.sh)" install.sh "$@"
+    fi
+    echo "error: this installer needs bash and curl" >&2
+    exit 1
+fi
 set -euo pipefail
+
+# Not root: use sudo when there is one (Debian often has none; then log in
+# as root, for example with "su -", and run the command again).
+if [ "$(id -u)" -ne 0 ] && [ -z "${DNSNOVA_ROOT:-}" ]; then
+    if command -v sudo >/dev/null 2>&1; then
+        if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then exec sudo bash "${BASH_SOURCE[0]}" "$@"; fi
+        exec sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/harryheros/dnsnova/main/install.sh)" install.sh "$@"
+    fi
+    echo "error: run this as root (for example, log in with: su -)" >&2
+    exit 1
+fi
 
 REPO="harryheros/dnsnova"
 ROOT="${DNSNOVA_ROOT:-}"                      # install prefix (tests only)
@@ -26,7 +47,14 @@ usage() {
     cat <<'EOF'
 Usage: install.sh [options]
 
-Install or upgrade:
+With no options: install, start the web interface on port 7000 and print
+its address. Choose addresses, upstreams and everything else in the browser.
+
+  --admin-port PORT       port for the web interface (default 7000)
+  --admin local           web interface only from this server (SSH tunnel)
+  --version vX.Y.Z        install this release instead of the latest
+
+Configure here instead of in the browser (for scripts):
   --mode public|private   who may query: anyone (with rate limits) or listed networks
   --listen ADDR:PORT      address to serve DNS on; repeatable (default: every
                           public address of this host, port 53)
@@ -49,13 +77,11 @@ Install or upgrade:
                           from this server, through an SSH tunnel (more secure; the
                           default with --yes); public = from anywhere, password
                           protected (less secure); off = not at all
-  --admin-port PORT       port for the admin interface (default 7000)
-  --version vX.Y.Z        install this release instead of the latest
-  --yes                   do not ask questions; use the options and defaults
+  --yes                   accepted for compatibility (the installer asks nothing)
   --force                 continue even if another program uses port 53
 
 Remove:
-  --uninstall             stop and remove dnsnova, keep the configuration
+  -u, --uninstall         stop and remove dnsnova, keep the configuration
   --purge                 with --uninstall: also remove configuration and data
 EOF
 }
@@ -78,7 +104,7 @@ while [ $# -gt 0 ]; do
         --version)   VERSION="${2:-}"; shift ;;
         --yes|-y)    YES=1 ;;
         --force)     FORCE=1 ;;
-        --uninstall) UNINSTALL=1 ;;
+        -u|--uninstall) UNINSTALL=1 ;;
         --purge)     PURGE=1 ;;
         -h|--help)   usage; exit 0 ;;
         *)           echo "Unknown option: $1 (see --help)" >&2; exit 2 ;;
@@ -96,11 +122,9 @@ die()  { echo "${R}error:${N} $*" >&2; exit 1; }
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# Questions are read from the terminal, so they work with curl | bash.
+# The installer asks no questions: a plain install is finished in the
+# browser, and the options cover unattended installs.
 TTY=""
-if [ "$YES" -eq 0 ]; then
-    if [ -r /dev/tty ] && { : < /dev/tty; } 2>/dev/null; then TTY=/dev/tty; fi
-fi
 ask() { # ask "question" default -> REPLY
     local q="$1" def="${2:-}"
     if [ -z "$TTY" ]; then REPLY="$def"; return; fi
@@ -114,7 +138,7 @@ systemd() { [ "$SKIP_SYSTEMD" = "1" ] || systemctl "$@"; }
 
 # ── checks ──
 preflight() {
-    [ "$(id -u)" -eq 0 ] || [ -n "$ROOT" ] || die "run as root (for example: curl -fsSL ... | sudo bash)"
+    [ "$(id -u)" -eq 0 ] || [ -n "$ROOT" ] || die "run as root"
     [ "$(uname -s)" = "Linux" ] || die "dnsnova supports Linux only"
     if [ "$SKIP_SYSTEMD" != "1" ]; then
         [ -d /run/systemd/system ] || die "systemd is required"
@@ -192,7 +216,10 @@ check_ports() {
 
 # ── configuration (new installs only) ──
 public_addrs() {
-    have ip || return 0
+    if ! have ip; then
+        hostname -I 2>/dev/null | tr ' ' '\n' | grep -v -i -e '^$' -e '^fe80' -e '^127\.' -e '^::1$' || true
+        return 0
+    fi
     ip -o -4 addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1
     ip -o -6 addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -v -i '^fe80' || true
 }
@@ -217,6 +244,84 @@ toml_list() { # toml_list items... -> ["a", "b"]
         out="$out${out:+, }\"$x\""
     done
     printf '[%s]' "$out"
+}
+
+# the address other machines most likely use to reach this one
+primary_ip() {
+    local a=""
+    if have ip; then
+        a="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "src") { print $(i + 1); exit }}')"
+        [ -n "$a" ] || a="$(ip -6 route get 2606:4700:4700::1111 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "src") { print $(i + 1); exit }}')"
+    fi
+    [ -n "$a" ] || a="$(public_addrs | head -n1)"
+    [ -n "$a" ] || a="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    case "$a" in *:*) a="[$a]" ;; esac
+    printf '%s' "$a"
+}
+
+# ssh_clients prints the addresses of the SSH sessions open on this machine:
+# the person running the installer is almost certainly one of them, so the
+# setup page opened from there needs no code.
+ssh_clients() {
+    { [ -z "${SSH_CLIENT:-}" ] || echo "${SSH_CLIENT%% *}"
+      have ss && ss -Htnp state established 2>/dev/null | awk '/"sshd/ {print $4}' |
+          sed -E 's/^\[?([^]]*)\]?:[0-9]+$/\1/; s/^::ffff://'
+    } | grep -v -e '^$' -e '^127\.' -e '^::1$' | sort -u || true
+}
+
+write_setup_trust() {
+    local ips
+    ips="$(ssh_clients)"
+    [ -n "$ips" ] || return 0
+    install -d -m 700 "$VAR/secrets"
+    printf '%s\n' "$ips" > "$VAR/secrets/setup-trust"
+    chmod 600 "$VAR/secrets/setup-trust"
+    if [ -z "$ROOT" ]; then chown -R "$USER_NAME:$USER_NAME" "$VAR/secrets"; fi
+}
+
+# simple: no DNS options given, so DNS is set up in the browser
+simple() {
+    [ ${#LISTEN[@]} -eq 0 ] && [ ${#UPSTREAMS[@]} -eq 0 ] && [ -z "$MODE" ] && [ ${#ALLOW[@]} -eq 0 ] &&
+        [ -z "$DOMAIN" ] && [ -z "$CERT_FILE" ] && [ "$DOH_PROXY" -eq 0 ]
+}
+
+configure_simple() {
+    step "Configuring"
+    case "$ADMIN_PORT" in ''|*[!0-9]*) die "--admin-port must be a number" ;; esac
+    case "${ADMIN:-public}" in
+        public) ADMIN=public ;;
+        local)  ;;
+        *) die "--admin off needs the DNS options (--listen, --upstream, ...): there would be nothing to set it up with" ;;
+    esac
+    mkdir -p "$TMP/cfg"
+    local f="$TMP/cfg/dnsnova.toml" listen=":$ADMIN_PORT"
+    [ "$ADMIN" = local ] && listen="127.0.0.1:$ADMIN_PORT"
+    {
+        echo "# dnsnova configuration, written by install.sh on $(date -u +%Y-%m-%d)."
+        echo "# Every setting is described in /usr/local/share/doc/dnsnova/dnsnova.example.toml."
+        echo "# Changes are applied automatically when this file is saved."
+        echo "# DNS starts once setup is finished in the web interface."
+        echo
+        echo "[server]"
+        echo 'mode = "public"'
+        echo "listen = []"
+        echo
+        echo "[upstream]"
+        echo "primary = []"
+        echo
+        echo "[metrics]"
+        echo 'listen = "127.0.0.1:9153"'
+        echo
+        echo "[admin]"
+        echo "listen = \"$listen\""
+    } > "$f"
+    local errs
+    if ! errs="$("$PKG/dnsnova" -t -c "$f" 2>&1)"; then
+        echo "$errs" | sed "s#$TMP/cfg/##" >&2
+        die "the configuration is not valid; nothing was installed"
+    fi
+    ok "configuration valid"
+    NEW_CONF="$f"
 }
 
 configure() {
@@ -433,6 +538,26 @@ healthy() { # wait up to 10 s for the service to answer its health check
 fresh_install() {
     preflight
     download
+    if simple; then
+        configure_simple
+        check_ports "$ADMIN_PORT"
+        local dns
+        dns="$(port_users 53)"
+        if [ -n "$dns" ]; then
+            warn "port 53 is in use by: $dns"
+            case "$dns" in *AdGuardHome*) warn "stop it before you finish setup: systemctl disable --now AdGuardHome" ;;
+                *) warn "stop it before you finish setup, or choose other addresses there" ;; esac
+        fi
+        install_files
+        write_setup_trust
+        systemd daemon-reload
+        systemd enable --now dnsnova
+        if healthy; then ok "dnsnova is running"; else
+            warn "dnsnova did not report healthy; see: journalctl -u dnsnova -n 50"
+        fi
+        summary_simple
+        return
+    fi
     configure
     local ports=(53)
     [ ${#DOT_LISTEN[@]} -eq 0 ] || ports+=(853)
@@ -440,6 +565,7 @@ fresh_install() {
     [ "$ADMIN" = off ] || ports+=("$ADMIN_PORT")
     check_ports "${ports[@]}"
     install_files
+    write_setup_trust
     systemd daemon-reload
     systemd enable --now dnsnova
     if healthy; then ok "dnsnova is running"; else
@@ -487,7 +613,7 @@ uninstall() {
         if [ -z "$ROOT" ] && id "$USER_NAME" >/dev/null 2>&1; then userdel "$USER_NAME" 2>/dev/null || true; fi
         ok "configuration, data and the $USER_NAME user removed"
     else
-        ok "configuration kept in $ETC (remove it with --uninstall --purge)"
+        ok "configuration kept in $ETC (remove everything with: -u --purge)"
     fi
 }
 
@@ -520,6 +646,44 @@ summary() {
     admin_summary
 }
 
+setup_code() { # waits for the service to write the code
+    local i
+    for i in $(seq 1 20); do
+        if [ -r "$VAR/secrets/setup-code" ]; then tr -d '[:space:]' < "$VAR/secrets/setup-code"; return; fi
+        [ "$SKIP_SYSTEMD" = "1" ] && return
+        sleep 0.5
+    done
+}
+
+summary_simple() {
+    local code a urls=()
+    code="$(setup_code)"
+    if [ "$ADMIN" = local ]; then
+        urls=("http://127.0.0.1:$ADMIN_PORT")
+    else
+        while read -r a; do
+            [ -n "$a" ] || continue
+            case "$a" in *:*) a="[$a]" ;; esac
+            urls+=("http://$a:$ADMIN_PORT")
+        done < <(primary_ip | tr -d '[]'; echo; public_addrs; echo 127.0.0.1)
+    fi
+    echo
+    echo "${B}DNSNova is installed and running.${N}"
+    echo "Open one of these addresses and follow the setup wizard:"
+    printf '%s\n' "${urls[@]}" | awk '!seen[$0]++ { print "  " $0 }'
+    if [ "$ADMIN" = local ]; then
+        echo "(first, on your computer: ssh -L $ADMIN_PORT:127.0.0.1:$ADMIN_PORT ${SUDO_USER:-root}@$(primary_ip))"
+    fi
+    echo
+    if [ -n "$code" ] && [ "$ADMIN" != local ]; then
+        echo "Opened from outside your network, setup asks for this code: $code"
+    fi
+    [ "$ADMIN" = local ] || echo "If a firewall is on, open TCP port $ADMIN_PORT."
+    echo "Control the service: systemctl start|stop|restart|status dnsnova"
+    echo "Uninstall:           curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | sh -s -- -u"
+    echo "Forgot the password: dnsnova -reset-admin"
+}
+
 admin_summary() {
     [ "$ADMIN" = off ] && return 0
     local code="" i host
@@ -535,13 +699,14 @@ admin_summary() {
         echo "  From your computer:  ssh -L $ADMIN_PORT:127.0.0.1:$ADMIN_PORT ${SUDO_USER:-root}@<this server>"
     else
         host="$(public_listen_ips | awk '{print $1}')"
+        [ -n "$host" ] || host="$(primary_ip)"
         host="${host:-<this server>}"
-        case "$host" in *:*) host="[$host]" ;; esac
+        case "$host" in \[*) ;; *:*) host="[$host]" ;; esac
         echo "  The connection is not encrypted until a domain and certificate are set up."
     fi
     if [ -n "$code" ]; then
-        echo "  Finish setup in the browser (this link works once):"
-        echo "    http://$host:$ADMIN_PORT/#setup=$code"
+        echo "  Finish setup in the browser:  http://$host:$ADMIN_PORT/"
+        echo "  Opened from outside your network, it asks for this setup code: $code"
     else
         echo "  Open http://$host:$ADMIN_PORT/ and enter the one-time setup code from"
         echo "  $VAR/secrets/setup-code (written when dnsnova first starts)."
