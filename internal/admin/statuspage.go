@@ -33,6 +33,7 @@ type PublicInfo struct {
 type GuideInfo struct {
 	PublicInfo
 	Profile *string `json:"profile"`
+	Port    int     `json:"port"` // of plain DNS; devices mostly expect 53
 }
 
 // PublicBackend feeds the status page.

@@ -387,3 +387,18 @@ details summary { cursor: pointer; color: var(--accent); font-size: 13px; }
 .iconseg button:first-child { border-left: 0; }
 .iconseg button[aria-pressed="true"] { color: var(--go); background: var(--soft); }
 @media (max-width: 640px) { .signfoot .inner { flex-direction: column; text-align: center; } .signfoot .links { justify-content: center; } }
+
+/* setup wizard on phones: a compact step bar instead of the list */
+@media (max-width: 720px) {
+  .wizard { padding: 16px 12px 32px; }
+  .wizard > .inner { gap: 14px; }
+  .wizard .row { flex-direction: column; gap: 12px; }
+  .wizard .steps { flex: none; flex-direction: row; justify-content: space-between; padding: 8px 10px; gap: 4px; }
+  .wizard .steps li { padding: 4px; gap: 6px; }
+  .wizard .steps li .t { display: none; }
+  .wizard .steps li[aria-current="step"] { padding: 4px 10px 4px 4px; }
+  .wizard .steps li[aria-current="step"] .t { display: inline; font-size: 13px; }
+  .row > .card.wizbody { flex: none; width: 100%; padding: 18px 16px; }
+  .wizbody input:not([type=checkbox]):not([type=radio]), .wizbody textarea { max-width: 100%; }
+  .wizhead .brand { font-size: 17px; }
+}
