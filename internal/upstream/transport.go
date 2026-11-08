@@ -50,6 +50,11 @@ func New(s Spec, d *Dialer, tlsConf *tls.Config) (Upstream, error) {
 			Proxy:               nil, // never send DNS through an HTTP proxy from the environment
 		}
 		return &dohUpstream{spec: s, tr: tr, client: &http.Client{Transport: tr}}, nil
+	case "quic":
+		conf := tlsConfig(tlsConf)
+		conf.ServerName = s.Host
+		conf.NextProtos = []string{"doq"}
+		return &doqUpstream{spec: s, dialer: d, conf: conf}, nil
 	}
 	return nil, fmt.Errorf("unsupported scheme %q", s.Scheme)
 }

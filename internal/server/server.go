@@ -43,7 +43,7 @@ type Server struct {
 	state atomic.Pointer[state]
 	hash  string
 
-	// Certs provides the certificate for DoT and DoH (set up by Start).
+	// Certs provides the certificate for DoT, DoQ and DoH (set up by Start).
 	Certs *tlsmgr.Manager
 	// ACMEHTTP overrides the HTTP client used for ACME (tests only).
 	ACMEHTTP *http.Client
@@ -52,14 +52,18 @@ type Server struct {
 	udp     map[string]*udpListener
 	tcp     map[string]*tcpListener
 	dot     map[string]*tcpListener
+	doq     map[string]*quicListener
 	https   map[string]*httpListener
 	doh     *httpListener
 	metrics *httpListener
 	tlsDoT  *tls.Config
+	tlsDoQ  *tls.Config
 	tlsDoH  *tls.Config
+	tlsH3   *tls.Config
 
 	udpInflight chan struct{}
 	tcpConns    atomic.Int64
+	quicConns   atomic.Int64
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -75,6 +79,7 @@ func New(store *config.Store, log *slog.Logger) (*Server, error) {
 		udp:         map[string]*udpListener{},
 		tcp:         map[string]*tcpListener{},
 		dot:         map[string]*tcpListener{},
+		doq:         map[string]*quicListener{},
 		https:       map[string]*httpListener{},
 		udpInflight: make(chan struct{}, 20000),
 	}
@@ -114,7 +119,8 @@ func ddrFrom(c *config.Config) [][]byte {
 		}
 		return 0
 	}
-	d.DoTPort, d.DoHPort = port(c.DoT.Listen), port(c.DoH.HTTPSListen)
+	d.DoTPort, d.DoQPort, d.DoHPort = port(c.DoT.Listen), port(c.DoQ.Listen), port(c.DoH.HTTPSListen)
+	d.HTTP3 = c.DoH.HTTP3
 	ips := c.PublicListenIPs()
 	if len(ips) == 0 { // a private deployment: hint the listen addresses as they are
 		for _, a := range c.Server.Listen {
@@ -194,17 +200,19 @@ func (s *Server) Start() error {
 	s.Certs = tlsmgr.NewManager(snap.Config.Server.DataDir, s.Log)
 	s.Certs.HTTP = s.ACMEHTTP
 	s.tlsDoT = s.Certs.TLSConfig("dot")
+	s.tlsDoQ = s.Certs.TLSConfig("doq")
 	s.tlsDoH = s.Certs.TLSConfig("h2", "http/1.1")
+	s.tlsH3 = s.Certs.TLSConfig("h3")
 	if err := s.Certs.Configure(tlsSettings(snap.Config)); err != nil {
 		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.state.Store(st) // before any listener can receive a query
 	if err := s.syncListeners(snap.Config); err != nil {
 		s.closeAllLocked()
 		return err
 	}
-	s.state.Store(st)
 	s.hash = snap.Hash
 	go s.res.Janitor(s.ctx)
 	go s.sweeper()
@@ -311,16 +319,33 @@ func (s *Server) syncListeners(c *config.Config) error {
 			changes = append(changes, change{undo: func() { l.close(); delete(m, a) }})
 		}
 	}
-	for a := range wantSet(c.DoH.HTTPSListen) {
-		old, ok := s.https[a]
-		if ok && old.path == c.DoH.Path {
+	for a := range wantSet(c.DoQ.Listen) {
+		if _, ok := s.doq[a]; ok {
 			continue
 		}
-		if ok { // the path changed: the address must be released first
+		l, err := s.listenDoQ(a, s.tlsDoQ)
+		if err != nil {
+			rollback()
+			return fmt.Errorf("listen doq %s: %w", a, err)
+		}
+		s.doq[a] = l
+		a := a
+		changes = append(changes, change{undo: func() { l.close(); delete(s.doq, a) }})
+	}
+	var h3Conf *tls.Config
+	if c.DoH.HTTP3 {
+		h3Conf = s.tlsH3
+	}
+	for a := range wantSet(c.DoH.HTTPSListen) {
+		old, ok := s.https[a]
+		if ok && old.path == c.DoH.Path && (old.h3 != nil) == c.DoH.HTTP3 {
+			continue
+		}
+		if ok { // the path or HTTP/3 changed: the address must be released first
 			old.close()
 			delete(s.https, a)
 		}
-		l, err := s.listenHTTP(a, c.DoH.Path, http.HandlerFunc(s.handleDoH), s.tlsDoH)
+		l, err := s.listenHTTPS(a, c.DoH.Path, http.HandlerFunc(s.handleDoH), s.tlsDoH, h3Conf)
 		if err != nil {
 			rollback()
 			return fmt.Errorf("listen https %s: %w", a, err)
@@ -367,6 +392,13 @@ func (s *Server) syncListeners(c *config.Config) error {
 			}
 		}
 	}
+	wq := wantSet(c.DoQ.Listen)
+	for a, l := range s.doq {
+		if !wq[a] {
+			l.close()
+			delete(s.doq, a)
+		}
+	}
 	wh := wantSet(c.DoH.HTTPSListen)
 	for a, l := range s.https {
 		if !wh[a] {
@@ -409,6 +441,23 @@ func (s *Server) Endpoints() (dot, https []string) {
 	}
 	slices.Sort(dot)
 	slices.Sort(https)
+	return
+}
+
+// QUICEndpoints returns the bound DoQ and HTTP/3 (UDP) addresses.
+func (s *Server) QUICEndpoints() (doq, h3 []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, l := range s.doq {
+		doq = append(doq, l.pc.LocalAddr().String())
+	}
+	for _, l := range s.https {
+		if l.h3 != nil {
+			h3 = append(h3, l.h3.pc.LocalAddr().String())
+		}
+	}
+	slices.Sort(doq)
+	slices.Sort(h3)
 	return
 }
 
@@ -460,6 +509,10 @@ func (s *Server) closeAllLocked() {
 	for a, l := range s.dot {
 		l.close()
 		delete(s.dot, a)
+	}
+	for a, l := range s.doq {
+		l.close()
+		delete(s.doq, a)
 	}
 	for a, l := range s.https {
 		l.close()

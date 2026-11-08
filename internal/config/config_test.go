@@ -163,6 +163,9 @@ func TestTLSValidation(t *testing.T) {
 		extra, want string
 	}{
 		{"[dot]\nlisten = [\"192.0.2.10:853\"]\n", "needs a certificate"},
+		{"[doq]\nlisten = [\"192.0.2.10:853\"]\n", "needs a certificate"},
+		{"[doq]\nlisten = [\"dns.example:853\"]\n", "must be an IP address"},
+		{"[limits]\nquic_connections = 0\n", "quic_connections"},
 		{"[tls]\ncertificate = \"files\"\n", "cert_file"},
 		{"[tls]\ncertificate = \"acme\"\n", "at least one domain"},
 		{"[tls]\ncertificate = \"acme\"\ndomains = [\"bad_name\"]\n", "not a valid domain"},
@@ -183,6 +186,9 @@ func TestTLSValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !c.DoH.HTTP3 || c.Limits.QUICConnections != 1000 {
+		t.Fatalf("HTTP/3 should be on by default with a 1000-connection cap: %v %d", c.DoH.HTTP3, c.Limits.QUICConnections)
+	}
 	if c.TLS.Challenge != "tls-alpn-01" {
 		t.Fatalf("with a listener on 443 the challenge should default to tls-alpn-01, got %q", c.TLS.Challenge)
 	}
@@ -195,6 +201,12 @@ func TestTLSValidation(t *testing.T) {
 	noIP := strings.Replace(ok, "ip_addresses = true\n", "", 1)
 	if _, _, warns, _ := Load([]byte(noIP)); len(warns) != 1 || !strings.Contains(warns[0], "verify") {
 		t.Fatalf("expected a DDR verification warning, got %v", warns)
+	}
+	// DoQ alone is enough to listen on, and UDP-only it cannot answer tls-alpn-01
+	doqOnly := strings.Replace(base, "listen = [\"192.0.2.10:53\", \"[2001:db8::10]:53\", \"10.0.0.1:53\"]", "listen = []", 1) +
+		"[doq]\nlisten = [\"192.0.2.10:853\"]\n[tls]\ncertificate = \"acme\"\ndomains = [\"dns.example.com\"]\n"
+	if c, _, _, err := Load([]byte(doqOnly)); err != nil || c.TLS.Challenge != "http-01" || len(c.DoQ.Listen) != 1 {
+		t.Fatalf("DoQ-only configuration: %v %v", c, err)
 	}
 	httpChal := strings.Replace(ok, "https_listen = [\"192.0.2.10:443\"]", "https_listen = [\"192.0.2.10:8443\"]", 1)
 	if c, _, _, err := Load([]byte(httpChal)); err != nil || c.TLS.Challenge != "http-01" {

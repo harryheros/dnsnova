@@ -1,5 +1,6 @@
 // Package upstream sends queries to upstream resolvers over UDP, TCP, DNS
-// over TLS and DNS over HTTPS, and groups them into primary and fallback sets.
+// over TLS, DNS over HTTPS and DNS over QUIC, and groups them into primary
+// and fallback sets.
 package upstream
 
 import (
@@ -18,6 +19,7 @@ import (
 //	tcp://203.0.113.53              DNS over TCP
 //	tls://dns.example               DNS over TLS, port 853
 //	https://dns.example/dns-query   DNS over HTTPS
+//	quic://dns.example              DNS over QUIC (RFC 9250), port 853
 //
 // A hostname may be pinned to an address with a fragment, which skips the
 // bootstrap lookup while the certificate is still checked against the name:
@@ -26,7 +28,7 @@ import (
 //	https://dns.google/dns-query#8.8.8.8
 type Spec struct {
 	Raw    string
-	Scheme string // udp, tcp, tls, https
+	Scheme string // udp, tcp, tls, https, quic
 	Host   string // hostname or IP address, without brackets
 	Port   int
 	URL    string // https only: the request URL without the fragment
@@ -59,10 +61,10 @@ func ParseSpec(raw string) (Spec, error) {
 		s.Pin = pin.Unmap()
 		rest = rest[:i]
 	}
-	defPort := map[string]int{"udp": 53, "tcp": 53, "tls": 853, "https": 443}
+	defPort := map[string]int{"udp": 53, "tcp": 53, "tls": 853, "https": 443, "quic": 853}
 	port, ok := defPort[s.Scheme]
 	if !ok {
-		return s, fmt.Errorf("%q: unsupported scheme %q (use udp, tcp, tls or https)", raw, s.Scheme)
+		return s, fmt.Errorf("%q: unsupported scheme %q (use udp, tcp, tls, https or quic)", raw, s.Scheme)
 	}
 	if s.Scheme == "https" {
 		u, err := url.Parse("https://" + rest)

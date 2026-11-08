@@ -34,14 +34,15 @@ Install or upgrade:
                           e.g. https://1.1.1.1/dns-query  tls://dns.google  8.8.8.8
   --fallback URL          upstream used only when the primaries fail; repeatable
   --allow CIDR            network allowed in private mode; repeatable
-  --domain NAME           enable DNS over TLS (853) and DNS over HTTPS (443) with
+  --domain NAME           enable DNS over TLS (TCP 853), DNS over QUIC (UDP 853) and
+                          DNS over HTTPS (TCP and UDP 443, HTTP/2 and HTTP/3) with
                           an automatic Let's Encrypt certificate for NAME
   --email ADDR            contact address for Let's Encrypt (optional)
   --no-ip-cert            do not include this host's IP addresses in the
                           certificate (they let clients upgrade to encrypted DNS
                           automatically; such certificates are renewed every few days)
   --doh-proxy             serve DNS over HTTPS on 127.0.0.1:8053 for nginx instead
-  --cert-file PATH        with --doh-proxy: certificate for DNS over TLS (e.g. nginx's)
+  --cert-file PATH        with --doh-proxy: certificate for DNS over TLS and QUIC (e.g. nginx's)
   --key-file PATH         its private key
   --version vX.Y.Z        install this release instead of the latest
   --yes                   do not ask questions; use the options and defaults
@@ -274,7 +275,7 @@ configure() {
 
     # encrypted DNS
     if [ "$DOH_PROXY" -eq 0 ] && [ -z "$DOMAIN" ] && [ -n "$TTY" ]; then
-        echo "  Encrypted DNS (DNS over TLS on 853, DNS over HTTPS on 443) needs a domain"
+        echo "  Encrypted DNS (DNS over TLS and QUIC on 853, DNS over HTTPS on 443) needs a domain"
         echo "  name pointing to this server. A Let's Encrypt certificate is obtained and"
         echo "  renewed automatically."
         ask "Domain for encrypted DNS (leave empty to skip)" ""
@@ -285,7 +286,7 @@ configure() {
         fi
     fi
     if [ "$DOH_PROXY" -eq 1 ] && [ -z "$CERT_FILE" ] && [ -n "$TTY" ]; then
-        ask "Certificate file for DNS over TLS on 853, e.g. nginx's fullchain.pem (leave empty to skip)" ""
+        ask "Certificate file for DNS over TLS and QUIC on 853, e.g. nginx's fullchain.pem (leave empty to skip)" ""
         CERT_FILE="$REPLY"
         if [ -n "$CERT_FILE" ]; then
             ask "Private key file" "${CERT_FILE%/*}/privkey.pem"
@@ -295,7 +296,7 @@ configure() {
     [ -z "$DOMAIN" ] || [ "$DOH_PROXY" -eq 0 ] || die "--domain and --doh-proxy cannot be combined: nginx owns port 443; use --cert-file/--key-file for DoT"
     if [ -n "$CERT_FILE" ] && [ -z "$KEY_FILE" ]; then die "--cert-file needs --key-file"; fi
 
-    # DoT/DoH listen on the same addresses as port 53
+    # DoT, DoQ and DoH listen on the same addresses as port 53
     DOT_LISTEN=() HTTPS_LISTEN=()
     if [ -n "$DOMAIN" ] || [ -n "$CERT_FILE" ]; then
         local l host
@@ -324,6 +325,9 @@ configure() {
         if [ ${#DOT_LISTEN[@]} -gt 0 ]; then
             echo "[dot]"
             echo "listen = $(toml_list "${DOT_LISTEN[@]}")"
+            echo
+            echo "[doq]"
+            echo "listen = $(toml_list "${DOT_LISTEN[@]}")   # UDP"
             echo
             echo "[tls]"
             if [ -n "$DOMAIN" ]; then
@@ -473,17 +477,18 @@ summary() {
     fi
     if [ -n "$DOMAIN" ]; then
         echo "  DNS over TLS:   $DOMAIN:853"
-        echo "  DNS over HTTPS: https://$DOMAIN/dns-query"
+        echo "  DNS over QUIC:  quic://$DOMAIN"
+        echo "  DNS over HTTPS: https://$DOMAIN/dns-query  (HTTP/2 and HTTP/3)"
         echo "  The certificate is being requested now. It needs $DOMAIN to point to this"
         echo "  server and port 443 reachable from the internet; follow it with:"
         echo "    journalctl -u dnsnova -f | grep tls"
     elif [ -n "$CERT_FILE" ]; then
-        echo "  DNS over TLS:   port 853, certificate $CERT_FILE"
+        echo "  DNS over TLS and QUIC: port 853, certificate $CERT_FILE"
         echo "  dnsnova must be able to read the key: e.g. setfacl -m u:dnsnova:r $KEY_FILE"
     fi
     local open="53 (UDP and TCP)"
-    [ ${#DOT_LISTEN[@]} -eq 0 ] || open="$open, 853 (TCP)"
-    [ ${#HTTPS_LISTEN[@]} -eq 0 ] || open="$open, 443 (TCP)"
+    [ ${#DOT_LISTEN[@]} -eq 0 ] || open="$open, 853 (TCP and UDP)"
+    [ ${#HTTPS_LISTEN[@]} -eq 0 ] || open="$open, 443 (TCP and UDP)"
     echo "  Remember to open port $open in your firewall."
 }
 

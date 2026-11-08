@@ -14,11 +14,13 @@ const (
 	UDP = iota
 	TCP
 	DoT
-	DoH
+	DoH  // HTTP/1.1 and HTTP/2
+	DoQ  // DNS over QUIC
+	DoH3 // DNS over HTTPS over HTTP/3
 	numProto
 )
 
-var protoNames = [numProto]string{"udp", "tcp", "dot", "doh"}
+var protoNames = [numProto]string{"udp", "tcp", "dot", "doh", "doq", "doh3"}
 
 // Rejection reasons.
 const (
