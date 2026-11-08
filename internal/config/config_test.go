@@ -156,3 +156,48 @@ func TestStoreWriteConflictHistoryRestore(t *testing.T) {
 		t.Fatalf("temporary files left behind: %v", left)
 	}
 }
+
+func TestTLSValidation(t *testing.T) {
+	base := "[server]\nmode = \"public\"\nlisten = [\"192.0.2.10:53\", \"[2001:db8::10]:53\", \"10.0.0.1:53\"]\n[upstream]\nprimary = [\"1.1.1.1\"]\n"
+	cases := []struct {
+		extra, want string
+	}{
+		{"[dot]\nlisten = [\"192.0.2.10:853\"]\n", "needs a certificate"},
+		{"[tls]\ncertificate = \"files\"\n", "cert_file"},
+		{"[tls]\ncertificate = \"acme\"\n", "at least one domain"},
+		{"[tls]\ncertificate = \"acme\"\ndomains = [\"bad_name\"]\n", "not a valid domain"},
+		{"[tls]\ncertificate = \"acme\"\ndomains = [\"dns.example.com\"]\nacme_directory = \"http://ca.example/dir\"\n", "https URL"},
+		{"[tls]\ncertificate = \"acme\"\ndomains = [\"dns.example.com\"]\nchallenge = \"tls-alpn-01\"\n", "port 443"},
+		{"[tls]\ncertificate = \"magic\"\n", "must be"},
+	}
+	for _, c := range cases {
+		_, _, _, err := Load([]byte(base + c.extra))
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%q: want error containing %q, got %v", c.extra, c.want, err)
+		}
+	}
+
+	ok := base + "[dot]\nlisten = [\"192.0.2.10:853\"]\n[doh]\nhttps_listen = [\"192.0.2.10:443\"]\n" +
+		"[tls]\ncertificate = \"acme\"\ndomains = [\"dns.example.com\"]\nip_addresses = true\n"
+	c, _, warns, err := Load([]byte(ok))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.TLS.Challenge != "tls-alpn-01" {
+		t.Fatalf("with a listener on 443 the challenge should default to tls-alpn-01, got %q", c.TLS.Challenge)
+	}
+	if ips := c.PublicListenIPs(); len(ips) != 2 || ips[0].String() != "192.0.2.10" || ips[1].String() != "2001:db8::10" {
+		t.Fatalf("public listen IPs: %v", ips) // 10.0.0.1 is private and excluded
+	}
+	if len(warns) != 0 {
+		t.Fatalf("unexpected warnings: %v", warns)
+	}
+	noIP := strings.Replace(ok, "ip_addresses = true\n", "", 1)
+	if _, _, warns, _ := Load([]byte(noIP)); len(warns) != 1 || !strings.Contains(warns[0], "verify") {
+		t.Fatalf("expected a DDR verification warning, got %v", warns)
+	}
+	httpChal := strings.Replace(ok, "https_listen = [\"192.0.2.10:443\"]", "https_listen = [\"192.0.2.10:8443\"]", 1)
+	if c, _, _, err := Load([]byte(httpChal)); err != nil || c.TLS.Challenge != "http-01" {
+		t.Fatalf("without 443 the challenge should be http-01: %v %v", c, err)
+	}
+}

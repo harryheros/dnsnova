@@ -43,12 +43,21 @@ var (
 	wireLocalhost = toWire("localhost")
 	wireArpa      = "\x04arpa"
 	wireInvalid   = "\x07invalid"
+
+	wireResolverArpa = toWire("resolver.arpa")
+	wireDDR          = toWire("_dns.resolver.arpa")
 )
 
 // localAnswer returns a locally built response for q, or nil if q should be
 // resolved upstream. Local answers never carry the AD bit.
-func localAnswer(req []byte, q *m.Query) []byte {
+func localAnswer(req []byte, q *m.Query, s *Settings) []byte {
 	n := q.Name
+	if n == wireDDR {
+		if q.Type == m.TypeSVCB && len(s.DDR) > 0 {
+			return m.AnswerMulti(req, q, 300, s.DDR)
+		}
+		return m.NegativeSOA(req, q, wireResolverArpa, localTTL, m.RcodeNoError)
+	}
 	if !strings.HasSuffix(n, wireArpa) && !strings.HasSuffix(n, wireLocalhost) && !strings.HasSuffix(n, wireInvalid) {
 		return nil
 	}

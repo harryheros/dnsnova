@@ -3,6 +3,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -44,6 +45,12 @@ func main() {
 		}
 		for _, w := range snap.Warnings {
 			fmt.Fprintf(os.Stderr, "warning: %s\n", w)
+		}
+		if c := snap.Config; c.TLS.Certificate == "files" {
+			if _, err := tls.LoadX509KeyPair(c.TLS.CertFile, c.TLS.KeyFile); err != nil {
+				fmt.Fprintf(os.Stderr, "%s: tls: %v\n", *cfgPath, err)
+				os.Exit(1)
+			}
 		}
 		fmt.Printf("%s: ok\n", *cfgPath)
 		return

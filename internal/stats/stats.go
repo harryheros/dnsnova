@@ -13,11 +13,12 @@ import (
 const (
 	UDP = iota
 	TCP
+	DoT
 	DoH
 	numProto
 )
 
-var protoNames = [numProto]string{"udp", "tcp", "doh"}
+var protoNames = [numProto]string{"udp", "tcp", "dot", "doh"}
 
 // Rejection reasons.
 const (
