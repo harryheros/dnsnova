@@ -261,11 +261,11 @@ func (s *Server) serveDoQStream(c *quic.Conn, str *quic.Stream, ip netip.Addr) {
 	switch v := st.guard.Admit(ip); v {
 	case guard.Allow:
 	case guard.DenyACL:
-		s.reject(v)
+		s.reject(v, ip)
 		c.CloseWithError(doqNoError, "")
 		return
 	default:
-		s.reject(v)
+		s.reject(v, ip)
 		if q, _, err := m.ParseQuery(msg); err == nil {
 			writeDoQ(str, m.ErrorResponse(msg, q, m.RcodeRefused))
 		} else {

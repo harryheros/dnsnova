@@ -4,6 +4,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/netip"
 	"net/url"
@@ -95,8 +96,11 @@ type Config struct {
 	Metrics struct {
 		Listen string
 	}
+	Admin struct {
+		Listen string // web interface and API; "" = off
+	}
 	Log struct {
-		Queries bool
+		Queries bool // no longer used: the query log runs from the admin interface, in memory
 	}
 }
 
@@ -187,7 +191,7 @@ func Load(src []byte) (cfg *Config, doc *Document, warnings []string, err error)
 			errs = append(errs, &Error{Line: e.Line, Key: name, Msg: "unknown setting" + suggest(name)})
 			continue
 		}
-		if err := f(cfg, e.Value); err != nil {
+		if err := f.set(cfg, e.Value); err != nil {
 			errs = append(errs, &Error{Line: e.Line, Key: name, Msg: err.Error()})
 		}
 	}
@@ -247,6 +251,11 @@ func (c *Config) validate(lines map[string]int) (Errors, []string) {
 	}
 	if !strings.HasPrefix(c.DoH.Path, "/") {
 		bad("doh.path", "must start with /")
+	}
+	if c.Admin.Listen != "" {
+		if err := checkListen(c.Admin.Listen); err != nil {
+			bad("admin.listen", err.Error())
+		}
 	}
 	if c.Metrics.Listen != "" {
 		if err := checkListen(c.Metrics.Listen); err != nil {
@@ -310,6 +319,9 @@ func (c *Config) validate(lines map[string]int) (Errors, []string) {
 		if len(c.Access.Allow) > 0 {
 			warns = append(warns, "access.allow is ignored in public mode")
 		}
+	}
+	if c.Log.Queries {
+		warns = append(warns, "log.queries no longer writes queries to the system log; start the query log in the admin interface instead (it is kept in memory and stops by itself)")
 	}
 
 	l := &c.Limits
@@ -487,9 +499,42 @@ func checkListen(a string) error {
 
 // ---- field table ----
 
-type setter func(c *Config, v Value) error
+// field decodes one setting into a Config and reads it back in the form the
+// file would hold it.
+type field struct {
+	set func(c *Config, v Value) error
+	get func(c *Config) Value
+}
 
-var fields = map[string]setter{
+// Keys returns the name of every setting, sorted.
+func Keys() []string {
+	out := make([]string, 0, len(fields))
+	for k := range fields {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Get returns the effective value of a setting, its default included when
+// the file does not set it.
+func (c *Config) Get(key string) (Value, bool) {
+	f, ok := fields[key]
+	if !ok {
+		return Value{}, false
+	}
+	return f.get(c), true
+}
+
+// SplitKey splits "table.key" into its table and key.
+func SplitKey(name string) (table, key string) {
+	if i := strings.LastIndexByte(name, '.'); i >= 0 {
+		return name[:i], name[i+1:]
+	}
+	return "", name
+}
+
+var fields = map[string]field{
 	"server.mode":     str(func(c *Config) *string { return &c.Server.Mode }),
 	"server.listen":   strList(func(c *Config) *[]string { return &c.Server.Listen }),
 	"server.data_dir": str(func(c *Config) *string { return &c.Server.DataDir }),
@@ -547,12 +592,13 @@ var fields = map[string]setter{
 	"limits.block_any":            boolean(func(c *Config) *bool { return &c.Limits.BlockANY }),
 
 	"metrics.listen": str(func(c *Config) *string { return &c.Metrics.Listen }),
+	"admin.listen":   str(func(c *Config) *string { return &c.Admin.Listen }),
 	"log.queries":    boolean(func(c *Config) *bool { return &c.Log.Queries }),
 }
 
 var knownTables = map[string]bool{
 	"server": true, "doh": true, "dot": true, "doq": true, "tls": true, "ddr": true, "upstream": true, "cache": true,
-	"access": true, "limits": true, "metrics": true, "log": true,
+	"access": true, "limits": true, "metrics": true, "log": true, "admin": true,
 }
 
 func want(v Value, k Kind) error {
@@ -572,28 +618,28 @@ func article(k Kind) string {
 	return "a " + k.String()
 }
 
-func str(p func(*Config) *string) setter {
-	return func(c *Config, v Value) error {
+func str(p func(*Config) *string) field {
+	return field{func(c *Config, v Value) error {
 		if err := want(v, String); err != nil {
 			return err
 		}
 		*p(c) = v.Str
 		return nil
-	}
+	}, func(c *Config) Value { return Str(*p(c)) }}
 }
 
-func boolean(p func(*Config) *bool) setter {
-	return func(c *Config, v Value) error {
+func boolean(p func(*Config) *bool) field {
+	return field{func(c *Config, v Value) error {
 		if err := want(v, Bool); err != nil {
 			return err
 		}
 		*p(c) = v.Bool
 		return nil
-	}
+	}, func(c *Config) Value { return BoolV(*p(c)) }}
 }
 
-func integer(p func(*Config) *int) setter {
-	return func(c *Config, v Value) error {
+func integer(p func(*Config) *int) field {
+	return field{func(c *Config, v Value) error {
 		if err := want(v, Int); err != nil {
 			return err
 		}
@@ -602,11 +648,11 @@ func integer(p func(*Config) *int) setter {
 		}
 		*p(c) = int(v.Int)
 		return nil
-	}
+	}, func(c *Config) Value { return IntV(int64(*p(c))) }}
 }
 
-func number(p func(*Config) *float64) setter {
-	return func(c *Config, v Value) error {
+func number(p func(*Config) *float64) field {
+	return field{func(c *Config, v Value) error {
 		switch v.Kind {
 		case Int:
 			*p(c) = float64(v.Int)
@@ -616,19 +662,41 @@ func number(p func(*Config) *float64) setter {
 			return fmt.Errorf("expected a number, got %s", v.Kind)
 		}
 		return nil
-	}
+	}, func(c *Config) Value {
+		if f := *p(c); f == math.Trunc(f) && math.Abs(f) < 1<<53 {
+			return IntV(int64(f))
+		}
+		return FloatV(*p(c))
+	}}
 }
 
 // duration accepts "250ms", "3s", "24h" or a plain number of seconds.
-func duration(p func(*Config) *time.Duration) setter {
-	return func(c *Config, v Value) error {
+func duration(p func(*Config) *time.Duration) field {
+	return field{func(c *Config, v Value) error {
 		d, err := toDuration(v)
 		if err != nil {
 			return err
 		}
 		*p(c) = d
 		return nil
+	}, func(c *Config) Value { return Str(FormatDuration(*p(c))) }}
+}
+
+// FormatDuration writes d the way a person would: "3s", "10m", "24h", "250ms".
+func FormatDuration(d time.Duration) string {
+	switch {
+	case d == 0:
+		return "0s"
+	case d%time.Hour == 0:
+		return strconv.FormatInt(int64(d/time.Hour), 10) + "h"
+	case d%time.Minute == 0:
+		return strconv.FormatInt(int64(d/time.Minute), 10) + "m"
+	case d%time.Second == 0:
+		return strconv.FormatInt(int64(d/time.Second), 10) + "s"
+	case d%time.Millisecond == 0 && d < time.Second:
+		return strconv.FormatInt(int64(d/time.Millisecond), 10) + "ms"
 	}
+	return d.String()
 }
 
 func toDuration(v Value) (time.Duration, error) {
@@ -649,8 +717,8 @@ func toDuration(v Value) (time.Duration, error) {
 }
 
 // seconds is a TTL: a duration rounded down to whole seconds.
-func seconds(p func(*Config) *uint32) setter {
-	return func(c *Config, v Value) error {
+func seconds(p func(*Config) *uint32) field {
+	return field{func(c *Config, v Value) error {
 		d, err := toDuration(v)
 		if err != nil {
 			return err
@@ -660,11 +728,11 @@ func seconds(p func(*Config) *uint32) setter {
 		}
 		*p(c) = uint32(d / time.Second)
 		return nil
-	}
+	}, func(c *Config) Value { return Str(FormatDuration(time.Duration(*p(c)) * time.Second)) }}
 }
 
-func strList(p func(*Config) *[]string) setter {
-	return func(c *Config, v Value) error {
+func strList(p func(*Config) *[]string) field {
+	return field{func(c *Config, v Value) error {
 		if err := want(v, Array); err != nil {
 			return err
 		}
@@ -677,13 +745,13 @@ func strList(p func(*Config) *[]string) setter {
 		}
 		*p(c) = out
 		return nil
-	}
+	}, func(c *Config) Value { return StrList(*p(c)) }}
 }
 
-func prefixes(p func(*Config) *[]netip.Prefix) setter {
-	return func(c *Config, v Value) error {
+func prefixes(p func(*Config) *[]netip.Prefix) field {
+	return field{func(c *Config, v Value) error {
 		var list []string
-		if err := strList(func(*Config) *[]string { return &list })(c, v); err != nil {
+		if err := strList(func(*Config) *[]string { return &list }).set(c, v); err != nil {
 			return err
 		}
 		out, err := ParsePrefixes(list)
@@ -692,7 +760,17 @@ func prefixes(p func(*Config) *[]netip.Prefix) setter {
 		}
 		*p(c) = out
 		return nil
-	}
+	}, func(c *Config) Value {
+		list := make([]string, 0, len(*p(c)))
+		for _, pf := range *p(c) {
+			if pf.IsSingleIP() {
+				list = append(list, pf.Addr().String())
+			} else {
+				list = append(list, pf.String())
+			}
+		}
+		return StrList(list)
+	}}
 }
 
 // ParsePrefixes parses CIDRs and bare addresses (as single-host prefixes).

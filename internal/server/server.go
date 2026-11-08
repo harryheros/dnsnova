@@ -16,8 +16,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/harryheros/dnsnova/internal/admin"
 	"github.com/harryheros/dnsnova/internal/config"
+	"github.com/harryheros/dnsnova/internal/events"
 	"github.com/harryheros/dnsnova/internal/guard"
+	"github.com/harryheros/dnsnova/internal/insight"
 	"github.com/harryheros/dnsnova/internal/resolver"
 	"github.com/harryheros/dnsnova/internal/stats"
 	"github.com/harryheros/dnsnova/internal/tlsmgr"
@@ -38,10 +41,26 @@ type Server struct {
 	Log   *slog.Logger
 	// TLS overrides upstream TLS settings (tests only).
 	TLS *tls.Config
+	// BuildVersion is reported by the admin API.
+	BuildVersion string
+	// EventLog keeps recent log records for the admin API.
+	EventLog *events.Log
+	// History keeps counter snapshots for the admin API's charts.
+	History *stats.History
+	// Domains, NXDomains and Limited count popular domains, domains that
+	// do not exist and networks that hit the limits, in memory only.
+	Domains, NXDomains, Limited *insight.Top
+	// QLog records queries while an administrator has it running.
+	QLog *insight.QueryLog
 
 	res   *resolver.Resolver
 	state atomic.Pointer[state]
+	snap  atomic.Pointer[config.Snapshot]
 	hash  string
+
+	applyMu sync.Mutex // serialises admin API writes
+	admin   *admin.Admin
+	adminL  *adminListener
 
 	// Certs provides the certificate for DoT, DoQ and DoH (set up by Start).
 	Certs *tlsmgr.Manager
@@ -72,10 +91,18 @@ type Server struct {
 
 // New loads the configuration and prepares the server without listening.
 func New(store *config.Store, log *slog.Logger) (*Server, error) {
+	ev := &events.Log{}
+	st := stats.New()
 	s := &Server{
 		Store:       store,
-		Stats:       stats.New(),
-		Log:         log,
+		Stats:       st,
+		Log:         slog.New(events.Tee(log.Handler(), ev)),
+		EventLog:    ev,
+		History:     stats.NewHistory(st),
+		Domains:     insight.NewTop(true, 168, time.Now()),
+		NXDomains:   insight.NewTop(true, 168, time.Now()),
+		Limited:     insight.NewTop(false, 24, time.Now()),
+		QLog:        insight.NewQueryLog(),
 		udp:         map[string]*udpListener{},
 		tcp:         map[string]*tcpListener{},
 		dot:         map[string]*tcpListener{},
@@ -209,6 +236,7 @@ func (s *Server) Start() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.state.Store(st) // before any listener can receive a query
+	s.snap.Store(snap)
 	if err := s.syncListeners(snap.Config); err != nil {
 		s.closeAllLocked()
 		return err
@@ -217,6 +245,7 @@ func (s *Server) Start() error {
 	go s.res.Janitor(s.ctx)
 	go s.sweeper()
 	go s.Certs.Run(s.ctx)
+	go s.recordHistory()
 	s.Log.Info("dnsnova started", "mode", snap.Config.Server.Mode,
 		"upstreams", len(snap.Config.Upstream.Primary), "fallbacks", len(snap.Config.Upstream.Fallback))
 	return nil
@@ -257,6 +286,7 @@ func (s *Server) Apply(snap *config.Snapshot) error {
 		return err
 	}
 	old := s.state.Swap(st)
+	s.snap.Store(snap)
 	s.res.SetSettings(settingsFrom(snap.Config))
 	s.res.SetUpstreams(st.group)
 	s.hash = snap.Hash
@@ -362,6 +392,18 @@ func (s *Server) syncListeners(c *config.Config) error {
 			return fmt.Errorf("listen doh %s: %w", c.DoH.Listen, err)
 		}
 	}
+	var newAdmin *adminListener
+	if c.Admin.Listen != "" && (s.adminL == nil || s.adminL.addr != c.Admin.Listen) {
+		var err error
+		if newAdmin, err = s.listenAdmin(c.Admin.Listen); err != nil {
+			rollback()
+			if newDoH != nil {
+				newDoH.close()
+			}
+			return fmt.Errorf("listen admin %s: %w", c.Admin.Listen, err)
+		}
+		changes = append(changes, change{undo: func() { newAdmin.close() }})
+	}
 	if c.Metrics.Listen != "" && (s.metrics == nil || s.metrics.addr != c.Metrics.Listen) {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/metrics", s.handleMetrics)
@@ -417,6 +459,14 @@ func (s *Server) syncListeners(c *config.Config) error {
 			s.metrics.close()
 		}
 		s.metrics = newMetrics
+	}
+	if newAdmin != nil || c.Admin.Listen == "" {
+		if old := s.adminL; old != nil {
+			// The request that made this change may be running on the old
+			// listener: close it in the background so it can finish.
+			go old.close()
+		}
+		s.adminL = newAdmin
 	}
 	return nil
 }
@@ -525,6 +575,27 @@ func (s *Server) closeAllLocked() {
 	if s.metrics != nil {
 		s.metrics.close()
 		s.metrics = nil
+	}
+	if s.adminL != nil {
+		s.adminL.close()
+		s.adminL = nil
+	}
+}
+
+// recordHistory samples the counters once a minute for the admin charts.
+func (s *Server) recordHistory() {
+	t := time.NewTicker(time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case now := <-t.C:
+			s.History.Tick(now)
+			s.Domains.Roll(now)
+			s.NXDomains.Roll(now)
+			s.Limited.Roll(now)
+		}
 	}
 }
 

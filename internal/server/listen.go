@@ -19,6 +19,7 @@ import (
 
 	m "github.com/harryheros/dnsnova/internal/dnsmsg"
 	"github.com/harryheros/dnsnova/internal/guard"
+	"github.com/harryheros/dnsnova/internal/insight"
 	"github.com/harryheros/dnsnova/internal/resolver"
 	"github.com/harryheros/dnsnova/internal/stats"
 )
@@ -73,7 +74,7 @@ func (s *Server) serveUDP(l *udpListener) {
 		st := s.state.Load()
 		ip := addr.Addr().Unmap()
 		if v := st.guard.Admit(ip); v != guard.Allow {
-			s.reject(v) // never answer over UDP: that is what an attacker wants
+			s.reject(v, ip) // never answer over UDP: that is what an attacker wants
 			continue
 		}
 		select {
@@ -96,9 +97,11 @@ func (s *Server) serveUDP(l *udpListener) {
 			switch st.guard.RRL.Check(ip, res.Q.Name, res.Q.Type, m.Rcode(resp)) {
 			case guard.Drop:
 				s.Stats.Rejected[stats.RejectRRLDrop].Add(1)
+				s.Limited.Add(insight.NetworkOf(ip).String(), ip)
 				return
 			case guard.Slip:
 				s.Stats.Rejected[stats.RejectRRLSlip].Add(1)
+				s.Limited.Add(insight.NetworkOf(ip).String(), ip)
 				resp = m.Truncated(pkt, res.Q, m.Rcode(resp))
 			}
 			l.conn.WriteToUDPAddrPort(resp, addr)
@@ -107,26 +110,42 @@ func (s *Server) serveUDP(l *udpListener) {
 	}
 }
 
-func (s *Server) reject(v guard.Verdict) {
+func (s *Server) reject(v guard.Verdict, ip netip.Addr) {
 	switch v {
 	case guard.DenyACL:
 		s.Stats.Rejected[stats.RejectACL].Add(1)
+		return // not a limit: private mode refuses these by design
 	case guard.DenyClient:
 		s.Stats.Rejected[stats.RejectClientLimit].Add(1)
 	case guard.DenyNetwork:
 		s.Stats.Rejected[stats.RejectNetworkLimit].Add(1)
 	case guard.DenyGlobal:
 		s.Stats.Rejected[stats.RejectGlobalLimit].Add(1)
+		return // everyone is limited; no network stands out
 	}
+	s.Limited.Add(insight.NetworkOf(ip).String(), ip)
 }
 
+// logQuery counts an answered query for the domain lists and, while it
+// runs, records it in the query log. Nothing is written to disk.
 func (s *Server) logQuery(st *state, ip netip.Addr, proto string, res resolver.Result, start time.Time) {
-	if !st.cfg.Log.Queries || res.Q == nil {
+	if res.Q == nil || res.Resp == nil {
 		return
 	}
-	s.Log.Info("query", "client", ip.String(), "proto", proto, "name", m.NameString(res.Q.Name),
-		"type", m.TypeString(res.Q.Type), "rcode", m.RcodeString(m.Rcode(res.Resp)),
-		"status", res.Status, "us", time.Since(start).Microseconds())
+	name := m.NameString(res.Q.Name)
+	rc := m.Rcode(res.Resp)
+	d := insight.Domain(name)
+	s.Domains.Add(d, ip)
+	if rc == m.RcodeNXDomain {
+		s.NXDomains.Add(d, ip)
+	}
+	if s.QLog.On() {
+		s.QLog.Add(insight.Query{
+			Time: start, Proto: proto, Name: strings.ToLower(strings.TrimSuffix(name, ".")),
+			Type: m.TypeString(res.Q.Type), Rcode: m.RcodeString(rc), Source: stats.SourceName(res.Source),
+			MS: float64(time.Since(start).Microseconds()) / 1000,
+		}, ip)
+	}
 }
 
 // ---- TCP (pipelined queries are answered concurrently) ----
@@ -248,7 +267,7 @@ func (s *Server) serveTCPConn(c net.Conn, ip netip.Addr, proto, pipeline int, id
 		s.Stats.Queries[proto].Add(1)
 		st := s.state.Load()
 		if v := st.guard.Admit(ip); v != guard.Allow {
-			s.reject(v)
+			s.reject(v, ip)
 			if v == guard.DenyACL {
 				return
 			}
@@ -429,11 +448,11 @@ func (s *Server) handleDoH(w http.ResponseWriter, r *http.Request) {
 	switch v := st.guard.Admit(ip); v {
 	case guard.Allow:
 	case guard.DenyACL:
-		s.reject(v)
+		s.reject(v, ip)
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	default:
-		s.reject(v)
+		s.reject(v, ip)
 		http.Error(w, "too many requests", http.StatusTooManyRequests)
 		return
 	}

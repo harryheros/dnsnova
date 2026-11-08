@@ -19,7 +19,7 @@ SKIP_SYSTEMD="${DNSNOVA_SKIP_SYSTEMD:-0}"     # tests only
 
 # ── options ──
 YES=0 FORCE=0 UNINSTALL=0 PURGE=0 DOH_PROXY=0 IP_CERT=1
-MODE="" VERSION="" DOMAIN="" EMAIL="" CERT_FILE="" KEY_FILE=""
+MODE="" VERSION="" DOMAIN="" EMAIL="" CERT_FILE="" KEY_FILE="" ADMIN="" ADMIN_PORT=7000
 LISTEN=() UPSTREAMS=() FALLBACKS=() ALLOW=()
 
 usage() {
@@ -44,6 +44,12 @@ Install or upgrade:
   --doh-proxy             serve DNS over HTTPS on 127.0.0.1:8053 for nginx instead
   --cert-file PATH        with --doh-proxy: certificate for DNS over TLS and QUIC (e.g. nginx's)
   --key-file PATH         its private key
+  --admin local|public|off
+                          admin API and web interface on port 7000: local = only
+                          from this server, through an SSH tunnel (more secure; the
+                          default with --yes); public = from anywhere, password
+                          protected (less secure); off = not at all
+  --admin-port PORT       port for the admin interface (default 7000)
   --version vX.Y.Z        install this release instead of the latest
   --yes                   do not ask questions; use the options and defaults
   --force                 continue even if another program uses port 53
@@ -67,6 +73,8 @@ while [ $# -gt 0 ]; do
         --no-ip-cert) IP_CERT=0 ;;
         --cert-file) CERT_FILE="${2:-}"; shift ;;
         --key-file)  KEY_FILE="${2:-}"; shift ;;
+        --admin)     ADMIN="${2:-}"; shift ;;
+        --admin-port) ADMIN_PORT="${2:-}"; shift ;;
         --version)   VERSION="${2:-}"; shift ;;
         --yes|-y)    YES=1 ;;
         --force)     FORCE=1 ;;
@@ -293,6 +301,19 @@ configure() {
             KEY_FILE="$REPLY"
         fi
     fi
+    # admin interface: there is no default; --yes picks the safer one
+    case "$ADMIN_PORT" in ''|*[!0-9]*) die "--admin-port must be a number" ;; esac
+    [ "$ADMIN_PORT" -ge 1 ] && [ "$ADMIN_PORT" -le 65535 ] || die "--admin-port must be 1 to 65535"
+    while [ -z "$ADMIN" ]; do
+        if [ -z "$TTY" ]; then ADMIN=local; break; fi
+        echo "  How should the admin interface (port $ADMIN_PORT) be reached?"
+        echo "    1) only from this server, through an SSH tunnel (more secure)"
+        echo "    2) from anywhere, protected by a password and lockout ${B}(less secure than 1)${N}"
+        ask "Choose 1 or 2" ""
+        case "$REPLY" in 1) ADMIN=local ;; 2) ADMIN=public ;; esac
+    done
+    case "$ADMIN" in local|public|off) ;; *) die "--admin must be local, public or off" ;; esac
+
     [ -z "$DOMAIN" ] || [ "$DOH_PROXY" -eq 0 ] || die "--domain and --doh-proxy cannot be combined: nginx owns port 443; use --cert-file/--key-file for DoT"
     if [ -n "$CERT_FILE" ] && [ -z "$KEY_FILE" ]; then die "--cert-file needs --key-file"; fi
 
@@ -355,6 +376,10 @@ configure() {
         echo
         echo "[metrics]"
         echo 'listen = "127.0.0.1:9153"'
+        case "$ADMIN" in
+            local)  printf '\n[admin]\nlisten = "127.0.0.1:%s"   # reach it through an SSH tunnel\n' "$ADMIN_PORT" ;;
+            public) printf '\n[admin]\nlisten = ":%s"   # reachable from anywhere; password protected\n' "$ADMIN_PORT" ;;
+        esac
     } > "$f"
 
     local errs
@@ -412,6 +437,7 @@ fresh_install() {
     local ports=(53)
     [ ${#DOT_LISTEN[@]} -eq 0 ] || ports+=(853)
     [ ${#HTTPS_LISTEN[@]} -eq 0 ] || ports+=(443)
+    [ "$ADMIN" = off ] || ports+=("$ADMIN_PORT")
     check_ports "${ports[@]}"
     install_files
     systemd daemon-reload
@@ -489,7 +515,37 @@ summary() {
     local open="53 (UDP and TCP)"
     [ ${#DOT_LISTEN[@]} -eq 0 ] || open="$open, 853 (TCP and UDP)"
     [ ${#HTTPS_LISTEN[@]} -eq 0 ] || open="$open, 443 (TCP and UDP)"
+    [ "$ADMIN" != public ] || open="$open, $ADMIN_PORT (TCP)"
     echo "  Remember to open port $open in your firewall."
+    admin_summary
+}
+
+admin_summary() {
+    [ "$ADMIN" = off ] && return 0
+    local code="" i host
+    for i in $(seq 1 10); do # the service writes the code when it starts
+        if [ -r "$VAR/secrets/setup-code" ]; then code="$(tr -d '[:space:]' < "$VAR/secrets/setup-code")"; break; fi
+        [ "$SKIP_SYSTEMD" = "1" ] && break
+        sleep 0.5
+    done
+    echo
+    echo "${B}Admin interface${N}"
+    if [ "$ADMIN" = local ]; then
+        host="127.0.0.1"
+        echo "  From your computer:  ssh -L $ADMIN_PORT:127.0.0.1:$ADMIN_PORT ${SUDO_USER:-root}@<this server>"
+    else
+        host="$(public_listen_ips | awk '{print $1}')"
+        host="${host:-<this server>}"
+        case "$host" in *:*) host="[$host]" ;; esac
+        echo "  The connection is not encrypted until a domain and certificate are set up."
+    fi
+    if [ -n "$code" ]; then
+        echo "  Finish setup in the browser (this link works once):"
+        echo "    http://$host:$ADMIN_PORT/#setup=$code"
+    else
+        echo "  Open http://$host:$ADMIN_PORT/ and enter the one-time setup code from"
+        echo "  $VAR/secrets/setup-code (written when dnsnova first starts)."
+    fi
 }
 
 if [ "$UNINSTALL" -eq 1 ]; then

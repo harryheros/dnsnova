@@ -61,6 +61,7 @@ func main() {
 		log.Error("startup failed", "err", err)
 		os.Exit(1)
 	}
+	srv.BuildVersion = version
 	if err := srv.Start(); err != nil {
 		printConfigError(*cfgPath, err)
 		os.Exit(1)

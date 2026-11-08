@@ -35,6 +35,18 @@ func (m *Member) Latency() time.Duration { return time.Duration(m.ewma.Load()) *
 func (m *Member) Queries() uint64 { return m.queries.Load() }
 func (m *Member) Errors() uint64  { return m.errors.Load() }
 
+// LastOK and LastError are when the last success and failure happened (zero
+// if never).
+func (m *Member) LastOK() time.Time    { return unixTime(m.lastOK.Load()) }
+func (m *Member) LastError() time.Time { return unixTime(m.lastErr.Load()) }
+
+func unixTime(n int64) time.Time {
+	if n == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, n)
+}
+
 // Healthy reports whether the most recent outcome was a success, or no query
 // has been sent yet.
 func (m *Member) Healthy() bool { return m.lastErr.Load() <= m.lastOK.Load() }

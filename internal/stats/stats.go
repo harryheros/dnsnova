@@ -115,27 +115,11 @@ func (h *Histogram) Observe(d time.Duration) {
 
 // Quantile estimates quantile q (0..1) by linear interpolation in buckets.
 func (h *Histogram) Quantile(q float64) time.Duration {
-	total := h.count.Load()
-	if total == 0 {
-		return 0
-	}
-	rank := q * float64(total)
-	var cum float64
-	lower := 0.0
+	counts := make([]uint64, len(h.counts))
 	for i := range h.counts {
-		c := float64(h.counts[i].Load())
-		upper := lower * 2
-		if i < len(h.bounds) {
-			upper = h.bounds[i]
-		}
-		if cum+c >= rank && c > 0 {
-			frac := (rank - cum) / c
-			return time.Duration((lower + frac*(upper-lower)) * float64(time.Second))
-		}
-		cum += c
-		lower = upper
+		counts[i] = h.counts[i].Load()
 	}
-	return time.Duration(lower * float64(time.Second))
+	return quantile(counts, q)
 }
 
 func (h *Histogram) write(w io.Writer, name, labels string) {
@@ -187,4 +171,12 @@ func (s *Stats) WritePrometheus(w io.Writer) {
 	s.LatencyUpstream.write(w, "dnsnova_response_seconds", `source="upstream"`)
 	p("# TYPE dnsnova_uptime_seconds gauge")
 	p("dnsnova_uptime_seconds %d", int(time.Since(s.Started).Seconds()))
+}
+
+// SourceName names an answer source: cache, stale, upstream or local.
+func SourceName(src int) string {
+	if src < 0 || src >= numSource {
+		return ""
+	}
+	return sourceNames[src]
 }
