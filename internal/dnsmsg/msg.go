@@ -374,19 +374,56 @@ func NegativeSOA(req []byte, q *Query, zone string, ttl uint32, rcode int) []byt
 // Answer builds a response with one record of q's name, type and class
 // holding rdata (for example 127.0.0.1 for localhost). AD is never set.
 func Answer(req []byte, q *Query, ttl uint32, rdata []byte) []byte {
+	return AnswerMulti(req, q, ttl, [][]byte{rdata})
+}
+
+// AnswerMulti builds a response with one record per rdata, all of q's name,
+// type and class. AD is never set.
+func AnswerMulti(req []byte, q *Query, ttl uint32, rdatas [][]byte) []byte {
 	var ar uint16
 	if q.EDNS {
 		ar = 1
 	}
-	b := header(req, RcodeNoError, 1, 1, 0, ar)
+	b := header(req, RcodeNoError, 1, uint16(len(rdatas)), 0, ar)
 	b[2] |= byte(FlagAA >> 8)
 	b = append(b, req[HeaderLen:q.QEnd]...)
-	b = append(b, 0xC0, HeaderLen, byte(q.Type>>8), byte(q.Type), byte(q.Class>>8), byte(q.Class))
-	b = binary.BigEndian.AppendUint32(b, ttl)
-	b = binary.BigEndian.AppendUint16(b, uint16(len(rdata)))
-	b = append(b, rdata...)
+	for _, rd := range rdatas {
+		b = append(b, 0xC0, HeaderLen, byte(q.Type>>8), byte(q.Type), byte(q.Class>>8), byte(q.Class))
+		b = binary.BigEndian.AppendUint32(b, ttl)
+		b = binary.BigEndian.AppendUint16(b, uint16(len(rd)))
+		b = append(b, rd...)
+	}
 	if q.EDNS {
 		b = AppendOPT(b, EDNSSize, q.DO)
+	}
+	return b
+}
+
+// SVCB parameter keys (RFC 9460, RFC 9461).
+const (
+	SvcALPN     = 1
+	SvcPort     = 3
+	SvcIPv4Hint = 4
+	SvcIPv6Hint = 6
+	SvcDoHPath  = 7
+)
+
+// SvcParam is one SVCB parameter; Value is its wire-format value.
+type SvcParam struct {
+	Key   uint16
+	Value []byte
+}
+
+// SVCB encodes SVCB record data. target is a wire-format name without the
+// final zero (empty for "."). Params must be sorted by key.
+func SVCB(priority uint16, target string, params []SvcParam) []byte {
+	b := binary.BigEndian.AppendUint16(nil, priority)
+	b = append(b, target...)
+	b = append(b, 0)
+	for _, p := range params {
+		b = binary.BigEndian.AppendUint16(b, p.Key)
+		b = binary.BigEndian.AppendUint16(b, uint16(len(p.Value)))
+		b = append(b, p.Value...)
 	}
 	return b
 }

@@ -34,8 +34,9 @@ type Settings struct {
 	BlockANY            bool
 	UDPMaxSize          int
 	Timeout             time.Duration
-	UpstreamConcurrency int // 0 = unlimited
-	ZoneConcurrency     int // 0 = unlimited
+	UpstreamConcurrency int      // 0 = unlimited
+	ZoneConcurrency     int      // 0 = unlimited
+	DDR                 [][]byte // SVCB record data for _dns.resolver.arpa
 }
 
 var (
@@ -115,7 +116,7 @@ func (r *Resolver) Resolve(req []byte, udp bool) Result {
 	case q.Type == m.TypeANY && s.BlockANY:
 		return r.done(Result{Resp: m.ErrorResponse(req, q, m.RcodeNotImp), Q: q, Source: stats.SourceLocal, Status: "notimp"})
 	}
-	if resp := localAnswer(req, q); resp != nil {
+	if resp := localAnswer(req, q, s); resp != nil {
 		return r.done(Result{Resp: r.fit(resp, req, q, udp, s), Q: q, Source: stats.SourceLocal, Status: "local"})
 	}
 

@@ -4,10 +4,40 @@ A forwarding DNS server for people who run public or private resolvers on
 their own servers: secure by default, light on resources, and easy to
 operate.
 
-> **Status: under development.** This is a pre-release of the 1.0 core.
-> Built-in DoT, DoH, DoQ and HTTP/3, the web interface, the setup wizard and
-> the one-line installer are planned for later stages and are not in this
-> release yet.
+> **Status: under development.** This is a pre-release of 1.0. DNS over
+> QUIC, DNS over HTTP/3 (served directly), the web interface and the setup
+> wizard are planned for later stages and are not in this release yet.
+
+## Quick start
+
+On a Linux server with systemd (amd64 or arm64):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/harryheros/dnsnova/main/install.sh | sudo bash
+```
+
+The installer downloads the latest release, verifies its SHA-256 checksum,
+asks a few questions (which addresses to serve, public or private, which
+upstreams to use, and a domain name if you want encrypted DNS), checks that
+the configuration is valid and that the ports are free, then starts dnsnova
+as a sandboxed systemd service. With a domain, a Let's Encrypt certificate
+is obtained and renewed automatically.
+
+Run the same command again to upgrade; the configuration is kept, and if the
+new version fails its health check the previous one is restored.
+
+Unattended install:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/harryheros/dnsnova/main/install.sh | sudo bash -s -- \
+  --yes --mode public --listen 203.0.113.10:53 \
+  --upstream https://1.1.1.1/dns-query --fallback https://dns.google/dns-query#8.8.8.8 \
+  --domain dns.example.com --email ops@example.com
+```
+
+Remove it with `--uninstall` (keeps the configuration) or
+`--uninstall --purge` (removes everything). See `install.sh --help` for all
+options.
 
 ## What it is
 
@@ -21,8 +51,17 @@ safe to expose to the internet without becoming a DDoS amplifier.
 
 ## Features in this release
 
-- **Protocols:** DNS over UDP and TCP (with pipelining). DNS over HTTPS behind
-  a reverse proxy such as nginx, which handles TLS, HTTP/2 and HTTP/3.
+- **Protocols:** DNS over UDP and TCP (with pipelining), DNS over TLS, and
+  DNS over HTTPS (HTTP/1.1 and HTTP/2) built in. DoH can also run behind a
+  reverse proxy such as nginx, which can then add HTTP/3.
+- **Certificates:** obtained and renewed automatically from Let's Encrypt
+  with a built-in ACME client (tls-alpn-01 or http-01), or loaded from files
+  managed elsewhere and reloaded when they change. 0-RTT is never accepted.
+- **Automatic upgrade to encrypted DNS (DDR, RFC 9462):** dnsnova answers
+  `_dns.resolver.arpa` with its DoT and DoH endpoints. With
+  `tls.ip_addresses = true` the certificate also covers the server's IP
+  addresses, which lets Windows 11, iOS and macOS verify the upgrade and switch
+  to encrypted DNS by themselves.
 - **Upstreams:** UDP, TCP, DNS over TLS and DNS over HTTPS. The fastest
   primaries are queried in parallel; fallback upstreams are used only when
   every primary fails or is slow. Upstream host names are resolved through
@@ -49,9 +88,10 @@ safe to expose to the internet without becoming a DDoS amplifier.
 - **Observability:** Prometheus metrics and a `/healthz` endpoint.
 - **Privacy:** no telemetry; queries are not logged unless you turn it on.
   See [PRIVACY.md](PRIVACY.md).
-- **No external dependencies:** only the Go standard library.
+- **No external dependencies:** only the Go standard library, including the
+  ACME client.
 
-## Install (manual, until the installer exists)
+## Manual installation
 
 Requirements: Linux with systemd, amd64 or arm64.
 
@@ -100,6 +140,26 @@ After editing the file, dnsnova applies it within a few seconds. If the new
 file is invalid, the error is logged with its line number and the running
 configuration stays in place. Previous versions are kept in
 `/etc/dnsnova/history/`.
+
+### Encrypted DNS
+
+```toml
+[dot]
+listen = ["203.0.113.10:853"]
+
+[doh]
+https_listen = ["203.0.113.10:443"]
+
+[tls]
+certificate = "acme"
+domains = ["dns.example.com"]
+ip_addresses = true
+```
+
+The domain must point to the server and port 443 must be reachable from the
+internet while the certificate is issued (or port 80, if nothing listens on
+443). Progress is logged with a `tls:` prefix. Certificates and the ACME
+account are stored in `/var/lib/dnsnova`.
 
 ### DNS over HTTPS with nginx
 
