@@ -31,12 +31,16 @@ type Config struct {
 	}
 	DoH struct {
 		Listen         string   // plain HTTP behind a reverse proxy
-		HTTPSListen    []string // built-in HTTPS (HTTP/1.1 and HTTP/2)
+		HTTPSListen    []string // built-in HTTPS (HTTP/1.1 and HTTP/2 over TCP)
+		HTTP3          bool     // also serve HTTP/3 on the same addresses over UDP
 		Path           string
 		TrustedProxies []netip.Prefix
 	}
 	DoT struct {
 		Listen []string
+	}
+	DoQ struct {
+		Listen []string // DNS over QUIC (RFC 9250), UDP
 	}
 	TLS struct {
 		Certificate         string // off, acme or files
@@ -80,6 +84,7 @@ type Config struct {
 		UpstreamConcurrency int
 		ZoneConcurrency     int
 		TCPConnections      int
+		QUICConnections     int
 		TCPPipeline         int
 		TCPIdleTimeout      time.Duration
 		UDPMaxSize          int
@@ -100,6 +105,7 @@ func Defaults() *Config {
 	c := &Config{}
 	c.Server.DataDir = "/var/lib/dnsnova"
 	c.DoH.Path = "/dns-query"
+	c.DoH.HTTP3 = true
 	c.TLS.Certificate = "off"
 	c.TLS.HTTPChallengeListen = ":80"
 	c.TLS.ACMEDirectory = "https://acme-v02.api.letsencrypt.org/directory"
@@ -121,6 +127,7 @@ func Defaults() *Config {
 	c.Limits.UpstreamConcurrency = 2000
 	c.Limits.ZoneConcurrency = 50
 	c.Limits.TCPConnections = 1000
+	c.Limits.QUICConnections = 1000
 	c.Limits.TCPPipeline = 16
 	c.Limits.TCPIdleTimeout = 10 * time.Second
 	c.Limits.UDPMaxSize = 1232
@@ -220,8 +227,8 @@ func (c *Config) validate(lines map[string]int) (Errors, []string) {
 	default:
 		bad("server.mode", fmt.Sprintf(`must be "public" or "private", got %q`, c.Server.Mode))
 	}
-	if len(c.Server.Listen) == 0 && c.DoH.Listen == "" && len(c.DoH.HTTPSListen) == 0 && len(c.DoT.Listen) == 0 {
-		bad("server.listen", "nothing to listen on: set server.listen, dot.listen or doh.https_listen")
+	if len(c.Server.Listen) == 0 && c.DoH.Listen == "" && len(c.DoH.HTTPSListen) == 0 && len(c.DoT.Listen) == 0 && len(c.DoQ.Listen) == 0 {
+		bad("server.listen", "nothing to listen on: set server.listen, dot.listen, doq.listen or doh.https_listen")
 	}
 	if !strings.HasPrefix(c.Server.DataDir, "/") {
 		bad("server.data_dir", "must be an absolute path")
@@ -317,7 +324,8 @@ func (c *Config) validate(lines map[string]int) (Errors, []string) {
 	}
 	for key, v := range map[string]int{
 		"limits.upstream_concurrency": l.UpstreamConcurrency, "limits.zone_concurrency": l.ZoneConcurrency,
-		"limits.tcp_connections": l.TCPConnections, "limits.tcp_pipeline": l.TCPPipeline, "limits.rrl_slip": l.RRLSlip,
+		"limits.tcp_connections": l.TCPConnections, "limits.quic_connections": l.QUICConnections,
+		"limits.tcp_pipeline": l.TCPPipeline, "limits.rrl_slip": l.RRLSlip,
 	} {
 		if v < 0 {
 			bad(key, "must be 0 or more")
@@ -325,6 +333,9 @@ func (c *Config) validate(lines map[string]int) (Errors, []string) {
 	}
 	if l.TCPConnections == 0 {
 		bad("limits.tcp_connections", "must be at least 1")
+	}
+	if l.QUICConnections == 0 {
+		bad("limits.quic_connections", "must be at least 1")
 	}
 	if l.TCPPipeline == 0 {
 		bad("limits.tcp_pipeline", "must be at least 1")
@@ -361,7 +372,7 @@ func (c *Config) validateTLS(lines map[string]int, errs Errors, warns []string) 
 	for _, l := range []struct {
 		key  string
 		list []string
-	}{{"dot.listen", c.DoT.Listen}, {"doh.https_listen", c.DoH.HTTPSListen}} {
+	}{{"dot.listen", c.DoT.Listen}, {"doq.listen", c.DoQ.Listen}, {"doh.https_listen", c.DoH.HTTPSListen}} {
 		for _, a := range l.list {
 			if err := checkListen(a); err != nil {
 				bad(l.key, err.Error())
@@ -421,7 +432,7 @@ func (c *Config) validateTLS(lines map[string]int, errs Errors, warns []string) 
 	default:
 		bad("tls.certificate", fmt.Sprintf(`must be "off", "acme" or "files", got %q`, t.Certificate))
 	}
-	if c.DDR.Enabled && (len(c.DoT.Listen) > 0 || len(c.DoH.HTTPSListen) > 0) {
+	if c.DDR.Enabled && (len(c.DoT.Listen) > 0 || len(c.DoQ.Listen) > 0 || len(c.DoH.HTTPSListen) > 0) {
 		if t.Certificate == "acme" && len(t.Domains) == 0 {
 			warns = append(warns, "ddr needs tls.domains to name the encrypted resolver; DDR answers are disabled")
 		} else if t.Certificate == "acme" && !t.IPAddresses {
@@ -484,7 +495,9 @@ var fields = map[string]setter{
 	"server.data_dir": str(func(c *Config) *string { return &c.Server.DataDir }),
 
 	"doh.https_listen": strList(func(c *Config) *[]string { return &c.DoH.HTTPSListen }),
+	"doh.http3":        boolean(func(c *Config) *bool { return &c.DoH.HTTP3 }),
 	"dot.listen":       strList(func(c *Config) *[]string { return &c.DoT.Listen }),
+	"doq.listen":       strList(func(c *Config) *[]string { return &c.DoQ.Listen }),
 
 	"tls.certificate":           str(func(c *Config) *string { return &c.TLS.Certificate }),
 	"tls.domains":               strList(func(c *Config) *[]string { return &c.TLS.Domains }),
@@ -525,6 +538,7 @@ var fields = map[string]setter{
 	"limits.upstream_concurrency": integer(func(c *Config) *int { return &c.Limits.UpstreamConcurrency }),
 	"limits.zone_concurrency":     integer(func(c *Config) *int { return &c.Limits.ZoneConcurrency }),
 	"limits.tcp_connections":      integer(func(c *Config) *int { return &c.Limits.TCPConnections }),
+	"limits.quic_connections":     integer(func(c *Config) *int { return &c.Limits.QUICConnections }),
 	"limits.tcp_pipeline":         integer(func(c *Config) *int { return &c.Limits.TCPPipeline }),
 	"limits.tcp_idle_timeout":     duration(func(c *Config) *time.Duration { return &c.Limits.TCPIdleTimeout }),
 	"limits.udp_max_size":         integer(func(c *Config) *int { return &c.Limits.UDPMaxSize }),
@@ -537,7 +551,7 @@ var fields = map[string]setter{
 }
 
 var knownTables = map[string]bool{
-	"server": true, "doh": true, "dot": true, "tls": true, "ddr": true, "upstream": true, "cache": true,
+	"server": true, "doh": true, "dot": true, "doq": true, "tls": true, "ddr": true, "upstream": true, "cache": true,
 	"access": true, "limits": true, "metrics": true, "log": true,
 }
 

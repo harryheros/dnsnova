@@ -28,6 +28,21 @@ func NewDialer(boot *Bootstrap) *Dialer {
 	return &Dialer{net: net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}, boot: boot}
 }
 
+// Resolve returns the addresses to try for host: the host itself when it is
+// an IP address, the pinned address, or the bootstrap lookup.
+func (d *Dialer) Resolve(ctx context.Context, host string, pin netip.Addr) ([]netip.Addr, error) {
+	if a, err := netip.ParseAddr(host); err == nil {
+		return []netip.Addr{a.Unmap()}, nil
+	}
+	if pin.IsValid() {
+		return []netip.Addr{pin}, nil
+	}
+	if d.boot == nil {
+		return nil, fmt.Errorf("cannot resolve %s: no bootstrap servers", host)
+	}
+	return d.boot.Lookup(ctx, host)
+}
+
 // DialFunc returns a dial function bound to an optional pinned address.
 func (d *Dialer) DialFunc(pin netip.Addr) func(ctx context.Context, network, addr string) (net.Conn, error) {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -38,13 +53,7 @@ func (d *Dialer) DialFunc(pin netip.Addr) func(ctx context.Context, network, add
 		if _, err := netip.ParseAddr(host); err == nil {
 			return d.net.DialContext(ctx, network, addr)
 		}
-		if pin.IsValid() {
-			return d.net.DialContext(ctx, network, net.JoinHostPort(pin.String(), port))
-		}
-		if d.boot == nil {
-			return nil, fmt.Errorf("cannot resolve %s: no bootstrap servers", host)
-		}
-		addrs, err := d.boot.Lookup(ctx, host)
+		addrs, err := d.Resolve(ctx, host, pin)
 		if err != nil {
 			return nil, err
 		}
