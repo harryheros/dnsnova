@@ -307,7 +307,7 @@ function signFooter() {
 
 // ---------- setup wizard ----------
 
-const WIZ_STEPS = ["Administrator", "Addresses", "Resolution", "Encrypted DNS", "Review"];
+const WIZ_STEPS = ["Administrator", "Addresses", "Resolution", "Encrypted DNS", "Filtering", "Review"];
 
 async function showWizard(code, codeRequired) {
   const w = { step: 0, code, codeRequired, cfg: null, hash: "", values: {}, addrs: [], clientIP: "" };
@@ -508,7 +508,35 @@ const WIZ_VIEWS = [
         Object.assign(w.values, { "tls.certificate": "acme", "tls.domains": [d], "tls.email": mail.value.trim() }, encryptedListen(w.values["server.listen"]));
       }));
   },
-  // 4: review
+  // 4: filtering. With a domain the filtered address is simply offered: it
+  // changes nothing for the usual addresses. The real choice is whether
+  // everyone should be filtered (a home or office server).
+  (w, body, render) => {
+    const domain = (w.values["tls.domains"] || [])[0] || "";
+    const encrypted = domain && (w.values["doh.https_listen"] || []).length > 0;
+    const path = w.values["filter.doh_path"] || "/filtered";
+    const touched = w.filterSeen;
+    const door = h("input", { type: "checkbox", checked: touched ? !!w.values["filter.enabled"] && !w.values["filter.all"] : true });
+    const all = h("input", { type: "checkbox", checked: !!w.values["filter.all"] });
+    const doorBox = encrypted ? h("label", { class: "check" }, door, h("span", null,
+      h("strong", null, "Offer a filtered address"),
+      h("span", { class: "small muted", style: { display: "block" } }, "For people who want ads, trackers and malicious sites blocked. The usual address answers as always."),
+      h("code", { class: "small", style: { display: "block", marginTop: "6px" } }, `https://${domain}${path}`))) : null;
+    const sync = () => { if (doorBox) doorBox.hidden = all.checked; };
+    all.addEventListener("change", sync);
+    put(body, wizHead(w, "Filtering", "Blocking of ads, trackers and malicious sites. It can be changed any time in Settings › Filtering."),
+      doorBox,
+      h("label", { class: "check" }, all, h("span", null, h("strong", null, "Filter everyone"),
+        h("span", { class: "small muted", style: { display: "block" } }, "Every address blocks, with no unfiltered way in. For a home or office server."))),
+      h("p", { class: "small muted", style: { margin: 0 } }, "Blocking uses ShieldNova's list, chosen to block very little by mistake. A wrongly blocked site is allowed again with one click in the query log."),
+      wizNav(w, render, () => {
+        w.filterSeen = true;
+        const on = all.checked || (!!doorBox && door.checked);
+        Object.assign(w.values, { "filter.enabled": on, "filter.all": all.checked });
+      }));
+    sync();
+  },
+  // 5: review
   async (w, body, render) => {
     put(body, wizHead(w, "Ready to start", "Check the changes. Everything can be changed later in Settings."));
     const set = changedValues(w.cfg, w.values);
@@ -552,6 +580,7 @@ function wizDone(w) {
   if (localOnly) ips = [];
   const domain = (w.values["tls.domains"] || [])[0] || "";
   const dohURL = domain ? `https://${domain}${w.values["doh.path"] || "/dns-query"}` : "";
+  const filteredURL = domain && w.values["filter.enabled"] && !w.values["filter.all"] ? `https://${domain}${w.values["filter.doh_path"] || "/filtered"}` : "";
   const l0 = (w.values["server.listen"] || [""])[0] || ":53";
   const dnsPort = l0.slice(l0.lastIndexOf(":") + 1);
   const adminL = w.values["admin.listen"] || "";
@@ -586,6 +615,7 @@ function wizDone(w) {
         domain ? [
           h("div", { class: "copyrow" }, h("span", { class: "k" }, "DNS over HTTPS"), h("code", null, dohURL), h("button", { type: "button", class: "btn small", onclick: () => copy(dohURL) }, "Copy")),
           h("div", { class: "copyrow" }, h("span", { class: "k" }, "DNS over TLS"), h("code", null, domain), h("button", { type: "button", class: "btn small", onclick: () => copy(domain) }, "Copy")),
+          filteredURL ? h("div", { class: "copyrow" }, h("span", { class: "k" }, "With filtering"), h("code", null, filteredURL), h("button", { type: "button", class: "btn small", onclick: () => copy(filteredURL) }, "Copy")) : null,
           h("p", { class: "small muted", style: { margin: 0 } }, "They work once the certificate is issued, usually within a minute. The setup guide in the dashboard has steps for each kind of device."),
         ] : h("p", { class: "notice warn small", style: { margin: 0 } }, "No domain is set yet, so devices cannot connect. Add one in Settings › Encrypted DNS."),
       ] : null,
@@ -1290,14 +1320,14 @@ const SETTINGS = {
         { key: "access.deny", label: "Blocked clients", type: "list", help: "Addresses or networks that never get an answer, in either mode, such as 203.0.113.7 or 198.51.100.0/24. One per line." },
       ] },
       { title: "Limits", fields: [
-        { key: "limits.client_qps", label: "Per client", type: "number", help: "Queries a second from one address (0 = no limit)." },
+        { key: "limits.client_qps", label: "Per client", type: "number", help: "Queries a second from one address (0 = no limit). Phones on mobile networks often share one address." },
         { key: "limits.client_burst", label: "Client burst", type: "number", help: "Short bursts allowed above that." },
         { key: "limits.prefix_qps", label: "Per network", type: "number", help: "Queries a second from one IPv4 /24 or IPv6 /48 (0 = no limit)." },
         { key: "limits.global_qps", label: "Whole server", type: "number", help: "Queries a second in total (0 = no limit)." },
         { key: "limits.rrl_rate", label: "Response rate limiting", type: "number", help: "Identical answers a second to one network; stops reflection attacks (0 = off)." },
         { key: "limits.block_any", label: "Refuse ANY queries", type: "bool", help: "They are mostly used for amplification." },
-        { key: "limits.tcp_connections", label: "TCP connections", type: "number", help: "Open TCP and DoT connections at most." },
-        { key: "limits.quic_connections", label: "QUIC connections", type: "number", help: "Open DoQ and HTTP/3 connections at most." },
+        { key: "limits.tcp_connections", label: "TCP connections", type: "number", help: "Open TCP and DoT connections at most; each phone using DoT keeps one open. About 25 KB of memory each." },
+        { key: "limits.quic_connections", label: "QUIC connections", type: "number", help: "Open DoQ and HTTP/3 connections at most. About 70 KB of memory each." },
         { key: "limits.upstream_concurrency", label: "Upstream queries at once", type: "number", help: "Queries waiting for upstreams at most." },
       ] },
     ],
