@@ -471,3 +471,22 @@ func TestBrokenIPv6(t *testing.T) {
 		t.Fatalf("15 names took %v: broken IPv6 is waited for", d)
 	}
 }
+
+// TestServerRecovers: a server that timed out ranks behind the others, but
+// only for a while; after infraForget it is tried again.
+func TestServerRecovers(t *testing.T) {
+	in := newInfra()
+	now := time.Unix(1_900_000_000, 0)
+	bad, good := netip.MustParseAddr("192.0.2.1"), netip.MustParseAddr("192.0.2.2")
+	in.ok(good, 80*time.Millisecond, now)
+	for range 3 {
+		in.fail(bad, now)
+	}
+	if in.score(bad, "example.", now) <= in.score(good, "example.", now) {
+		t.Fatal("a server that just timed out must rank behind one that answers")
+	}
+	later := now.Add(infraForget + time.Minute)
+	if d := in.score(bad, "example.", later); d > unknownRTT+time.Second {
+		t.Fatalf("still penalised %v after %v: it would never be tried again", d, infraForget)
+	}
+}

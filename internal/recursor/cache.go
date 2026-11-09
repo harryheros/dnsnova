@@ -207,11 +207,24 @@ func (in *infra) get(a netip.Addr) *server {
 	return s
 }
 
+// infraForget is how long what was learnt about a server's speed and
+// failures counts: a server that timed out once is slow on paper and would
+// never be chosen again, so it would never get the chance to show it has
+// recovered. After this long it is treated as unknown and tried afresh.
+const infraForget = 15 * time.Minute
+
+func (s *server) forgetOld(now time.Time) {
+	if !s.lastUsed.IsZero() && now.Sub(s.lastUsed) > infraForget && now.After(s.until) {
+		s.srtt, s.fails = 0, 0
+	}
+}
+
 // score orders candidate servers: lower is better.
 func (in *infra) score(a netip.Addr, zone string, now time.Time) time.Duration {
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	s := in.get(a)
+	s.forgetOld(now)
 	d := s.srtt
 	if d == 0 {
 		d = unknownRTT + time.Duration(rand.IntN(50))*time.Millisecond
