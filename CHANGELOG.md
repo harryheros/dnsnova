@@ -4,6 +4,17 @@ All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
 **Security**.
 
+## 1.0.1 (2026-11-09)
+
+- Recursion uses IPv6 only where it works. A machine without an IPv6
+  route to the internet never tries it (the route is looked up every
+  minute; nothing is sent). Sending over IPv6 that is refused (a firewall
+  rule, IPv6 turned off in the system, no address to send from) pauses it
+  for 10 minutes at once, instead of failing again for every name, which
+  could end in SERVFAIL. Where IPv6 works it is used as before.
+- The installer shows a progress bar while it downloads, when run in a
+  terminal.
+
 ## 1.0.0 (2026-11-08)
 
 First stable release.
@@ -69,8 +80,6 @@ First stable release.
 - About 75% more answers per second for names not in the cache: the
   buffer for each upstream answer over UDP is reused instead of allocated
   (64 KB per query, most of the CPU time went to garbage collection).
-- The installer shows a progress bar while it downloads, when run in a
-  terminal.
 - `tools/resolver-check.sh`: checks a running server from the outside next
   to a reference resolver.
 - `tools/bench`: a load generator (UDP, DoT, DoH) and a stand-in upstream;

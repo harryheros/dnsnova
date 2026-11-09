@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/netip"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -461,6 +464,7 @@ func TestBrokenIPv6(t *testing.T) {
 		Allow: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24"), netip.MustParsePrefix("2001:db8::/32")}},
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 	r.send = n.send
+	r.hostV6 = func() bool { return true } // configured, but broken
 	start := time.Now()
 	for i := range 15 {
 		if msg := ask(t, r, fmt.Sprintf("www.z%d.com", i), m.TypeA); msg.rcode != m.RcodeNoError || len(msg.answer) == 0 {
@@ -488,5 +492,104 @@ func TestServerRecovers(t *testing.T) {
 	later := now.Add(infraForget + time.Minute)
 	if d := in.score(bad, "example.", later); d > unknownRTT+time.Second {
 		t.Fatalf("still penalised %v after %v: it would never be tried again", d, infraForget)
+	}
+}
+
+// dualStack is world() plus 15 domains whose name servers have IPv4 and
+// IPv6 addresses; the IPv6 ones never answer.
+func dualStack() *fakeNet {
+	n := world()
+	com := n.servers[comA].zones[0]
+	for i := range 15 {
+		v4 := netip.AddrFrom4([4]byte{192, 0, 2, byte(100 + i)})
+		v6 := netip.MustParseAddr(fmt.Sprintf("2001:db8::%x", 0x100+i))
+		z := fmt.Sprintf("z%d.com.", i)
+		more := zone("com.", z+" NS ns."+z, "ns."+z+" A "+v4.String(), "ns."+z+" AAAA "+v6.String())
+		com.recs = append(com.recs, more.recs...)
+		n.servers[v4] = &fakeServer{zones: []*fakeZone{zone(z, "www."+z+" A 198.51.100.7")}}
+		n.servers[v6] = &fakeServer{silent: true}
+	}
+	return n
+}
+
+func dualStackRecursor(n *fakeNet, send func(context.Context, netip.AddrPort, []byte, bool) ([]byte, error)) *Recursor {
+	r := New(Config{IPv6: true, RootHints: []netip.Addr{rootA},
+		Allow: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24"), netip.MustParsePrefix("2001:db8::/32")}},
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	r.send = send
+	return r
+}
+
+// TestIPv6Unusable: a machine without an IPv6 address that reaches the
+// internet never tries IPv6; one where sending over IPv6 is refused (a
+// firewall rule, IPv6 turned off) stops trying after the first refusal.
+func TestIPv6Unusable(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		hostV6 bool
+		err    error
+		most   int64
+	}{
+		{"no address", false, nil, 0},
+		{"firewall", true, syscall.EPERM, 1},
+		{"turned off", true, syscall.EAFNOSUPPORT, 1},
+		{"no address to send from", true, syscall.EADDRNOTAVAIL, 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			n := dualStack()
+			var v6 atomic.Int64
+			r := dualStackRecursor(n, func(ctx context.Context, ap netip.AddrPort, q []byte, tcp bool) ([]byte, error) {
+				if ap.Addr().Is6() {
+					v6.Add(1)
+					if c.err != nil {
+						return nil, &net.OpError{Op: "write", Net: "udp", Err: os.NewSyscallError("sendto", c.err)}
+					}
+				}
+				return n.send(ctx, ap, q, tcp)
+			})
+			r.hostV6 = func() bool { return c.hostV6 }
+			// put the IPv6 servers first, as if they had answered fast before
+			for i := range 15 {
+				r.infra.ok(netip.MustParseAddr(fmt.Sprintf("2001:db8::%x", 0x100+i)), time.Millisecond, time.Now())
+			}
+			r.v6ok.Store(time.Now().UnixNano())
+			for i := range 15 {
+				if msg := ask(t, r, fmt.Sprintf("www.z%d.com", i), m.TypeA); msg.rcode != m.RcodeNoError || len(msg.answer) == 0 {
+					t.Fatalf("z%d: rcode %d", i, msg.rcode)
+				}
+			}
+			if got := v6.Load(); got > c.most {
+				t.Fatalf("%d queries over IPv6, want at most %d", got, c.most)
+			}
+		})
+	}
+}
+
+// TestIPv6Works: where IPv6 works it keeps being used.
+func TestIPv6Works(t *testing.T) {
+	n := dualStack()
+	for i := range 15 {
+		z := fmt.Sprintf("z%d.com.", i)
+		n.servers[netip.MustParseAddr(fmt.Sprintf("2001:db8::%x", 0x100+i))] = &fakeServer{zones: []*fakeZone{zone(z, "www."+z+" A 198.51.100.7")}}
+	}
+	var v6 atomic.Int64
+	r := dualStackRecursor(n, func(ctx context.Context, ap netip.AddrPort, q []byte, tcp bool) ([]byte, error) {
+		if ap.Addr().Is6() {
+			v6.Add(1)
+		}
+		return n.send(ctx, ap, q, tcp)
+	})
+	r.hostV6 = func() bool { return true }
+	for i := range 15 {
+		r.infra.ok(netip.MustParseAddr(fmt.Sprintf("2001:db8::%x", 0x100+i)), time.Millisecond, time.Now())
+	}
+	r.v6ok.Store(time.Now().UnixNano())
+	for i := range 15 {
+		if msg := ask(t, r, fmt.Sprintf("www.z%d.com", i), m.TypeA); msg.rcode != m.RcodeNoError {
+			t.Fatalf("z%d: rcode %d", i, msg.rcode)
+		}
+	}
+	if v6.Load() < 10 {
+		t.Fatalf("only %d queries over working, faster IPv6", v6.Load())
 	}
 }
