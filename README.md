@@ -28,7 +28,7 @@ Open one of these addresses and follow the setup wizard:
   http://127.0.0.1:7000
 ```
 
-Open one and follow the wizard: administrator password, the addresses and port to answer on, upstreams, and optionally a domain for encrypted DNS. DNS starts when you finish, and the last page says what to set on your router or devices.
+Open one and follow the wizard: administrator password, who can use plain DNS, whether DNSNova resolves names itself or asks upstreams, a domain for encrypted DNS (optional), and filtering. DNS starts when you finish, and the last page says what to set on your router or devices.
 
 ## Uninstall
 
@@ -61,13 +61,16 @@ Forgot the administrator password? Run `dnsnova -reset-admin` on the server; the
 
 ## Encrypted DNS
 
-Give the setup wizard (or Settings › Encrypted DNS) a domain that points to the server. Port 443 must be reachable while the certificate is issued; open TCP 853, UDP 853 and TCP + UDP 443 in the firewall. Devices then use:
+Give the setup wizard (or Settings › Encrypted DNS) a domain that points to the server: DNSNova gets a free Let's Encrypt certificate and renews it by itself. Open TCP 853, UDP 853 and TCP + UDP 443 in the firewall (port 443, or 80 if nothing listens on 443, is also how Let's Encrypt checks the domain). Devices then use:
 
 | Protocol | Address |
 |---|---|
 | DNS over TLS | `dns.example.com` |
 | DNS over QUIC | `quic://dns.example.com` |
 | DNS over HTTPS | `https://dns.example.com/dns-query` |
+| DNS over HTTPS, with filtering on | `https://dns.example.com/filtered` |
+
+To offer only encrypted DNS, choose *Only this server* in the setup wizard: plain DNS then answers on 127.0.0.1 alone, and nothing on port 53 is open to the internet.
 
 ## More
 
