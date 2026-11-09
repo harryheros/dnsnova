@@ -412,7 +412,45 @@ func (r *Recursor) cachedAddrs(host string, cfg *Config) []netip.Addr {
 	return out
 }
 
-func (r *Recursor) v6Down() bool { return r.now().UnixNano() < r.v6down.Load() }
+// v6Down reports whether IPv6 is not to be used now: this machine has no
+// IPv6 address that reaches the internet, or IPv6 failed recently.
+func (r *Recursor) v6Down() bool {
+	now := r.now()
+	if !r.hasV6(now) {
+		return true
+	}
+	return now.UnixNano() < r.v6down.Load()
+}
+
+// hasV6 checks the machine's addresses, at most once a minute: on a network
+// without IPv6 (or with it turned off) no IPv6 server is ever tried.
+func (r *Recursor) hasV6(now time.Time) bool {
+	if last := r.v6Checked.Load(); last == 0 || now.Sub(time.Unix(0, last)) > time.Minute {
+		r.v6Host.Store(r.hostV6())
+		r.v6Checked.Store(now.UnixNano())
+	}
+	return r.v6Host.Load()
+}
+
+// hasGlobalIPv6 reports whether this machine can reach the internet over
+// IPv6. Connecting a UDP socket sends nothing: the kernel only looks up the
+// route, so this answers at once. No route (ENETUNREACH), IPv6 turned off
+// (EAFNOSUPPORT) or a source address that is only link-local or a private
+// ULA all mean no. The address is a root server's, which recursion asks
+// anyway.
+func hasGlobalIPv6() bool {
+	c, err := net.Dial("udp6", "[2001:500:2::c]:53") // c.root-servers.net
+	if err != nil {
+		return false
+	}
+	defer c.Close()
+	ap, err := netip.ParseAddrPort(c.LocalAddr().String())
+	if err != nil {
+		return false
+	}
+	ip := ap.Addr()
+	return ip.IsGlobalUnicast() && !ip.IsPrivate()
+}
 
 // IPv6 can be configured yet broken: packets vanish instead of failing at
 // once (a router announcing a route it does not carry). Every server asked
@@ -429,6 +467,19 @@ func (r *Recursor) v6Proven() bool {
 	return ok != 0 && r.now().Sub(time.Unix(0, ok)) < v6Pause
 }
 
+// localV6Error reports errors that mean IPv6 cannot be used from here at
+// all, rather than that one server failed: no route, a firewall rule,
+// IPv6 turned off in the system, no address to send from.
+func localV6Error(err error) bool {
+	for _, e := range []syscall.Errno{syscall.ENETUNREACH, syscall.EHOSTUNREACH, syscall.EPERM, syscall.EACCES,
+		syscall.EAFNOSUPPORT, syscall.EADDRNOTAVAIL, syscall.EPROTONOSUPPORT} {
+		if errors.Is(err, e) {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *Recursor) v6Result(a netip.Addr, err error, now time.Time) {
 	if !a.Is6() {
 		return
@@ -437,7 +488,7 @@ func (r *Recursor) v6Result(a netip.Addr, err error, now time.Time) {
 	case err == nil:
 		r.v6ok.Store(now.UnixNano())
 		r.v6fails.Store(0)
-	case errors.Is(err, syscall.ENETUNREACH) || errors.Is(err, syscall.EHOSTUNREACH):
+	case localV6Error(err):
 		r.v6down.Store(now.Add(v6Pause).UnixNano())
 	case errors.Is(err, context.DeadlineExceeded) || isTimeout(err):
 		if r.v6fails.Add(1) >= 3 && !r.v6Proven() {
