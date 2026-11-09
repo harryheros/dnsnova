@@ -510,6 +510,9 @@ func (c *Config) validateFilter(lines map[string]int, errs Errors, warns []strin
 	f := &c.Filter
 	for _, src := range f.Lists {
 		if u, err := url.Parse(src); strings.HasPrefix(src, "/") || err == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Host != "" {
+			if u != nil && u.Scheme == "http" {
+				warns = append(warns, fmt.Sprintf("filter.lists: %s is fetched over plain HTTP, where it can be changed on the way; use https:// if the site offers it", src))
+			}
 			continue
 		}
 		bad("filter.lists", fmt.Sprintf("%q: give an http(s) address or an absolute file path", src))

@@ -19,6 +19,12 @@ type entry struct {
 	// cnames are the CNAME targets in the answer (wire format, lowercase):
 	// the filtered service blocks an answer that leads to a blocked name.
 	cnames []string
+	// cnamesCut: the chain was longer than recorded; the filtered service
+	// blocks rather than let unchecked names through
+	cnamesCut bool
+	// signed: the answer carries DNSSEC signatures, whose TTLs min_ttl must
+	// not stretch (a validating client would see them outlive their use)
+	signed bool
 	rcode  int
 	tc     bool
 	// failure is a cached SERVFAIL (RFC 9520): an upstream's own, or one
@@ -80,10 +86,15 @@ func analyze(resp []byte, q *m.Query) (*entry, error) {
 			return m.ErrMalformed
 		}
 		t := collect(rr)
-		if rr.Type == m.TypeCNAME && len(e.cnames) < 16 {
-			if target, _, err := m.ReadName(resp, rr.RDOff); err == nil {
+		if rr.Type == m.TypeCNAME {
+			if len(e.cnames) >= maxCNAMEs {
+				e.cnamesCut = true
+			} else if target, _, err := m.ReadName(resp, rr.RDOff); err == nil {
 				e.cnames = append(e.cnames, target)
 			}
+		}
+		if rr.Type == typeRRSIG {
+			e.signed = true
 		}
 		if !hasAns || t < minAns {
 			minAns, hasAns = t, true
@@ -164,12 +175,20 @@ func newCache(size int) *cache {
 }
 
 func (c *cache) setSize(size int) {
+	// spread over the shards, rounding up: the cache holds at most size+255
+	// entries (before, at least 16 per shard: 4,096 even for size = 100)
 	per := int64(0)
 	if size > 0 {
-		per = max(int64(size/256), 16)
+		per = int64((size + 255) / 256)
 	}
 	c.perShard.Store(per)
 }
+
+// maxCNAMEs CNAME targets are checked by the filtered service; real chains
+// are a few long.
+const maxCNAMEs = 32
+
+const typeRRSIG = 46
 
 func fnv32(s string) uint32 {
 	h := uint32(2166136261)
