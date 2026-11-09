@@ -79,12 +79,31 @@ func (p *probes) sweep(now time.Time) {
 }
 
 // resolve answers one query and notes check names for the status page.
-func (s *Server) resolve(msg []byte, udp bool, proto string) resolver.Result {
-	res := s.res.Resolve(msg, udp)
+func (s *Server) resolve(msg []byte, udp bool, proto string, filtered bool) resolver.Result {
+	res := s.res.ResolveOpts(msg, resolveOpts(udp, proto, filtered))
+	s.noteProbe(res, proto)
+	return res
+}
+
+// resolveCached answers a query only if no upstream needs to be asked (see
+// resolver.ResolveCached).
+func (s *Server) resolveCached(msg []byte, udp bool, proto string, filtered bool) (resolver.Result, bool) {
+	res, ok := s.res.ResolveCached(msg, resolveOpts(udp, proto, filtered))
+	if ok {
+		s.noteProbe(res, proto)
+	}
+	return res, ok
+}
+
+func resolveOpts(udp bool, proto string, filtered bool) resolver.Opts {
+	encrypted := proto == "dot" || proto == "doh" || proto == "doh3" || proto == "doq"
+	return resolver.Opts{UDP: udp, Encrypted: encrypted, Filter: filtered}
+}
+
+func (s *Server) noteProbe(res resolver.Result, proto string) {
 	if res.Status == "probe" && res.Q != nil {
 		s.probes.add(resolver.ProbeToken(res.Q.Name), proto, time.Now())
 	}
-	return res
 }
 
 // handlePublic serves the status page on the DoH addresses (every path but
@@ -146,6 +165,7 @@ func (s *Server) PublicStatus() admin.PublicInfo {
 			}
 		}
 	}
+	info.Filtered = s.filteredInfo(c, info.Domain)
 	ups := s.Upstreams()
 	for _, u := range ups {
 		if u.Role == "primary" && u.Healthy {

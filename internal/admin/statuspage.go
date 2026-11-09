@@ -24,6 +24,17 @@ type PublicInfo struct {
 	Check          bool     `json:"check"`
 	QueryLog       bool     `json:"query_log"`
 	QueryLogFullIP bool     `json:"query_log_full_ip"`
+	// Filtered lists the addresses of the filtered service, when it is on.
+	Filtered *Filtered `json:"filtered,omitempty"`
+}
+
+// Filtered describes the filtered service for clients.
+type Filtered struct {
+	DoH   string   `json:"doh,omitempty"`
+	DoT   string   `json:"dot,omitempty"`
+	DoQ   string   `json:"doq,omitempty"`
+	Plain []string `json:"plain,omitempty"`
+	Rules int      `json:"rules"`
 }
 
 // GuideInfo feeds the admin interface's setup guide: the public addresses
@@ -110,21 +121,33 @@ func (p *StatusPage) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (p *StatusPage) profile(w http.ResponseWriter, r *http.Request) {
 	info := p.b.PublicStatus()
 	var proto, key, value, label string
-	switch r.URL.Query().Get("p") {
+	kind, filtered := strings.CutSuffix(r.URL.Query().Get("p"), "-filtered")
+	doh, dot := info.DoH, info.DoT
+	if filtered { // the filtered service's addresses
+		doh, dot = "", ""
+		if info.Filtered != nil {
+			doh, dot = info.Filtered.DoH, info.Filtered.DoT
+		}
+	}
+	switch kind {
 	case "dot":
-		proto, key, value, label = "TLS", "ServerName", strings.SplitN(info.DoT, ":", 2)[0], "DNS over TLS"
-		if info.DoT == "" || strings.Contains(info.DoT, ":") { // Apple only supports port 853
+		proto, key, value, label = "TLS", "ServerName", strings.SplitN(dot, ":", 2)[0], "DNS over TLS"
+		if dot == "" || strings.Contains(dot, ":") { // Apple only supports port 853
 			http.NotFound(w, r)
 			return
 		}
 	default:
-		proto, key, value, label = "HTTPS", "ServerURL", info.DoH, "DNS over HTTPS"
-		if info.DoH == "" {
+		proto, key, value, label = "HTTPS", "ServerURL", doh, "DNS over HTTPS"
+		if doh == "" {
 			http.NotFound(w, r)
 			return
 		}
 	}
 	id := "dnsnova." + reverse(info.Domain) + "." + strings.ToLower(proto)
+	if filtered {
+		label += ", filtered"
+		id += ".filtered" // its own profile, next to the unfiltered one
+	}
 	esc := html.EscapeString
 	body := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -171,7 +194,11 @@ func (p *StatusPage) profile(w http.ResponseWriter, r *http.Request) {
 `, proto, key, esc(value), esc(info.Domain), label, esc(id), uuid(id+".dns"),
 		esc(info.Domain), label, esc(info.Domain), esc(id), uuid(id))
 	w.Header().Set("Content-Type", "application/x-apple-aspen-config")
-	w.Header().Set("Content-Disposition", `attachment; filename="`+info.Domain+`-`+strings.ToLower(proto)+`.mobileconfig"`)
+	suffix := strings.ToLower(proto)
+	if filtered {
+		suffix += "-filtered"
+	}
+	w.Header().Set("Content-Disposition", `attachment; filename="`+info.Domain+`-`+suffix+`.mobileconfig"`)
 	w.Write([]byte(body))
 }
 

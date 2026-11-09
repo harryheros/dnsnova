@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/harryheros/dnsnova/internal/filter"
 	"github.com/harryheros/dnsnova/internal/upstream"
 )
 
@@ -112,7 +113,25 @@ type Config struct {
 	Log struct {
 		Queries bool // no longer used: the query log runs from the admin interface, in memory
 	}
+	// Filter is the filtered service: the same server answers on its own
+	// addresses ("doors") with block lists applied. Every other address
+	// stays unfiltered unless All is set.
+	Filter struct {
+		Enabled        bool
+		All            bool     // filter every address, not only the filtered ones
+		Lists          []string // http(s) URLs or absolute file paths
+		Block          []string // own rules: these domains and every name under them
+		Allow          []string // never blocked, whatever a list says
+		UpdateInterval time.Duration
+		DoHPath        string   // DoH path of the filtered service, such as /filtered
+		Names          []string // DoT, DoQ and DoH names of the filtered service
+		Listen         []string // plain DNS addresses (UDP and TCP) of the filtered service
+	}
 }
+
+// DefaultFilterList is ShieldNova's full list: privacy, ads and security,
+// chosen for few false positives.
+const DefaultFilterList = "https://raw.githubusercontent.com/harryheros/shieldnova/main/dist/shieldnova-full.txt"
 
 // Defaults returns a Config with every optional setting at its default.
 func Defaults() *Config {
@@ -149,6 +168,9 @@ func Defaults() *Config {
 	c.Limits.RRLRate = 20
 	c.Limits.RRLSlip = 2
 	c.Limits.BlockANY = true
+	c.Filter.Lists = []string{DefaultFilterList}
+	c.Filter.UpdateInterval = 24 * time.Hour
+	c.Filter.DoHPath = "/filtered"
 	return c
 }
 
@@ -350,6 +372,7 @@ func (c *Config) validate(lines map[string]int) (Errors, []string) {
 			warns = append(warns, "status.enabled: without tls.domains the status page cannot offer encrypted addresses or the check")
 		}
 	}
+	errs, warns = c.validateFilter(lines, errs, warns)
 	if c.Log.Queries {
 		warns = append(warns, "log.queries no longer writes queries to the system log; start the query log in the admin interface instead (it is kept in memory and stops by itself)")
 	}
@@ -395,7 +418,7 @@ func (c *Config) validate(lines map[string]int) (Errors, []string) {
 // ServesDNS reports whether any DNS listener is configured. A fresh
 // install has none until setup is finished in the admin interface.
 func (c *Config) ServesDNS() bool {
-	return len(c.Server.Listen) > 0 || c.DoH.Listen != "" || len(c.DoH.HTTPSListen) > 0 || len(c.DoT.Listen) > 0 || len(c.DoQ.Listen) > 0
+	return len(c.Server.Listen) > 0 || c.Filter.Enabled && len(c.Filter.Listen) > 0 || c.DoH.Listen != "" || len(c.DoH.HTTPSListen) > 0 || len(c.DoT.Listen) > 0 || len(c.DoQ.Listen) > 0
 }
 
 // PublicListenIPs returns the public addresses named in server.listen: the
@@ -413,6 +436,46 @@ func (c *Config) PublicListenIPs() []netip.Addr {
 		}
 	}
 	return out
+}
+
+func (c *Config) validateFilter(lines map[string]int, errs Errors, warns []string) (Errors, []string) {
+	bad := func(key, msg string) { errs = append(errs, &Error{Line: lines[key], Key: key, Msg: msg}) }
+	f := &c.Filter
+	for _, src := range f.Lists {
+		if u, err := url.Parse(src); strings.HasPrefix(src, "/") || err == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Host != "" {
+			continue
+		}
+		bad("filter.lists", fmt.Sprintf("%q: give an http(s) address or an absolute file path", src))
+	}
+	for key, list := range map[string][]string{"filter.block": f.Block, "filter.allow": f.Allow, "filter.names": f.Names} {
+		for _, d := range list {
+			if !filter.ValidDomain(d) {
+				bad(key, fmt.Sprintf("%q is not a valid domain name", d))
+			}
+		}
+	}
+	if f.UpdateInterval < time.Hour || f.UpdateInterval > 30*24*time.Hour {
+		bad("filter.update_interval", "must be between 1h and 720h")
+	}
+	if !strings.HasPrefix(f.DoHPath, "/") {
+		bad("filter.doh_path", "must start with /")
+	} else if f.DoHPath == c.DoH.Path {
+		bad("filter.doh_path", "must differ from doh.path")
+	}
+	for _, a := range f.Listen {
+		if err := checkListen(a); err != nil {
+			bad("filter.listen", err.Error())
+		} else if slices.Contains(c.Server.Listen, a) {
+			bad("filter.listen", fmt.Sprintf("%q is also in server.listen; an address is either filtered or not", a))
+		}
+	}
+	if f.Enabled && !f.All && len(f.Listen) == 0 && len(f.Names) == 0 && len(c.DoH.HTTPSListen) == 0 && c.DoH.Listen == "" {
+		warns = append(warns, "filter.enabled: no address uses filtering; set filter.listen, filter.names, a DoH address (filter.doh_path) or filter.all")
+	}
+	if f.Enabled && len(f.Names) > 0 && c.TLS.Certificate == "files" {
+		warns = append(warns, "filter.names: the certificate file must also cover "+strings.Join(f.Names, ", "))
+	}
+	return errs, warns
 }
 
 func (c *Config) validateTLS(lines map[string]int, errs Errors, warns []string) (Errors, []string) {
@@ -634,11 +697,21 @@ var fields = map[string]field{
 	"admin.listen":   str(func(c *Config) *string { return &c.Admin.Listen }),
 	"status.enabled": boolean(func(c *Config) *bool { return &c.Status.Enabled }),
 	"log.queries":    boolean(func(c *Config) *bool { return &c.Log.Queries }),
+
+	"filter.enabled":         boolean(func(c *Config) *bool { return &c.Filter.Enabled }),
+	"filter.all":             boolean(func(c *Config) *bool { return &c.Filter.All }),
+	"filter.lists":           strList(func(c *Config) *[]string { return &c.Filter.Lists }),
+	"filter.block":           strList(func(c *Config) *[]string { return &c.Filter.Block }),
+	"filter.allow":           strList(func(c *Config) *[]string { return &c.Filter.Allow }),
+	"filter.update_interval": duration(func(c *Config) *time.Duration { return &c.Filter.UpdateInterval }),
+	"filter.doh_path":        str(func(c *Config) *string { return &c.Filter.DoHPath }),
+	"filter.names":           strList(func(c *Config) *[]string { return &c.Filter.Names }),
+	"filter.listen":          strList(func(c *Config) *[]string { return &c.Filter.Listen }),
 }
 
 var knownTables = map[string]bool{
 	"server": true, "doh": true, "dot": true, "doq": true, "tls": true, "ddr": true, "upstream": true, "cache": true,
-	"access": true, "limits": true, "metrics": true, "log": true, "admin": true, "status": true, "local": true, "stats": true,
+	"access": true, "limits": true, "metrics": true, "log": true, "admin": true, "status": true, "local": true, "stats": true, "filter": true,
 }
 
 func want(v Value, k Kind) error {

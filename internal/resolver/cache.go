@@ -11,14 +11,17 @@ import (
 // entry is an upstream response prepared for fast re-serving. It is
 // immutable once stored, except for nextRefresh.
 type entry struct {
-	msg      []byte
-	qEnd     int
-	ttlOffs  []int    // offsets of every TTL field except OPT's
-	ttls     []uint32 // their original values
-	optStart int      // offset of the OPT record, -1 if none
-	optLast  bool     // OPT is the last record
-	rcode    int
-	tc       bool
+	msg     []byte
+	qEnd    int
+	ttlOffs []int    // offsets of every TTL field except OPT's
+	ttls    []uint32 // their original values
+	ede     []byte   // Extended DNS Error options to pass on (RFC 8914)
+	rcode   int
+	tc      bool
+	// failure is a cached SERVFAIL (RFC 9520): an upstream's own, or one
+	// dnsnova made when no upstream could be reached. It is never served
+	// stale and never replaces an answer that can still be served stale.
+	failure bool
 
 	negative  bool   // NXDOMAIN or NODATA
 	ttl       uint32 // cache lifetime after clamping
@@ -29,10 +32,22 @@ type entry struct {
 	nextRefresh atomic.Int64 // unix nanos; throttles background refreshes
 }
 
-// analyze validates an upstream response to q and indexes its TTLs.
+// FailTTL is how long a resolution failure (SERVFAIL) is remembered, so a
+// broken domain or an unreachable upstream is not asked again for every
+// client (RFC 9520 asks for at least one second).
+const FailTTL = 2
+
+// analyze validates an upstream response to q and indexes its TTLs. The
+// upstream's OPT record is removed: its options (padding, cookies, ...)
+// belong to that hop. Extended DNS Errors are kept for the client, and each
+// client gets its own OPT record when the answer is built.
 func analyze(resp []byte, q *m.Query) (*entry, error) {
 	if len(resp) < m.HeaderLen || m.U16(resp, 2)&m.FlagQR == 0 || m.U16(resp, 4) != 1 {
 		return nil, m.ErrMalformed
+	}
+	resp, ede, err := m.StripOPT(resp)
+	if err != nil {
+		return nil, err
 	}
 	name, off, err := m.ReadQName(resp, m.HeaderLen)
 	if err != nil || off+4 > len(resp) || name != q.Name ||
@@ -40,7 +55,7 @@ func analyze(resp []byte, q *m.Query) (*entry, error) {
 		return nil, m.ErrMalformed
 	}
 	off += 4
-	e := &entry{msg: resp, qEnd: off, optStart: -1}
+	e := &entry{msg: resp, qEnd: off, ede: ede}
 	flags := m.U16(resp, 2)
 	e.rcode = int(flags & 0xF)
 	e.tc = flags&m.FlagTC != 0
@@ -82,14 +97,6 @@ func analyze(resp []byte, q *m.Query) (*entry, error) {
 		return nil, err
 	}
 	if _, err = m.WalkRRs(resp, off, ar, func(rr m.RR) error {
-		if rr.Type == m.TypeOPT {
-			if e.optStart >= 0 || resp[rr.Start] != 0 {
-				return m.ErrMalformed
-			}
-			e.optStart = rr.Start
-			e.optLast = rr.End == len(resp)
-			return nil
-		}
 		collect(rr)
 		return nil
 	}); err != nil {
@@ -107,8 +114,24 @@ func analyze(resp []byte, q *m.Query) (*entry, error) {
 			e.ttl = negTTL
 		}
 		e.cacheable, e.negative = true, true
+	case e.rcode == m.RcodeServFail:
+		e.ttl, e.cacheable, e.negative, e.failure = FailTTL, true, true, true
 	}
 	return e, nil
+}
+
+// failureEntry is a SERVFAIL made by dnsnova when no upstream answered,
+// cached like an upstream's SERVFAIL and marked "Network Error" (RFC 8914).
+func failureEntry(q *m.Query) *entry {
+	up := m.BuildUpstreamQuery(q)
+	pq := *q
+	pq.QEnd, pq.EDNS = m.HeaderLen+len(q.Name)+1+4, false
+	e, err := analyze(m.ErrorResponse(up, &pq, m.RcodeServFail), q)
+	if err != nil {
+		return nil
+	}
+	e.ede = m.EDE(m.EDENetworkError, "no upstream answered")
+	return e
 }
 
 // cache is a sharded map. When a shard is full, a few random entries are

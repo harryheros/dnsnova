@@ -28,6 +28,7 @@ jobs:
           go test ./internal/dnsmsg -run '^$' -fuzz '^FuzzParseQuery$' -fuzztime 60s
           go test ./internal/config -run '^$' -fuzz '^FuzzParse$' -fuzztime 60s
           go test ./internal/resolver -run '^$' -fuzz '^FuzzAnalyze$' -fuzztime 60s
+          go test ./internal/filter -run '^$' -fuzz '^FuzzParse$' -fuzztime 60s
       - name: build
         run: |
           for arch in amd64 arm64; do

@@ -279,18 +279,80 @@ func TestZoneOf(t *testing.T) {
 }
 
 func TestUpstreamFailureIsServfail(t *testing.T) {
-	r, auth, _ := newTest(t)
+	r, auth, c := newTest(t)
 	auth.ServFail.Store(true)
 	if p := dnstest.Parse(t, r.Resolve(dnstest.Query(1, "a.test", 1, false, false), true).Resp); p.Rcode != m.RcodeServFail {
 		t.Fatal("SERVFAIL expected")
 	}
-	if pos, neg := r.CacheCounts(); pos+neg != 0 {
-		t.Fatal("SERVFAIL must not be cached")
+	// RFC 9520: the failure is remembered briefly, so the upstream is not
+	// asked again for every client...
+	res := r.Resolve(dnstest.Query(2, "a.test", 1, false, false), true)
+	if res.Status != "servfail" || res.Source != stats.SourceCache || auth.Count("a.test.") != 1 {
+		t.Fatalf("second query: %s from source %d, upstream asked %d times", res.Status, res.Source, auth.Count("a.test."))
 	}
+	// ...and only briefly.
+	auth.ServFail.Store(false)
+	c.add((FailTTL + 1) * time.Second)
+	if res := r.Resolve(dnstest.Query(3, "a.test", 1, false, false), true); res.Status != "miss" || m.Rcode(res.Resp) != m.RcodeNoError {
+		t.Fatalf("after FailTTL: %s rcode %d", res.Status, m.Rcode(res.Resp))
+	}
+
 	r.SetUpstreams(failing{})
-	if p := dnstest.Parse(t, r.Resolve(dnstest.Query(1, "b.test", 1, false, false), true).Resp); p.Rcode != m.RcodeServFail {
+	res = r.Resolve(dnstest.Query(1, "b.test", 1, true, false), true)
+	p := dnstest.Parse(t, res.Resp)
+	if p.Rcode != m.RcodeServFail {
 		t.Fatal("SERVFAIL expected on upstream error")
 	}
+	if code, ok := edeCode(res.Resp); !ok || code != m.EDENetworkError {
+		t.Fatalf("unreachable upstream: EDE %d %v, want %d", code, ok, m.EDENetworkError)
+	}
+}
+
+func TestFailureNeverReplacesStale(t *testing.T) {
+	r, auth, c := newTest(t)
+	auth.SetTTL(60)
+	r.Resolve(dnstest.Query(1, "a.test", 1, false, false), true)
+	c.add(120 * time.Second) // expired, inside the serve-stale window
+	auth.ServFail.Store(true)
+	res := r.Resolve(dnstest.Query(2, "a.test", 1, true, false), true)
+	if res.Status != "stale" {
+		t.Fatalf("status %s, want stale", res.Status)
+	}
+	if code, ok := edeCode(res.Resp); !ok || code != m.EDEStaleAnswer {
+		t.Fatalf("stale answer: EDE %d %v, want %d", code, ok, m.EDEStaleAnswer)
+	}
+	waitFor(t, func() bool { return auth.Count("a.test.") == 2 }) // the background refresh failed
+	time.Sleep(20 * time.Millisecond)
+	if res := r.Resolve(dnstest.Query(3, "a.test", 1, false, false), true); res.Status != "stale" {
+		t.Fatalf("after a failed refresh: %s, want the stale answer", res.Status)
+	}
+}
+
+// edeCode returns the first Extended DNS Error code in msg's OPT record.
+func edeCode(msg []byte) (uint16, bool) {
+	off, err := m.SkipName(msg, m.HeaderLen)
+	if err != nil {
+		return 0, false
+	}
+	off += 4
+	n := int(m.U16(msg, 6)) + int(m.U16(msg, 8)) + int(m.U16(msg, 10))
+	var code uint16
+	found := false
+	m.WalkRRs(msg, off, n, func(rr m.RR) error {
+		if rr.Type != m.TypeOPT {
+			return nil
+		}
+		rd := msg[rr.RDOff:rr.End]
+		for i := 0; i+4 <= len(rd); {
+			oc, ol := m.U16(rd, i), int(m.U16(rd, i+2))
+			if oc == m.OptEDE && ol >= 2 && i+4+ol <= len(rd) && !found {
+				code, found = m.U16(rd, i+4), true
+			}
+			i += 4 + ol
+		}
+		return nil
+	})
+	return code, found
 }
 
 type failing struct{}
@@ -317,7 +379,7 @@ func FuzzAnalyze(f *testing.F) {
 		e.ttl = 60
 		e.expire = e.stored.Add(time.Minute)
 		s := settings()
-		out := r.build(e, req, q, time.Now(), false, true, &s)
+		out := r.build(e, req, q, time.Now(), false, &s)
 		if len(out) < m.HeaderLen || m.U16(out, 0) != 1 {
 			t.Fatal("bad response")
 		}

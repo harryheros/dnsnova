@@ -160,6 +160,24 @@ listen = "127.0.0.1:7000"
 # private mode only allowed networks can open it.
 enabled = false
 
+[filter]
+# A second, filtered service on the same server: ads, trackers and malware
+# are answered with "blocked" (NXDOMAIN, Extended DNS Error 15). The usual
+# addresses stay unfiltered; clients choose by the address they use:
+#   plain DNS  the addresses in listen below
+#   DoT, DoQ   the names in names (add them to DNS and to the certificate;
+#              with certificate = "acme" they are added for you)
+#   DoH        the path doh_path, or a name in names
+# Set all = true to filter every address instead.
+enabled = false
+# lists = ["https://raw.githubusercontent.com/harryheros/shieldnova/main/dist/shieldnova-full.txt"]
+# block = ["example-ads.com"]       # your own rules: the name and everything under it
+# allow = ["needed.example.com"]    # always answered, whatever the lists say
+# update_interval = "24h"
+# doh_path = "/filtered"
+# names = ["filtered.dns.example.com"]
+# listen = ["203.0.113.10:5353"]
+
 # There is no setting to log queries. DNSNova writes no queries or client
 # addresses to disk; for troubleshooting, start the query log in the admin
 # interface: it is kept in memory, hides the last part of client addresses

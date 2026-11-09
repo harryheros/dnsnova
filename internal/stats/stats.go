@@ -48,10 +48,11 @@ const (
 	SourceStale
 	SourceUpstream
 	SourceLocal
+	SourceBlocked // the filtered service answered from its block lists
 	numSource
 )
 
-var sourceNames = [numSource]string{"cache", "stale", "upstream", "local"}
+var sourceNames = [numSource]string{"cache", "stale", "upstream", "local", "blocked"}
 
 // Stats is the set of counters for one server.
 type Stats struct {

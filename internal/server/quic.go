@@ -213,12 +213,12 @@ func (s *Server) serveDoQ(l *quicListener) {
 		l.wg.Add(1)
 		go func() {
 			defer func() { l.untrack(c); l.wg.Done() }()
-			s.serveDoQConn(c, addrIP(c.RemoteAddr()))
+			s.serveDoQConn(c, addrIP(c.RemoteAddr()), c.ConnectionState().TLS.ServerName)
 		}()
 	}
 }
 
-func (s *Server) serveDoQConn(c *quic.Conn, ip netip.Addr) {
+func (s *Server) serveDoQConn(c *quic.Conn, ip netip.Addr, sni string) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	for {
@@ -229,12 +229,12 @@ func (s *Server) serveDoQConn(c *quic.Conn, ip netip.Addr) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			s.serveDoQStream(c, str, ip)
+			s.serveDoQStream(c, str, ip, sni)
 		}()
 	}
 }
 
-func (s *Server) serveDoQStream(c *quic.Conn, str *quic.Stream, ip netip.Addr) {
+func (s *Server) serveDoQStream(c *quic.Conn, str *quic.Stream, ip netip.Addr, sni string) {
 	st := s.state.Load()
 	str.SetReadDeadline(time.Now().Add(st.cfg.Limits.TCPIdleTimeout))
 	var lb [2]byte
@@ -274,13 +274,13 @@ func (s *Server) serveDoQStream(c *quic.Conn, str *quic.Stream, ip netip.Addr) {
 		return
 	}
 	start := time.Now()
-	res := s.resolve(msg, false, "doq")
+	res := s.resolve(msg, false, "doq", st.filterName(sni))
 	if res.Resp == nil {
 		c.CloseWithError(doqProtocolError, "malformed query")
 		return
 	}
-	writeDoQ(str, res.Resp)
 	s.logQuery(st, ip, "doq", res, start)
+	writeDoQ(str, res.Resp)
 }
 
 // writeDoQ sends one length-prefixed response and closes the stream (FIN).
@@ -306,10 +306,7 @@ func (s *Server) listenH3(addr, path string, h http.Handler, tlsConf *tls.Config
 		return nil, err
 	}
 	if path != "" {
-		mux := http.NewServeMux()
-		mux.Handle(path, h)
-		mux.Handle("/", http.HandlerFunc(s.handlePublic))
-		h = mux
+		h = s.dohMux(path, h)
 	}
 	l.h3 = &http3.Server{
 		Handler:        h,

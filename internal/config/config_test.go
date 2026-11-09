@@ -258,3 +258,51 @@ func TestGetRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestFilterDefaultsAndValidation(t *testing.T) {
+	c, _, _, err := Load(minimal())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Filter.Enabled || c.Filter.DoHPath != "/filtered" || c.Filter.UpdateInterval != 24*time.Hour ||
+		len(c.Filter.Lists) != 1 || c.Filter.Lists[0] != DefaultFilterList {
+		t.Fatalf("filter defaults: %+v", c.Filter)
+	}
+	bad := string(minimal()) + `
+[filter]
+enabled = true
+lists = ["ftp://x/list", "relative/path.txt"]
+block = ["not a domain"]
+allow = ["ok.example"]
+names = ["filtered.dns.example.com"]
+update_interval = "5m"
+doh_path = "/dns-query"
+listen = ["127.0.0.1:53", "nonsense"]
+`
+	_, _, _, err = Load([]byte(bad))
+	var es Errors
+	if !errors.As(err, &es) {
+		t.Fatalf("errors expected, got %v", err)
+	}
+	got := map[string]int{}
+	for _, e := range es {
+		got[e.Key]++
+	}
+	for key, n := range map[string]int{"filter.lists": 2, "filter.block": 1, "filter.update_interval": 1, "filter.doh_path": 1, "filter.listen": 2} {
+		if got[key] != n {
+			t.Errorf("%s: %d errors, want %d (%v)", key, got[key], n, es)
+		}
+	}
+	if got["filter.allow"] != 0 || got["filter.names"] != 0 {
+		t.Errorf("valid values refused: %v", es)
+	}
+
+	// on, but no address uses it: a warning, not an error
+	_, _, warns, err := Load(append(minimal(), "\n[filter]\nenabled = true\n"...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(warns, "\n"), "no address uses filtering") {
+		t.Fatalf("warnings: %v", warns)
+	}
+}

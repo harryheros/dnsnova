@@ -23,8 +23,10 @@ type Query struct {
 	Name   string    `json:"name"`
 	Type   string    `json:"type"`
 	Rcode  string    `json:"rcode"`
-	Source string    `json:"source"` // cache, stale, upstream, local
+	Source string    `json:"source"` // cache, stale, upstream, local, blocked
 	MS     float64   `json:"ms"`
+	// Filtered: the query came in through the filtered service.
+	Filtered bool `json:"filtered,omitempty"`
 }
 
 // QueryLogState says whether the query log is running.
