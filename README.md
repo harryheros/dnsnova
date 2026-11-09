@@ -2,7 +2,7 @@
 
 > A secure, lightweight DNS server for your home, office or a public resolver.
 
-[![Version](https://img.shields.io/badge/version-v1.0.1-blue)](https://github.com/harryheros/dnsnova/releases)
+[![Version](https://img.shields.io/badge/version-v1.0.2-blue)](https://github.com/harryheros/dnsnova/releases)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](./LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux%20amd64%20%7C%20arm64-lightgrey.svg)](#)
 [![CI](https://github.com/harryheros/dnsnova/actions/workflows/ci.yml/badge.svg)](https://github.com/harryheros/dnsnova/actions/workflows/ci.yml)
@@ -28,7 +28,7 @@ Open one of these addresses and follow the setup wizard:
   http://127.0.0.1:7000
 ```
 
-Open one and follow the wizard: administrator password, who can use plain DNS, whether DNSNova resolves names itself or asks upstreams, a domain for encrypted DNS (optional), and filtering. DNS starts when you finish, and the last page says what to set on your router or devices.
+Open one and follow the wizard: administrator password, who the server is for (your home or office network, or anyone on the internet) and where plain DNS answers, whether DNSNova resolves names itself or asks upstreams, a domain for encrypted DNS (optional), and filtering. DNS starts when you finish, and the last page says what to set on your router or devices.
 
 ## Uninstall
 

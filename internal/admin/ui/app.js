@@ -360,6 +360,8 @@ async function wizLoad(w) {
 
 const hostOf = (a) => { const i = a.lastIndexOf(":"); return a.slice(0, i).replace(/^\[|\]$/g, ""); };
 const withPort = (ip, port) => (ip.includes(":") ? `[${ip}]:${port}` : `${ip}:${port}`);
+// the networks a home or office server answers in private mode
+const PRIVATE_NETS = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fc00::/7"];
 const isAllAddr = (a) => /^(:|0\.0\.0\.0:|\[::\]:)/.test(a);
 const isLocalAddr = (a) => /^(127\.|\[::1\]:|localhost:)/.test(a);
 // encryptedListen puts DoT, DoQ and DoH on the plain DNS addresses; when
@@ -423,6 +425,19 @@ const WIZ_VIEWS = [
     // proxies) ask 127.0.0.1 and would otherwise get no answer
     const list = [...new Set([...usable.map((a) => a.address), "127.0.0.1", ...current])];
     const curPort = cur.length ? cur[0].slice(cur[0].lastIndexOf(":") + 1) : "53";
+    // who it is for: the one installing chooses. Public by default, never
+    // guessed: home networks use every kind of address, cloud servers often
+    // see only a private one, and taking a server for a home network would
+    // shut the internet out
+    let audience = w.audience || (w.values["server.mode"] === "private" ? "net" : "internet");
+    const who = (value, title, help) => {
+      const r = h("input", { type: "radio", name: "audience", value, checked: audience === value });
+      r.addEventListener("change", () => { audience = value; });
+      return h("label", { class: "check" }, r, h("span", null, h("strong", null, title), h("span", { class: "small muted", style: { display: "block" } }, help)));
+    };
+    const audienceBox = h("div", { role: "radiogroup", "aria-label": "Who it is for", style: { display: "flex", flexDirection: "column", gap: "8px" } },
+      who("internet", "Anyone on the internet (public DNS)", "Answers everyone, with limits against abuse."),
+      who("net", "My network (home or office)", "Answers devices on private networks (192.168.x.x, 10.x.x.x and the like, VPNs included) and this machine, no one else."));
     const port = h("input", { type: "number", min: 1, max: 65535, value: curPort, inputmode: "numeric", "aria-label": "Port" });
     port.style.maxWidth = "120px";
     // any port but 53 is unusable for most things: say so while it is typed
@@ -449,11 +464,14 @@ const WIZ_VIEWS = [
     };
     const sync = () => { listBox.hidden = mode !== "some"; };
     const choices = h("div", { role: "radiogroup", "aria-label": "Who can use plain DNS", style: { display: "flex", flexDirection: "column", gap: "8px" } },
-      option("all", "Everyone", "All addresses of this server, also ones it gets later. For a public resolver, or when the address can change."),
+      option("all", "All addresses", "Every address of this server, also ones it gets later. For a public resolver, or when the address can change."),
       boxes.length ? [option("some", "Chosen addresses", "Only the addresses ticked below, for a server with several. Keep 127.0.0.1 ticked so programs on this machine can use it too."), listBox] : null,
       option("local", "Only this server (encrypted DNS only)", "Plain DNS stays on 127.0.0.1; devices connect over DNS over HTTPS, TLS or QUIC. The safest choice for a server on the internet."));
     sync();
-    put(body, wizHead(w, "Addresses", "Who can use plain DNS (UDP and TCP), the kind routers and most devices are set to."),
+    put(body, wizHead(w, "Addresses", "Who this server is for, and where plain DNS (UDP and TCP, what routers and most devices use) answers."),
+      h("h3", { class: "small", style: { margin: "4px 0 0" } }, "Who it is for"),
+      audienceBox,
+      h("h3", { class: "small", style: { margin: "8px 0 0" } }, "Plain DNS answers on"),
       choices,
       h("label", { class: "block" }, "Port (53 is the standard DNS port; devices and routers expect it)", port),
       portNote,
@@ -461,10 +479,14 @@ const WIZ_VIEWS = [
       wizNav(w, render, () => {
         const p = Number(port.value);
         if (!Number.isInteger(p) || p < 1 || p > 65535) throw new Error("The port must be a number from 1 to 65535.");
+        if (audience === "net" && mode === "local") throw new Error("With plain DNS only on this server, your network could not use it, and private mode refuses everyone else. Choose Anyone on the internet for an encrypted-only server, or let plain DNS answer on your network's address.");
+        w.audience = audience;
+        if (audience === "net") Object.assign(w.values, { "server.mode": "private", "access.allow": PRIVATE_NETS });
+        else w.values["server.mode"] = "public";
         if (mode === "all") { w.values["server.listen"] = [":" + p]; return; }
         if (mode === "local") { w.values["server.listen"] = [withPort("127.0.0.1", p)]; return; }
         const ips = boxes.map((b) => b.querySelector("input")).filter((c) => c.checked).map((c) => c.value);
-        if (!ips.length) throw new Error("Tick at least one address, or choose Everyone.");
+        if (!ips.length) throw new Error("Tick at least one address, or choose All addresses.");
         w.values["server.listen"] = ips.map((ip) => withPort(ip, p));
       }));
   },

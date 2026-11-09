@@ -4,6 +4,17 @@ All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
 **Security**.
 
+## 1.0.2 (2026-11-09)
+
+- The setup wizard asks who the server is for: "Anyone on the internet"
+  (public mode with its limits, the default) or "My network (home or
+  office)", which sets private mode for the private networks (192.168.x.x,
+  10.x.x.x, 172.16-31.x.x, 100.64.x.x and IPv6 ULA), so recursion may also
+  ask name servers inside them and a router forwarding for every device is
+  not limited as one client.
+- Private mode always answers the machine itself (127.0.0.1, ::1), without
+  listing it in `access.allow`.
+
 ## 1.0.1 (2026-11-09)
 
 - Recursion uses IPv6 only where it works. A machine without an IPv6
