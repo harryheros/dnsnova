@@ -8,6 +8,11 @@ All notable changes are listed here. Versions follow
 
 First stable release.
 
+- Web interface made easier on phones and for newcomers: rarely changed
+  settings fold under "Advanced"; the overview shows the ports DNSNova
+  really listens on and "off" for protocols that are not; empty lists say
+  what will appear instead of showing placeholders; the upstreams table
+  becomes one card per upstream on narrow screens.
 - Default limits sized for a public resolver: 100 queries a second per
   address (burst 400) and 1,000 per network (burst 4,000), since mobile
   carriers put many people behind one address; 10,000 TCP and DoT
