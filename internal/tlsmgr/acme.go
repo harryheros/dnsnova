@@ -223,9 +223,17 @@ func (c *Client) sign(url, nonce string, payload any) ([]byte, error) {
 	})
 }
 
+// lagRetries is how often a read that answers 404 is tried again. Let's
+// Encrypt reads from database replicas that can lag a few seconds behind:
+// a certificate just issued may be "not found" for a moment, and giving up
+// would mean ordering (and being charged for) another one.
+const lagRetries = 5
+
 // post sends a signed request and decodes a JSON answer into out (if not
-// nil). A badNonce error is retried once, as RFC 8555 recommends.
+// nil). A badNonce error is retried once, as RFC 8555 recommends, and a
+// read (POST-as-GET) that answers 404 a few times, see lagRetries.
 func (c *Client) post(ctx context.Context, url string, payload, out any) (http.Header, []byte, error) {
+	lag := 0
 	for attempt := 0; ; attempt++ {
 		n, err := c.nonce(ctx)
 		if err != nil {
@@ -254,6 +262,13 @@ func (c *Client) post(ctx context.Context, url string, payload, out any) (http.H
 				return nil, nil, fmt.Errorf("acme: http %d", resp.StatusCode)
 			}
 			if strings.HasSuffix(p.Type, ":badNonce") && attempt == 0 {
+				continue
+			}
+			if resp.StatusCode == http.StatusNotFound && payload == nil && lag < lagRetries {
+				lag++
+				if err := c.wait(ctx, resp.Header); err != nil {
+					return nil, nil, err
+				}
 				continue
 			}
 			return nil, nil, p

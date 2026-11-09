@@ -8,6 +8,13 @@ All notable changes are listed here. Versions follow
 
 First stable release.
 
+- Setup in the browser: the wizard asks who can use plain DNS (everyone,
+  chosen addresses, or only this server for an encrypted-only resolver).
+  Encrypted DNS settings start with the domain: entering one chooses a free
+  Let's Encrypt certificate and turns on DoT, DoQ and DoH. Let's Encrypt
+  reads that answer 404 for a moment after issuance (database replicas a
+  few seconds behind) are tried again instead of ordering another
+  certificate.
 - Recursion (off by default, `[recursion]`): DNSNova resolves names itself,
   from the root servers down, so no third party sees the queries. DNSSEC
   validation from the built-in root keys (KSK-2017 and KSK-2024): RSA,

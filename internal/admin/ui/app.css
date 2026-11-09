@@ -92,6 +92,7 @@ h2 { margin: 0; font-size: 15px; font-weight: 600; }
 .btn.danger { color: var(--err); }
 .btn.small { min-height: 32px; padding: 0 12px; font-size: 13px; }
 .btn:disabled { opacity: 0.45; cursor: default; }
+.btn.busy:disabled { opacity: 1; cursor: progress; }
 .btn.link { border: 0; padding: 0; min-height: 0; color: var(--accent); background: none; font-weight: 500; }
 input[type=text], input[type=password], input[type=email], input[type=number], main input[type=search], select, textarea {
   min-height: 38px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg); width: 100%; max-width: 440px;
@@ -249,7 +250,6 @@ td.r, th.r { text-align: right; }
 .field.inline { flex-wrap: nowrap; }
 .field.inline .ctl { flex: none; align-items: flex-end; }
 .field .problem { color: var(--err); font-size: 12px; }
-.field.sub { padding-left: 28px; }
 .field.flash { animation: flash 1.6s ease-out; }
 @keyframes flash { from { background: var(--soft); } to { background: transparent; } }
 .review { border-radius: 12px; padding: 16px 20px; border: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column; gap: 10px; position: sticky; bottom: 12px; }
