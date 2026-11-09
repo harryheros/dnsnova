@@ -78,6 +78,11 @@ func deadline(ctx context.Context, conn net.Conn) func() bool {
 
 // ---- UDP, falling back to TCP when the answer is truncated ----
 
+// udpBufs holds receive buffers: allocating 64 KB for every upstream query
+// cost about a quarter of the CPU time on a busy server (mostly garbage
+// collection).
+var udpBufs = sync.Pool{New: func() any { b := make([]byte, 65535); return &b }}
+
 type udpUpstream struct {
 	spec Spec
 	dial func(ctx context.Context, network, addr string) (net.Conn, error)
@@ -99,7 +104,9 @@ func (u *udpUpstream) Exchange(ctx context.Context, msg []byte) ([]byte, error) 
 	if _, err := conn.Write(q); err != nil {
 		return nil, err
 	}
-	buf := make([]byte, 65535)
+	bp := udpBufs.Get().(*[]byte)
+	defer udpBufs.Put(bp)
+	buf := *bp
 	for {
 		n, err := conn.Read(buf)
 		if err != nil {

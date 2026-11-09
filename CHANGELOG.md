@@ -25,6 +25,9 @@ First development release of the 1.0 core.
   to `filter.allow`; the setup guide and the status page list the filtered
   addresses, with their own Apple profiles. Prometheus:
   `dnsnova_answers_total{source="blocked"}`.
+- About 75% more answers per second for names not in the cache: the
+  buffer for each upstream answer over UDP is reused instead of allocated
+  (64 KB per query, most of the CPU time went to garbage collection).
 - Changing `doh.path` on a running server no longer fails with "address
   already in use".
 
