@@ -228,3 +228,37 @@ func TestDoHAndBootstrap(t *testing.T) {
 		t.Fatal("a bootstrap server must be an IP address")
 	}
 }
+
+// TestDoHDoesNotFollowRedirects: a DoH upstream that answers with a
+// redirect is an error; the query is not sent on to wherever it points.
+func TestDoHDoesNotFollowRedirects(t *testing.T) {
+	auth := dnstest.Serve(t)
+	var elsewhere atomic.Int32
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/elsewhere" {
+			elsewhere.Add(1)
+			body, _ := io.ReadAll(r.Body)
+			w.Header().Set("Content-Type", "application/dns-message")
+			w.Write(auth.Answer(body, false))
+			return
+		}
+		http.Redirect(w, r, "/elsewhere", http.StatusTemporaryRedirect)
+	}))
+	defer ts.Close()
+	conf := ts.Client().Transport.(*http.Transport).TLSClientConfig
+	_, port, _ := net.SplitHostPort(strings.TrimPrefix(ts.URL, "https://"))
+	s, err := ParseSpec("https://example.com:" + port + "/dns-query#127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, _ := New(s, NewDialer(nil), conf)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err = u.Exchange(ctx, m.BuildUpstreamQuery(&m.Query{Name: m.WireName("doh", "test"), Type: 1, Class: 1}))
+	if err == nil || !strings.Contains(err.Error(), "307") {
+		t.Fatalf("redirect: err = %v", err)
+	}
+	if n := elsewhere.Load(); n != 0 {
+		t.Fatalf("the query followed the redirect %d times", n)
+	}
+}

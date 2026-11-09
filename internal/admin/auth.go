@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/argon2"
@@ -226,6 +227,11 @@ var hashParams = struct {
 // hashSlots bounds how many hashes run at once: each takes 64 MiB.
 var hashSlots = make(chan struct{}, 2)
 
+// loginQueue counts logins being checked or waiting for a slot.
+var loginQueue atomic.Int32
+
+const maxLoginQueue = 8
+
 func hashPassword(pw string) string {
 	salt := randomBytes(16)
 	p := hashParams
@@ -423,6 +429,8 @@ const (
 	maxFailures  = 5
 	failureSpan  = 15 * time.Minute
 	lockDuration = 15 * time.Minute
+	// maxLockEntries bounds the table of addresses with failed attempts.
+	maxLockEntries = 10000
 )
 
 type lockout struct {
@@ -462,9 +470,19 @@ func (l *lockout) fail(ip netip.Addr, now time.Time) {
 	if l.m == nil {
 		l.m = map[netip.Prefix]*failures{}
 	}
-	if len(l.m) > 10000 { // forget stale entries
+	if len(l.m) > maxLockEntries { // forget stale entries
 		for k, f := range l.m {
 			if now.Sub(f.first) > failureSpan && now.After(f.until) {
+				delete(l.m, k)
+			}
+		}
+		// still full: a flood from many addresses. Forget counts in
+		// progress (never a lock in force) so the table stays bounded.
+		for k, f := range l.m {
+			if len(l.m) <= maxLockEntries {
+				break
+			}
+			if now.After(f.until) {
 				delete(l.m, k)
 			}
 		}

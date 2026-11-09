@@ -3,6 +3,7 @@ package guard
 import (
 	"net/netip"
 	"testing"
+	"time"
 )
 
 func ip(s string) netip.Addr { return netip.MustParseAddr(s) }
@@ -138,5 +139,21 @@ func TestPrivateAllowsThisMachine(t *testing.T) {
 		if got := g.Permitted(netip.MustParseAddr(ip)); got != want {
 			t.Errorf("%s: permitted %v, want %v", ip, got, want)
 		}
+	}
+}
+
+// TestGlobalBelowOne: a rate under one query per second lets a query
+// through now and then, instead of none ever.
+func TestGlobalBelowOne(t *testing.T) {
+	g := NewGlobal(0.5)
+	if !g.Allow() {
+		t.Fatal("first query refused")
+	}
+	if g.Allow() {
+		t.Fatal("second query at once allowed with 0.5 per second")
+	}
+	g.last -= int64(3 * time.Second)
+	if !g.Allow() {
+		t.Fatal("still refused after 3 seconds")
 	}
 }

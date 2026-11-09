@@ -67,6 +67,9 @@ func analyze(resp []byte, q *m.Query) (*entry, error) {
 	e := &entry{msg: resp, qEnd: off, ede: ede}
 	flags := m.U16(resp, 2)
 	e.rcode = int(flags & 0xF)
+	// Validated by the resolver or the upstream: keeps its own TTLs like an
+	// answer with signatures, which a client without DO does not receive.
+	e.signed = flags&m.FlagAD != 0
 	e.tc = flags&m.FlagTC != 0
 
 	an, ns, ar := int(m.U16(resp, 6)), int(m.U16(resp, 8)), int(m.U16(resp, 10))
