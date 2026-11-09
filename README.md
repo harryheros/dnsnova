@@ -2,11 +2,12 @@
 
 > A secure, lightweight DNS server for your home, office or a public resolver.
 
+[![Version](https://img.shields.io/badge/version-v1.0.0-blue)](https://github.com/harryheros/dnsnova/releases)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](./LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux%20amd64%20%7C%20arm64-lightgrey.svg)](#)
 [![CI](https://github.com/harryheros/dnsnova/actions/workflows/ci.yml/badge.svg)](https://github.com/harryheros/dnsnova/actions/workflows/ci.yml)
 
-DNSNova answers your devices' DNS queries from its cache or from upstream resolvers you choose (Cloudflare, Quad9, Google or your own), over plain or encrypted DNS. It is set up and managed in the browser, keeps no logs of your queries, and is safe to put on the internet.
+DNSNova answers your devices' DNS queries from its cache, by resolving them itself from the root servers with DNSSEC, or through upstream resolvers you choose (Cloudflare, Quad9, Google or your own), over plain or encrypted DNS. It is set up and managed in the browser, keeps no logs of your queries, and is safe to put on the internet.
 
 ## Install
 
