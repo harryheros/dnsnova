@@ -47,6 +47,9 @@ type fakeCA struct {
 	chals    map[string]*fChal
 	issued   int
 	n        int
+	// certMisses: the certificate download answers 404 this many times
+	// first, like a database replica that has not caught up yet
+	certMisses int
 }
 
 type fOrder struct {
@@ -239,6 +242,11 @@ func (ca *fakeCA) handle(w http.ResponseWriter, r *http.Request) {
 		ca.issued++
 		ca.writeOrder(w, o)
 	case strings.HasPrefix(path, "/cert/"):
+		if ca.certMisses > 0 {
+			ca.certMisses--
+			ca.fail(w, 404, "malformed", "Certificate not found")
+			return
+		}
 		w.Header().Set("Content-Type", "application/pem-certificate-chain")
 		w.Write(ca.orders[strings.TrimPrefix(path, "/cert/")].certPEM)
 	default:
@@ -576,5 +584,23 @@ func TestReverseNames(t *testing.T) {
 	ips := PublicIPs([]netip.Addr{netip.MustParseAddr("10.0.0.1"), netip.MustParseAddr("8.8.8.8"), netip.MustParseAddr("::1"), netip.MustParseAddr("8.8.8.8")})
 	if len(ips) != 1 || ips[0].String() != "8.8.8.8" {
 		t.Fatal(ips)
+	}
+}
+
+func TestCertificateDownloadLag(t *testing.T) {
+	ca := newFakeCA(t)
+	ca.target = freePort(t)
+	ca.certMisses = 3
+	m := newManager(t, t.TempDir())
+	s := Settings{Mode: ModeACME, Domains: []string{"dns.example.test"}, Directory: ca.url("/dir"), Challenge: HTTP01, HTTPListen: ca.target}
+	if err := m.Configure(s); err != nil {
+		t.Fatal(err)
+	}
+	m.tick(context.Background())
+	if st := m.Status(); !st.Ready || st.LastError != "" {
+		t.Fatalf("a certificate not found for a moment after issuance must be fetched again: %+v", st)
+	}
+	if ca.issued != 1 {
+		t.Fatalf("%d certificates issued, want 1", ca.issued)
 	}
 }
