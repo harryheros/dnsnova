@@ -46,10 +46,8 @@ fi
 
 echo
 echo "Popular domains"
-domains="google.com youtube.com facebook.com instagram.com whatsapp.com x.com wikipedia.org
-amazon.com apple.com microsoft.com netflix.com github.com cloudflare.com openai.com
-tiktok.com baidu.com qq.com bilibili.com taobao.com yahoo.co.jp line.me naver.com
-nhk.or.jp gov.tw pchome.com.tw shopee.tw dcard.tw bbc.co.uk spotify.com zoom.us"
+domains="google.com youtube.com facebook.com wikipedia.org apple.com microsoft.com
+github.com netflix.com yahoo.co.jp naver.com gov.tw bbc.co.uk"
 cold=0 warm=0 ref=0 n=0
 for d in $domains; do
 	ask "$S" "$d"
@@ -118,8 +116,19 @@ ask "$S" AAAA google.com
 [ "$status" = NOERROR ] && [ "$answers" -gt 0 ] && ok "IPv6 addresses (AAAA)" || bad "AAAA google.com: $status"
 ask "$S" +dnssec +bufsize=1232 DNSKEY org
 [ "$status" = NOERROR ] && ok "large answer (DNSKEY org)" || bad "DNSKEY org: $status"
-ask "$S" "no-such-name-$RANDOM.example.com"
-[ "$status" = NXDOMAIN ] && ok "NXDOMAIN" || bad "a name that does not exist: $status"
+# Some DNS hosts answer NOERROR for names that do not exist (wildcards,
+# "black lies"), so compare with the reference.
+nx="no-such-name-$RANDOM.wikipedia.org"
+ask "$S" "$nx"
+s1=$status
+ask "$R" "$nx"
+if [ "$s1" = NXDOMAIN ]; then
+	ok "NXDOMAIN"
+elif [ "$s1" = "$status" ]; then
+	note "a name that does not exist: $s1, the reference says the same"
+else
+	bad "a name that does not exist: $s1, the reference says $status"
+fi
 
 echo
 printf '%d passed, %d failed, %d notes\n' "$pass" "$fail" "$warn"

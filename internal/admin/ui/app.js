@@ -360,6 +360,18 @@ async function wizLoad(w) {
 
 const hostOf = (a) => { const i = a.lastIndexOf(":"); return a.slice(0, i).replace(/^\[|\]$/g, ""); };
 const withPort = (ip, port) => (ip.includes(":") ? `[${ip}]:${port}` : `${ip}:${port}`);
+const isAllAddr = (a) => /^(:|0\.0\.0\.0:|\[::\]:)/.test(a);
+const isLocalAddr = (a) => /^(127\.|\[::1\]:|localhost:)/.test(a);
+// encryptedListen puts DoT, DoQ and DoH on the plain DNS addresses; when
+// plain DNS stays on this machine (or listens everywhere), on all addresses.
+const encryptedListen = (plain) => {
+  let hosts = (plain || []).filter((a) => !isLocalAddr(a)).map(hostOf);
+  if (!hosts.length) hosts = [""];
+  return {
+    "dot.listen": hosts.map((x) => withPort(x, 853)), "doq.listen": hosts.map((x) => withPort(x, 853)),
+    "doh.https_listen": hosts.map((x) => withPort(x, 443)),
+  };
+};
 
 const WIZ_VIEWS = [
   // 0: administrator
@@ -402,15 +414,15 @@ const WIZ_VIEWS = [
   // 1: addresses
   (w, body, render) => {
     const cur = w.values["server.listen"];
-    const allNow = cur.length > 0 && cur.every((x) => /^(:|0\.0\.0\.0:|\[::\]:)/.test(x));
-    const current = new Set(allNow ? [] : cur.map(hostOf));
+    const allNow = cur.length > 0 && cur.every(isAllAddr);
+    const localNow = cur.length > 0 && cur.every(isLocalAddr);
+    const current = new Set(allNow || localNow ? [] : cur.map(hostOf));
     const virtual = /^(docker|veth|br-|virbr|cni|flannel|lxc|lxd|vmnet|vboxnet|zt)/;
     const usable = w.addrs.filter((a) => !a.loopback && !/^fe80/i.test(a.address));
     const list = [...new Set([...usable.map((a) => a.address), ...current])];
     const curPort = cur.length ? cur[0].slice(cur[0].lastIndexOf(":") + 1) : "53";
     const port = h("input", { type: "number", min: 1, max: 65535, value: curPort, inputmode: "numeric", "aria-label": "Port" });
     port.style.maxWidth = "120px";
-    const all = h("input", { type: "checkbox", checked: allNow || !list.length });
     const boxes = list.map((ip) => {
       const info = w.addrs.find((a) => a.address === ip);
       const pre = current.size ? current.has(ip) : info && !virtual.test(info.interface);
@@ -418,22 +430,32 @@ const WIZ_VIEWS = [
       return h("label", { class: "check" }, cb, h("span", { class: "mono" }, ip),
         h("span", { class: "small muted", style: { marginLeft: "auto" } }, info ? `${info.public ? "public" : "private"} · ${info.interface}` : "configured"));
     });
-    const listBox = h("fieldset", { style: { border: 0, margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: "8px" } },
+    const listBox = h("fieldset", { style: { border: 0, margin: "0 0 0 28px", padding: 0, display: "flex", flexDirection: "column", gap: "8px" } },
       h("legend", { class: "sr-only" }, "Addresses"), boxes);
-    const sync = () => { listBox.hidden = all.checked; };
-    all.addEventListener("change", sync);
+    // who may use plain DNS: everyone, chosen addresses, or only this server
+    let mode = localNow ? "local" : allNow || !list.length ? "all" : "some";
+    const option = (value, title, help) => {
+      const r = h("input", { type: "radio", name: "plain-who", value, checked: mode === value });
+      r.addEventListener("change", () => { mode = value; sync(); });
+      return h("label", { class: "check" }, r, h("span", null, h("strong", null, title), h("span", { class: "small muted", style: { display: "block" } }, help)));
+    };
+    const sync = () => { listBox.hidden = mode !== "some"; };
+    const choices = h("div", { role: "radiogroup", "aria-label": "Who can use plain DNS", style: { display: "flex", flexDirection: "column", gap: "8px" } },
+      option("all", "Everyone", "All addresses of this server, also ones it gets later. For a public resolver, or when the address can change."),
+      boxes.length ? [option("some", "Chosen addresses", "Only the addresses ticked below, for a server with several."), listBox] : null,
+      option("local", "Only this server (encrypted DNS only)", "Plain DNS stays on 127.0.0.1; devices connect over DNS over HTTPS, TLS or QUIC. The safest choice for a server on the internet."));
     sync();
-    put(body, wizHead(w, "Addresses", "Devices and your router will use these addresses as their DNS server."),
-      h("label", { class: "check" }, all, h("span", null, h("strong", null, "All addresses of this server"), h("span", { class: "small muted", style: { display: "block" } }, "Also ones it gets later. Good when the address can change."))),
-      boxes.length ? listBox : null,
+    put(body, wizHead(w, "Addresses", "Who can use plain DNS (UDP and TCP), the kind routers and most devices are set to."),
+      choices,
       h("label", { class: "block" }, "Port (53 is the standard DNS port; devices and routers expect it)", port),
-      h("p", { class: "small muted", style: { margin: 0 } }, "If another DNS server, such as AdGuard Home, already uses this port, stop it first or choose another port."),
+      h("p", { class: "small muted", style: { margin: 0 } }, "If another DNS server already uses this port, stop it first or choose another port."),
       wizNav(w, render, () => {
         const p = Number(port.value);
         if (!Number.isInteger(p) || p < 1 || p > 65535) throw new Error("The port must be a number from 1 to 65535.");
-        if (all.checked) { w.values["server.listen"] = [":" + p]; return; }
+        if (mode === "all") { w.values["server.listen"] = [":" + p]; return; }
+        if (mode === "local") { w.values["server.listen"] = [withPort("127.0.0.1", p)]; return; }
         const ips = boxes.map((b) => b.querySelector("input")).filter((c) => c.checked).map((c) => c.value);
-        if (!ips.length) throw new Error("Pick at least one address, or All addresses.");
+        if (!ips.length) throw new Error("Tick at least one address, or choose Everyone.");
         w.values["server.listen"] = ips.map((ip) => withPort(ip, p));
       }));
   },
@@ -483,12 +505,7 @@ const WIZ_VIEWS = [
       wizNav(w, render, () => {
         const d = dom.value.trim().toLowerCase().replace(/\.$/, "");
         if (!d) return;
-        const hosts = w.values["server.listen"].map(hostOf);
-        Object.assign(w.values, {
-          "tls.certificate": "acme", "tls.domains": [d], "tls.email": mail.value.trim(),
-          "dot.listen": hosts.map((x) => withPort(x, 853)), "doq.listen": hosts.map((x) => withPort(x, 853)),
-          "doh.https_listen": hosts.map((x) => withPort(x, 443)),
-        });
+        Object.assign(w.values, { "tls.certificate": "acme", "tls.domains": [d], "tls.email": mail.value.trim() }, encryptedListen(w.values["server.listen"]));
       }));
   },
   // 4: review
@@ -528,8 +545,13 @@ const WIZ_VIEWS = [
 // wizDone tells the user what to do next: point devices at DNSNova, and
 // open the dashboard (on its new address if setup moved it).
 function wizDone(w) {
-  let ips = (w.values["server.listen"] || []).map(hostOf).filter((x) => x && x !== "0.0.0.0" && x !== "::");
-  if (!ips.length) ips = w.addrs.filter((a) => !a.loopback && !/^fe80/i.test(a.address)).map((a) => a.address);
+  const plain = w.values["server.listen"] || [];
+  const localOnly = plain.length > 0 && plain.every(isLocalAddr);
+  let ips = plain.map(hostOf).filter((x) => x && x !== "0.0.0.0" && x !== "::");
+  if (!ips.length && !localOnly) ips = w.addrs.filter((a) => !a.loopback && !/^fe80/i.test(a.address)).map((a) => a.address);
+  if (localOnly) ips = [];
+  const domain = (w.values["tls.domains"] || [])[0] || "";
+  const dohURL = domain ? `https://${domain}${w.values["doh.path"] || "/dns-query"}` : "";
   const l0 = (w.values["server.listen"] || [""])[0] || ":53";
   const dnsPort = l0.slice(l0.lastIndexOf(":") + 1);
   const adminL = w.values["admin.listen"] || "";
@@ -558,6 +580,14 @@ function wizDone(w) {
           h("li", null, h("strong", null, "Every device at once: "), "in your router's settings, set this address as the DNS server it hands out (often under DHCP or LAN)."),
           h("li", null, h("strong", null, "One device: "), "in its network or Wi-Fi settings, change DNS from automatic to manual and enter this address."),
           (w.values["tls.domains"] || []).length ? h("li", null, h("strong", null, "Encrypted DNS: "), "once the certificate is issued, Settings › Encrypted DNS lists the addresses for phones and browsers.") : null),
+      ] : null,
+      localOnly ? [
+        h("p", { style: { margin: 0 } }, "Plain DNS answers only on this server. Devices use encrypted DNS:"),
+        domain ? [
+          h("div", { class: "copyrow" }, h("span", { class: "k" }, "DNS over HTTPS"), h("code", null, dohURL), h("button", { type: "button", class: "btn small", onclick: () => copy(dohURL) }, "Copy")),
+          h("div", { class: "copyrow" }, h("span", { class: "k" }, "DNS over TLS"), h("code", null, domain), h("button", { type: "button", class: "btn small", onclick: () => copy(domain) }, "Copy")),
+          h("p", { class: "small muted", style: { margin: 0 } }, "They work once the certificate is issued, usually within a minute. The setup guide in the dashboard has steps for each kind of device."),
+        ] : h("p", { class: "notice warn small", style: { margin: 0 } }, "No domain is set yet, so devices cannot connect. Add one in Settings › Encrypted DNS."),
       ] : null,
       stays ? null : h("p", { class: "notice" }, local
         ? ["The web interface now listens only on this server. ", ssh ? ["Open a tunnel first: ", h("code", null, ssh), ", then "] : "", "open ", h("code", null, url), "."]
@@ -1222,20 +1252,28 @@ const SETTINGS = {
     title: "Encrypted DNS",
     certificate: true,
     sections: [
-      { title: "Certificate", fields: [
-        { key: "tls.certificate", label: "Certificate", type: "select", options: [["acme", "Let's Encrypt (automatic)"], ["files", "Certificate files"], ["off", "None"]], help: "One certificate serves DNS over TLS, QUIC and HTTPS." },
-        { key: "tls.domains", label: "Domains", type: "list", help: "Names pointing to this server. The first is also used for discovery.", show: (v) => v["tls.certificate"] !== "off" },
+      { title: "Domain & certificate", fields: [
+        { key: "tls.domains", label: "Domain", type: "list", placeholder: "dns.example.com", help: "A name pointing to this server (its A or AAAA record), such as dns.example.com. Devices use it for DNS over HTTPS, TLS and QUIC. One per line; the first is shown to clients. Leave empty for no encrypted DNS.",
+          then: (v) => {
+            if (v["tls.domains"].length && v["tls.certificate"] === "off") v["tls.certificate"] = "acme";
+            // a domain with no encrypted protocol on would do nothing: turn them on
+            if (v["tls.domains"].length && !v["dot.listen"].length && !v["doq.listen"].length && !v["doh.https_listen"].length) Object.assign(v, encryptedListen(v["server.listen"]));
+            // no domain, no encrypted DNS
+            if (!v["tls.domains"].length && v["tls.certificate"] === "acme") Object.assign(v, { "tls.certificate": "off", "dot.listen": [], "doq.listen": [], "doh.https_listen": [] });
+          } },
+        { key: "tls.certificate", label: "Certificate", type: "select", options: [["acme", "Let's Encrypt (automatic, free)"], ["files", "My own certificate files"], ["off", "None (no encrypted DNS)"]], help: "Where the certificate for the domain comes from. One certificate serves DNS over HTTPS, TLS and QUIC." },
         { key: "tls.email", label: "Email", type: "text", help: "Let's Encrypt writes here before a certificate expires (optional).", show: (v) => v["tls.certificate"] === "acme" },
-        { key: "tls.challenge", label: "Validation", type: "select", options: [["http-01", "HTTP on port 80"], ["tls-alpn-01", "TLS on port 443"]], help: "How Let's Encrypt checks that this server owns the domain.", show: (v) => v["tls.certificate"] === "acme" },
+        { key: "tls.challenge", label: "Domain check", type: "select", options: [["", "Automatic (recommended)"], ["tls-alpn-01", "Through port 443"], ["http-01", "Through port 80"]], help: "Let's Encrypt connects to this server to confirm the domain points here, when the certificate is issued and every renewal. Automatic uses port 443 when DNS over HTTPS is on it, otherwise port 80. That port must be open to the internet.", show: (v) => v["tls.certificate"] === "acme" },
         { key: "tls.ip_addresses", label: "Include IP addresses", type: "bool", help: "Lets clients switch to encrypted DNS automatically. Such certificates are renewed every few days.", show: (v) => v["tls.certificate"] === "acme" },
         { key: "tls.cert_file", label: "Certificate file", type: "text", help: "PEM file with the full chain; reloaded when it changes.", show: (v) => v["tls.certificate"] === "files" },
         { key: "tls.key_file", label: "Key file", type: "text", help: "Its private key. DNSNova must be able to read it.", show: (v) => v["tls.certificate"] === "files" },
       ] },
       { title: "Protocols", fields: [
+        { key: "server.listen", label: "Plain DNS", type: "list", help: "UDP and TCP, usually port 53. List each address rather than 0.0.0.0. To offer only encrypted DNS, keep it on 127.0.0.1 (this machine)." },
         { key: "dot.listen", label: "DNS over TLS", type: "listen", port: 853, help: "Android Private DNS, iOS and most routers. TCP 853." },
         { key: "doq.listen", label: "DNS over QUIC", type: "listen", port: 853, help: "Faster on mobile networks; fewer clients support it. UDP 853." },
         { key: "doh.https_listen", label: "DNS over HTTPS", type: "listen", port: 443, help: "Browsers, Windows and iOS profiles. TCP 443." },
-        { key: "doh.http3", label: "Also over HTTP/3", type: "bool", sub: true, help: "The same address and port over UDP." },
+        { key: "doh.http3", label: "HTTP/3 for DNS over HTTPS", type: "bool", help: "Faster on mobile networks and patchy Wi-Fi. Uses UDP 443 on the same addresses; where that is blocked, clients use HTTP/2 instead.", show: (v) => v["doh.https_listen"].length > 0 },
         { key: "doh.path", label: "DoH path", type: "text", help: "Usually /dns-query." },
         { key: "status.enabled", label: "Public status page", type: "bool", help: "A page at the domain's address (https://domain/) with the addresses, setup steps for each kind of device, what this server keeps, and a check that a device is using it. It shows no statistics." },
         { key: "doh.listen", label: "Behind a reverse proxy", type: "text", help: "Plain HTTP for nginx or Caddy, such as 127.0.0.1:8053. Leave empty if unused." },
@@ -1250,7 +1288,6 @@ const SETTINGS = {
         { key: "server.mode", label: "Mode", type: "select", options: [["public", "Public: anyone, with limits"], ["private", "Private: listed networks only"]], help: "Private mode answers no one else, not even with an error." },
         { key: "access.allow", label: "Allowed networks", type: "list", help: "Addresses or networks, one per line.", show: (v) => v["server.mode"] === "private" },
         { key: "access.deny", label: "Blocked clients", type: "list", help: "Addresses or networks that never get an answer, in either mode, such as 203.0.113.7 or 198.51.100.0/24. One per line." },
-        { key: "server.listen", label: "DNS addresses", type: "list", help: "UDP and TCP, usually port 53. List each address rather than 0.0.0.0." },
       ] },
       { title: "Limits", fields: [
         { key: "limits.client_qps", label: "Per client", type: "number", help: "Queries a second from one address (0 = no limit)." },
@@ -1341,7 +1378,9 @@ async function settingsPage(main, id) {
     const set = changed();
     const n = Object.keys(set).length;
     const discard = h("button", { type: "button", class: "btn", disabled: !n, onclick: () => { form.val = { ...form.cur }; form.problems = {}; Object.values(form.rows).forEach((r) => r.row.reset()); refresh(); } }, "Discard");
-    const apply = h("button", { type: "button", class: "btn primary", disabled: true }, "Apply");
+    // while the preview is checked the button says so instead of looking
+    // faded, which read as "cannot be pressed"
+    const apply = h("button", { type: "button", class: "btn primary busy", disabled: true }, "Checking…");
     const list = h("div");
     review.className = "review" + (n ? " dirty" : "");
     review.hidden = !n;
@@ -1349,6 +1388,8 @@ async function settingsPage(main, id) {
       h("div", { class: "small muted" }, "Applies without a restart. The previous settings are kept in Admin › Configuration history."));
     if (!n) { setProblems({}); return; }
     const seq = ++previewSeq;
+    await new Promise((r) => setTimeout(r, 250)); // typing: check once it pauses
+    if (seq !== previewSeq) return;
     try {
       const p = await api("POST", "/config/preview", { hash: form.hash, set });
       if (seq !== previewSeq) return;
@@ -1358,6 +1399,8 @@ async function settingsPage(main, id) {
       fill(list, changeList(p.changes, labelOf), p.warnings.length ? h("ul", { class: "small warn", style: { margin: 0 } }, p.warnings.map((x) => h("li", null, x))) : null,
         p.restart_required.length ? h("p", { class: "small warn" }, "Takes effect after a restart: " + p.restart_required.join(", ")) : null);
       apply.disabled = false;
+      apply.classList.remove("busy");
+      apply.textContent = "Apply";
       apply.onclick = async () => {
         apply.disabled = true;
         try {
@@ -1371,6 +1414,9 @@ async function settingsPage(main, id) {
       };
     } catch (e) {
       if (seq !== previewSeq) return;
+      apply.classList.remove("busy");
+      apply.textContent = "Apply";
+      apply.title = "Fix the problems shown first";
       showApplyError(e, list);
     }
   };
@@ -1403,7 +1449,8 @@ async function settingsPage(main, id) {
 function fieldRow(f, form, onchange) {
   const id = "f-" + f.key.replace(/\./g, "-");
   const prob = h("div", { class: "problem", id: id + "-err" });
-  const set = (v) => { form.val[f.key] = v; onchange(); };
+  // f.then may adjust other fields after this one changes
+  const set = (v) => { form.val[f.key] = v; if (f.then) f.then(form.val); onchange(); };
   let ctl, sync = () => {}, reset;
   const v = form.val[f.key];
   switch (f.type) {
@@ -1422,7 +1469,9 @@ function fieldRow(f, form, onchange) {
       sw.addEventListener("click", () => {
         if (form.val[f.key].length) set([]);
         else {
-          const hosts = (form.val["server.listen"] || []).map(hostOf).filter(Boolean);
+          // the plain DNS addresses, except this machine's own (127.0.0.1 keeps
+          // plain DNS local; encrypted DNS still has to be reachable)
+          const hosts = (form.val["server.listen"] || []).map(hostOf).filter((x) => x && !/^(127\.|::1$|localhost$)/.test(x));
           set((hosts.length ? hosts : ["0.0.0.0"]).map((x) => withPort(x, f.port)));
           ta.value = form.val[f.key].join("\n");
         }
@@ -1443,10 +1492,11 @@ function fieldRow(f, form, onchange) {
       if (!f.options.some(([val]) => val === v)) ctl.append(h("option", { value: v }, v));
       ctl.value = v;
       reset = () => { ctl.value = form.val[f.key]; };
+      sync = () => { if (ctl.value !== form.val[f.key]) ctl.value = form.val[f.key]; };
       break;
     }
     case "list": {
-      ctl = h("textarea", { id, spellcheck: "false" });
+      ctl = h("textarea", { id, spellcheck: "false", placeholder: f.placeholder || null });
       ctl.value = v.join("\n");
       ctl.addEventListener("input", () => set(lines(ctl.value)));
       reset = () => { ctl.value = form.val[f.key].join("\n"); };
@@ -1466,7 +1516,7 @@ function fieldRow(f, form, onchange) {
   }
   const inline = f.type === "bool" || f.type === "listen";
   const labelEl = f.type === "bool" || f.type === "listen" ? h("span", { class: "label", id: id + "-l" }, f.label) : h("label", { for: id }, f.label);
-  const el = h("div", { class: "field" + (inline ? " inline" : "") + (f.sub ? " sub" : ""), "data-key": f.key },
+  const el = h("div", { class: "field" + (inline ? " inline" : ""), "data-key": f.key },
     h("div", { class: "text" }, labelEl, h("div", { class: "help", id: id + "-h" }, f.help)),
     h("div", { class: "ctl" }, ctl, prob));
   const target = ctl.matches?.("input,select,textarea,button") ? ctl : ctl.querySelector("button");
