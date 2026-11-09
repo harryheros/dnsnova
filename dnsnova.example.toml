@@ -110,11 +110,13 @@ ipv6 = true
 # Never after a failed DNSSEC check.
 fallback = true
 # A public server never sends queries into private networks; list networks
-# with your own name servers here, e.g. ["10.0.0.0/8"].
+# with your own name servers here, e.g. ["10.0.0.0/8"]. This also opens
+# 127.0.0.0/8 and link-local addresses when listed, nothing else.
 # allow_networks = []
 
 [cache]
-size = 100000           # entries, about 1 to 2 KB each; 0 disables the cache
+size = 100000           # entries, about 1 to 2 KB each; 0 disables the answer
+                        # cache (recursion keeps its own working cache)
 min_ttl = 0             # raise short TTLs to at least this
 max_ttl = "24h"
 max_negative_ttl = "1h" # NXDOMAIN and "no records"

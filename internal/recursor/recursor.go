@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -105,28 +106,31 @@ func ParseAnchor(s string) ([]byte, error) {
 	if len(f) != 4 {
 		return nil, errors.New(`want "key-tag algorithm digest-type digest"`)
 	}
-	var tag, alg, dt int
-	if _, err := fmt.Sscanf(f[0]+" "+f[1]+" "+f[2], "%d %d %d", &tag, &alg, &dt); err != nil || tag > 65535 || alg > 255 || dt > 255 {
+	tag, err1 := strconv.ParseUint(f[0], 10, 16)
+	alg, err2 := strconv.ParseUint(f[1], 10, 8)
+	dt, err3 := strconv.ParseUint(f[2], 10, 8)
+	if err1 != nil || err2 != nil || err3 != nil {
 		return nil, errors.New("key tag, algorithm and digest type must be numbers")
 	}
+	want := map[uint64]int{digestSHA1: 20, digestSHA256: 32, digestSHA384: 48}[dt]
+	if want == 0 {
+		return nil, errors.New("digest type must be 1 (SHA-1), 2 (SHA-256) or 4 (SHA-384)")
+	}
 	dig, err := hex.DecodeString(f[3])
-	if err != nil || len(dig) < 20 {
-		return nil, errors.New("the digest must be hexadecimal")
+	if err != nil || len(dig) != want {
+		return nil, fmt.Errorf("the digest must be %d hexadecimal characters for digest type %d", want*2, dt)
 	}
 	return append([]byte{byte(tag >> 8), byte(tag), byte(alg), byte(dt)}, dig...), nil
 }
 
 // New returns a Recursor.
 func New(c Config, log *slog.Logger) *Recursor {
-	if c.CacheSize <= 0 {
-		c.CacheSize = 100000
-	}
 	r := &Recursor{
-		sets:   newTTLMap[*cachedSet](c.CacheSize / 2),
+		sets:   newTTLMap[*cachedSet](0),
 		wilds:  newTTLMap[*cachedSet](10000),
-		negs:   newTTLMap[*negEntry](c.CacheSize / 4),
+		negs:   newTTLMap[*negEntry](0),
 		keys:   newTTLMap[*keyEntry](10000),
-		delegs: newTTLMap[*delegation](c.CacheSize / 4),
+		delegs: newTTLMap[*delegation](0),
 		infra:  newInfra(),
 		log:    log,
 		now:    time.Now,
@@ -138,7 +142,7 @@ func New(c Config, log *slog.Logger) *Recursor {
 	return r
 }
 
-// SetConfig applies a new configuration; caches are kept.
+// SetConfig applies a new configuration; caches are kept, and resized.
 func (r *Recursor) SetConfig(c Config) {
 	if len(c.RootHints) == 0 {
 		for _, s := range builtinRoots {
@@ -155,6 +159,16 @@ func (r *Recursor) SetConfig(c Config) {
 			ds.data = append(ds.data, d)
 		}
 	}
+	// The resolver cannot work without remembering delegations and keys
+	// (every query would start at the root), so a size of 0, which turns
+	// the answer cache off, leaves this one at its default.
+	size := c.CacheSize
+	if size <= 0 {
+		size = 100000
+	}
+	r.sets.setLimit(size / 2)
+	r.negs.setLimit(size / 4)
+	r.delegs.setLimit(size / 4)
 	old := r.cfg.Swap(&c)
 	r.anchors.Store(ds)
 	if old != nil && (old.DNSSEC != c.DNSSEC || fmt.Sprint(old.TrustAnchors) != fmt.Sprint(c.TrustAnchors) ||
@@ -201,6 +215,8 @@ func (r *Recursor) Janitor(ctx context.Context) {
 			r.negs.sweep(now, time.Minute)
 			r.keys.sweep(now, time.Minute)
 			r.delegs.sweep(now, time.Minute)
+			r.wilds.sweep(now, time.Minute)
+			r.nsecs.sweep(now)
 		}
 	}
 }
@@ -394,20 +410,27 @@ func (r *Recursor) special(q *m.Query, flags uint16) []byte {
 // ---- sending queries ----
 
 // allowed reports whether queries may be sent to a.
+//
+// Addresses that are never a name server (unspecified, multicast,
+// broadcast, 0.0.0.0/8) are refused whatever Allow says, and so is IPv6
+// when it is off. Allow opens what is refused only because it is local:
+// this machine, the link, and private networks.
 func (r *Recursor) allowed(cfg *Config, a netip.Addr) bool {
-	for _, p := range cfg.Allow {
-		if p.Contains(a) {
-			return true
-		}
-	}
-	if !a.IsValid() || a.IsUnspecified() || a.IsLoopback() || a.IsMulticast() || a.IsLinkLocalUnicast() ||
-		a.IsInterfaceLocalMulticast() || a == netip.AddrFrom4([4]byte{255, 255, 255, 255}) {
+	if !a.IsValid() || a.IsUnspecified() || a.IsMulticast() || a == netip.AddrFrom4([4]byte{255, 255, 255, 255}) {
 		return false
 	}
 	if a.Is4() && a.As4()[0] == 0 {
 		return false
 	}
 	if a.Is6() && !cfg.IPv6 {
+		return false
+	}
+	for _, p := range cfg.Allow {
+		if p.Contains(a) {
+			return true
+		}
+	}
+	if a.IsLoopback() || a.IsLinkLocalUnicast() {
 		return false
 	}
 	if cfg.BlockPrivate && (a.IsPrivate() || netip.MustParsePrefix("100.64.0.0/10").Contains(a)) {

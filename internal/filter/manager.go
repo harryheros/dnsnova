@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/netip"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -80,7 +82,7 @@ type Manager struct {
 func NewManager(dir string, log *slog.Logger, publish func(*Set)) *Manager {
 	return &Manager{
 		dir: dir, log: log, publish: publish,
-		HTTP:  &http.Client{Timeout: 60 * time.Second, CheckRedirect: checkRedirect},
+		HTTP:  newHTTPClient(),
 		Now:   time.Now,
 		lists: map[string]*ListStatus{},
 		wake:  make(chan struct{}, 1),
@@ -202,6 +204,10 @@ func (m *Manager) stamps(src string) (updated, checked time.Time) {
 // address on this machine or a private network (where it could reach
 // services that are not meant to be asked, such as a cloud's metadata
 // address).
+//
+// A name in a redirect can resolve to such an address too, so the address
+// is checked again where it cannot be dodged: when the connection is made
+// (guardDial), for every connection opened after a redirect.
 func checkRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) >= 5 {
 		return errors.New("too many redirects")
@@ -209,13 +215,49 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 	if via[0].URL.Scheme == "https" && req.URL.Scheme != "https" {
 		return errors.New("redirected from HTTPS to " + req.URL.Scheme)
 	}
-	if ip, err := netip.ParseAddr(strings.Trim(req.URL.Hostname(), "[]")); err == nil {
-		ip = ip.Unmap()
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
-			return errors.New("redirected to a local address")
-		}
+	if ip, err := netip.ParseAddr(strings.Trim(req.URL.Hostname(), "[]")); err == nil && localAddr(ip) {
+		return errLocalRedirect
+	}
+	if f, ok := req.Context().Value(redirectedKey{}).(*atomic.Bool); ok {
+		f.Store(true)
 	}
 	return nil
+}
+
+var errLocalRedirect = errors.New("redirected to a local address")
+
+// redirectedKey marks, in a download's context, that it has been redirected.
+type redirectedKey struct{}
+
+var cgnat = netip.MustParsePrefix("100.64.0.0/10")
+
+func localAddr(ip netip.Addr) bool {
+	ip = ip.Unmap()
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() ||
+		ip.IsMulticast() || cgnat.Contains(ip)
+}
+
+// guardDial refuses to connect to a local address once the download has
+// been redirected. The list's own address, which the administrator typed,
+// may be anywhere.
+func guardDial(ctx context.Context, _, address string, _ syscall.RawConn) error {
+	if f, ok := ctx.Value(redirectedKey{}).(*atomic.Bool); !ok || !f.Load() {
+		return nil
+	}
+	if ap, err := netip.ParseAddrPort(address); err != nil || localAddr(ap.Addr()) {
+		return errLocalRedirect
+	}
+	return nil
+}
+
+func newHTTPClient() *http.Client {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.Proxy = nil
+	tr.DialContext = (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second, ControlContext: guardDial}).DialContext
+	// one connection per request: a connection opened before a redirect
+	// is never reused for the address after it
+	tr.DisableKeepAlives = true
+	return &http.Client{Timeout: 60 * time.Second, Transport: tr, CheckRedirect: checkRedirect}
 }
 
 // path is where the copy of src is kept.
@@ -282,6 +324,7 @@ func (m *Manager) download(ctx context.Context, src string) ([]byte, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
+	ctx = context.WithValue(ctx, redirectedKey{}, new(atomic.Bool))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, src, nil)
 	if err != nil {
 		return nil, err

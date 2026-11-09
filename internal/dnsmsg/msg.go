@@ -8,6 +8,7 @@
 package dnsmsg
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"strconv"
@@ -49,6 +50,7 @@ const (
 	EDEOther        = 0
 	EDEStaleAnswer  = 3
 	EDEBlocked      = 15
+	EDENotAuth      = 20
 	EDENotSupported = 21
 	EDENetworkError = 23
 
@@ -72,6 +74,9 @@ const (
 
 // ErrMalformed reports a message that does not follow the wire format.
 var ErrMalformed = errors.New("malformed dns message")
+
+// ErrExtendedRcode reports a response with an extended RCODE (RFC 6891).
+var ErrExtendedRcode = errors.New("upstream answered with an extended error code")
 
 // U16 reads a big-endian uint16. The caller must have checked bounds.
 func U16(b []byte, off int) uint16 { return binary.BigEndian.Uint16(b[off:]) }
@@ -331,7 +336,9 @@ func eachOption(rdata []byte, fn func(code uint16, data []byte)) error {
 // without it, plus the raw Extended DNS Error options it carried (to be
 // passed on to clients). Every other option (padding, cookies, NSID, ...)
 // belongs to the hop it arrived on and is dropped. A message without OPT
-// is returned unchanged.
+// is returned unchanged. A response whose OPT record carries the upper bits
+// of an extended RCODE (BADVERS, BADCOOKIE, ...; RFC 6891 6.1.3) is an
+// error: without OPT its header would read as a different, ordinary RCODE.
 func StripOPT(msg []byte) (out, ede []byte, err error) {
 	if len(msg) < HeaderLen || U16(msg, 4) > 1 {
 		return nil, nil, ErrMalformed
@@ -354,6 +361,9 @@ func StripOPT(msg []byte) (out, ede []byte, err error) {
 				return ErrMalformed
 			}
 			start, end = rr.Start, rr.End
+			if msg[rr.TTLOff] != 0 {
+				return ErrExtendedRcode
+			}
 			return eachOption(msg[rr.RDOff:rr.End], func(code uint16, data []byte) {
 				if code == OptEDE && len(data) >= 2 {
 					ede = binary.BigEndian.AppendUint16(ede, code)
@@ -478,16 +488,20 @@ func MatchResponse(query, resp []byte) bool {
 	if U16(resp, 0) != U16(query, 0) || U16(resp, 2)&FlagQR == 0 || U16(resp, 4) != 1 {
 		return false
 	}
+	if (U16(resp, 2)^U16(query, 2))&opcodeMask != 0 {
+		return false
+	}
 	_, qEnd, err := ReadQName(query, HeaderLen)
-	if err != nil || qEnd+4 > len(query) {
+	if err != nil || qEnd+4 > len(query) || qEnd+4 > len(resp) {
 		return false
 	}
-	qEnd += 4
-	if len(resp) < qEnd {
-		return false
-	}
-	return asciiEqualFold(query[HeaderLen:qEnd], resp[HeaderLen:qEnd])
+	// The name may differ in letter case; type and class are numbers and
+	// must be the same bytes (type 65 is not type 97).
+	return asciiEqualFold(query[HeaderLen:qEnd], resp[HeaderLen:qEnd]) &&
+		bytes.Equal(query[qEnd:qEnd+4], resp[qEnd:qEnd+4])
 }
+
+const opcodeMask = 0x7800
 
 func asciiEqualFold(a, b []byte) bool {
 	if len(a) != len(b) {

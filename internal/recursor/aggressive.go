@@ -224,3 +224,17 @@ func (x *nsecIndex) wildcard(qname string, qtype uint16, now time.Time) (wild st
 	}
 	return wild, it.set
 }
+
+// sweep forgets expired NSEC records and zones left with nothing.
+func (x *nsecIndex) sweep(now time.Time) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	for name, z := range x.zones {
+		z.list = slices.DeleteFunc(z.list, func(it nsecItem) bool { return now.After(it.exp) })
+		if len(z.list) == 0 {
+			delete(x.zones, name)
+		} else if cap(z.list) > 2*len(z.list)+16 {
+			z.list = slices.Clip(slices.Clone(z.list))
+		}
+	}
+}

@@ -157,7 +157,8 @@ func NewGlobal(rate float64) *Global {
 	if rate <= 0 {
 		return nil
 	}
-	return &Global{rate: rate, burst: rate, n: rate, last: time.Now().UnixNano()}
+	burst := max(rate, 1) // a rate below 1 still lets one query through at a time
+	return &Global{rate: rate, burst: burst, n: burst, last: time.Now().UnixNano()}
 }
 
 // Allow takes one token.

@@ -718,3 +718,45 @@ func TestResetAccount(t *testing.T) {
 		t.Fatalf("reset with nothing to remove: %v", err)
 	}
 }
+
+// TestLoginQueueBounded: when password checks are queueing, more logins
+// are turned away at once (and not counted as failures) instead of waiting.
+func TestLoginQueueBounded(t *testing.T) {
+	noLocalTrust(t)
+	e := newEnv(t)
+	e.setup()
+	good := map[string]string{"username": "ops", "password": "correct horse battery"}
+	loginQueue.Store(maxLoginQueue)
+	for range maxFailures + 1 {
+		if r := e.do(e.client(), "POST", "/api/v1/login", good); r.code != 503 {
+			t.Fatalf("login with a full queue: %d %s", r.code, r.raw)
+		}
+	}
+	loginQueue.Store(0)
+	if r := e.do(e.client(), "POST", "/api/v1/login", good); r.code != 200 {
+		t.Fatalf("login afterwards: %d %s", r.code, r.raw)
+	}
+	if n := loginQueue.Load(); n != 0 {
+		t.Fatalf("queue count left at %d", n)
+	}
+}
+
+// TestLockoutTableBounded: failures from very many addresses do not grow
+// the table without limit, and an address that is locked stays locked.
+func TestLockoutTableBounded(t *testing.T) {
+	var l lockout
+	now := time.Unix(1_800_000_000, 0)
+	locked := netip.MustParseAddr("203.0.113.9")
+	for range maxFailures {
+		l.fail(locked, now)
+	}
+	for i := range 3 * maxLockEntries {
+		l.fail(netip.AddrFrom4([4]byte{10, byte(i >> 16), byte(i >> 8), byte(i)}), now)
+	}
+	if len(l.m) > maxLockEntries+1 {
+		t.Fatalf("%d entries kept", len(l.m))
+	}
+	if l.locked(locked, now) == 0 {
+		t.Fatal("a locked address was forgotten")
+	}
+}

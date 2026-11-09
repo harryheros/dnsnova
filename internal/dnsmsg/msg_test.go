@@ -167,3 +167,51 @@ func TestReadName(t *testing.T) {
 		}
 	}
 }
+
+// TestMatchResponseExactTypeAndClass: only the name is compared without
+// regard to letter case. Type 65 (HTTPS, 0x41) and type 97 (0x61) differ
+// by the bit that separates "A" from "a".
+func TestMatchResponseExactTypeAndClass(t *testing.T) {
+	q := dnstest.Query(7, "a.test", 65, false, false)
+	resp := func(change func(r []byte)) []byte {
+		r := append([]byte(nil), q...)
+		r[2] |= 0x80
+		change(r)
+		return r
+	}
+	n := len(q)
+	if !m.MatchResponse(q, resp(func([]byte) {})) {
+		t.Fatal("the same question must match")
+	}
+	if m.MatchResponse(q, resp(func(r []byte) { r[n-3] = 97 })) {
+		t.Error("type 97 matched a query for type 65")
+	}
+	if m.MatchResponse(q, resp(func(r []byte) { r[n-4] = 0x20 })) {
+		t.Error("a different type (high byte) matched")
+	}
+	qc := dnstest.Query(7, "a.test", 1, false, false)
+	qc[len(qc)-1] = 0x41
+	rc := append([]byte(nil), qc...)
+	rc[2] |= 0x80
+	rc[len(rc)-1] = 0x61
+	if m.MatchResponse(qc, rc) {
+		t.Error("class 0x61 matched a query for class 0x41")
+	}
+	if m.MatchResponse(q, resp(func(r []byte) { r[2] |= 0x28 })) { // opcode 5 (UPDATE)
+		t.Error("a response with another opcode matched")
+	}
+}
+
+// TestStripOPTExtendedRcode: BADVERS is RCODE 16: 0 in the header and 1 in
+// the OPT record. Without OPT it would read as "no error".
+func TestStripOPTExtendedRcode(t *testing.T) {
+	r := dnstest.Query(7, "a.test", 1, true, false)
+	r[2] |= 0x80
+	if _, _, err := m.StripOPT(r); err != nil {
+		t.Fatalf("plain OPT: %v", err)
+	}
+	r[len(r)-6] = 1 // the first byte of the OPT record's TTL field
+	if _, _, err := m.StripOPT(r); err != m.ErrExtendedRcode {
+		t.Fatalf("extended RCODE: err = %v", err)
+	}
+}

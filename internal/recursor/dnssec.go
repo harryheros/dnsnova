@@ -116,6 +116,7 @@ func groupRRsets(rrs []rr) []*rrset {
 		covered := binary.BigEndian.Uint16(r.data)
 		if s := idx[key(r.name, covered, r.class)]; s != nil && len(s.sigs) < maxSigsPerRRset {
 			s.sigs = append(s.sigs, r.data)
+			s.ttl = min(s.ttl, r.ttl) // RFC 4035 5.3.3: no longer than the RRSIG's own TTL
 		}
 	}
 	return sets

@@ -49,7 +49,7 @@ func New(s Spec, d *Dialer, tlsConf *tls.Config) (Upstream, error) {
 			TLSHandshakeTimeout: 5 * time.Second,
 			Proxy:               nil, // never send DNS through an HTTP proxy from the environment
 		}
-		return &dohUpstream{spec: s, tr: tr, client: &http.Client{Transport: tr}}, nil
+		return &dohUpstream{spec: s, tr: tr, client: &http.Client{Transport: tr, CheckRedirect: noRedirect}}, nil
 	case "quic":
 		conf := tlsConfig(tlsConf)
 		conf.ServerName = s.Host
@@ -306,3 +306,8 @@ func (u *dohUpstream) Exchange(ctx context.Context, msg []byte) ([]byte, error) 
 	}
 	return body, nil
 }
+
+// noRedirect: a DNS over HTTPS upstream answers at the address it was given.
+// Following a redirect would send the query (the POST body, with 307/308)
+// to a server nobody chose.
+func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }

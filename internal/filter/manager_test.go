@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -223,5 +225,34 @@ func TestRebuildsKeepOrder(t *testing.T) {
 	h.m.Configure(Settings{Enabled: true, Interval: time.Hour, Block: []string{"last.example"}})
 	if !h.blocked(t, "last.example") || h.blocked(t, "n1.example") {
 		t.Fatal("the rules published are not those of the newest settings")
+	}
+}
+
+// TestRedirectToLocalName: a list server cannot send the download to a
+// name that resolves to this machine. The address is checked when the
+// connection is made, so it does not matter what the name looks like.
+func TestRedirectToLocalName(t *testing.T) {
+	var reached atomic.Int32
+	inner := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reached.Add(1)
+		io.WriteString(w, rules(50, "secret"))
+	}))
+	defer inner.Close()
+	_, port, _ := net.SplitHostPort(strings.TrimPrefix(inner.URL, "http://"))
+	outer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://localhost:"+port+"/list.txt", http.StatusFound)
+	}))
+	defer outer.Close()
+
+	m := NewManager(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), func(*Set) {})
+	if _, err := m.download(context.Background(), outer.URL+"/list.txt"); err == nil || !strings.Contains(err.Error(), "local address") {
+		t.Fatalf("redirect to localhost: err = %v", err)
+	}
+	if n := reached.Load(); n != 0 {
+		t.Fatalf("the local server was reached %d times", n)
+	}
+	// the address the administrator typed may be local
+	if _, err := m.download(context.Background(), inner.URL+"/list.txt"); err != nil {
+		t.Fatalf("direct download from a local address: %v", err)
 	}
 }

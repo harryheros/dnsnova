@@ -4,6 +4,39 @@ All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
 **Security**.
 
+## 1.0.3 (2026-11-09)
+
+- **Security**: a reply from an upstream or a name server is matched to
+  its query by the exact record type and class. Letter case was ignored
+  over the whole question, so type 97 passed for type 65 (HTTPS).
+- **Security**: a DNS over HTTPS upstream that answers with a redirect is
+  an error. The query is no longer sent on to the address it points to.
+- **Security**: a filter list download that is redirected cannot connect
+  to this machine or a private network. The address is now checked when
+  the connection is made, so a name that resolves to such an address is
+  stopped too.
+- **Security**: the sign-in page turns extra logins away (503) while
+  password checks are queueing, and the table of failed attempts has a
+  fixed limit.
+- Queries without the "recursion desired" flag are refused. They ask what
+  is in the cache, which shows what others have looked up.
+- DNSSEC: a validated answer is kept no longer than the TTL of its
+  signature record. `cache.min_ttl` does not stretch a validated answer
+  for clients that get no signatures either. The "validated" flag (AD)
+  is not set on stale answers, nor for clients that check for themselves
+  (CD).
+- An upstream answer with an extended error code (such as BADVERS) is a
+  failure. It was read as "no such data" and cached.
+- `limits.global_qps` below 1 refused every query.
+- `recursion.allow_networks` opens private networks, this machine and the
+  local link. It no longer opens addresses that are never a name server
+  (0.0.0.0/8, multicast, broadcast), nor IPv6 while `recursion.ipv6` is
+  off.
+- `recursion.trust_anchors` are checked strictly: no negative numbers,
+  digest type 1, 2 or 4, and a digest of the matching length.
+- A changed `cache.size` resizes the resolver's own cache without a
+  restart, and expired NSEC records are removed every minute.
+
 ## 1.0.2 (2026-11-09)
 
 - The setup wizard asks who the server is for: "Anyone on the internet"
