@@ -38,6 +38,9 @@ First stable release.
   into private networks on a public server. The upstreams can step in when
   a domain's own servers cannot be reached, never after a failed DNSSEC
   check. In the setup wizard, the web interface and the metrics.
+  Where IPv6 is configured but silently broken, recursion prefers IPv4
+  until IPv6 has answered, and turns IPv6 off for 10 minutes after three
+  timeouts in a row, instead of waiting for it on many names.
 - Filtering, as a second door on the same server (off by default,
   `[filter]`). The usual addresses stay unfiltered; clients that want
   blocking use the filtered plain-DNS address (`filter.listen`), a filtered
