@@ -176,6 +176,13 @@ func (r *Resolver) resolve(req []byte, o Opts, mayFetch bool) (Result, bool) {
 	if resp := localAnswer(req, q, s); resp != nil {
 		return f.done(Result{Resp: resp, Q: q, Source: stats.SourceLocal, Status: "local"}, nil), true
 	}
+	if q.Flags&m.FlagRD == 0 {
+		// A resolver's clients ask for recursion. Without it the only
+		// thing to learn here is what others have looked up (the cache),
+		// so nothing is answered from it and nobody is asked.
+		return f.done(Result{Resp: m.ErrorResponse(req, q, m.RcodeRefused), Q: q, Source: stats.SourceLocal, Status: "refused"},
+			m.EDE(m.EDENotAuth, "recursion not requested")), true
+	}
 	if o.Filter && r.filter.Load().Blocked(q.Name) {
 		return f.blocked(), true
 	}
@@ -387,8 +394,11 @@ func (r *Resolver) build(e *entry, req []byte, q *m.Query, now time.Time, stale 
 	upAD := flags & m.FlagAD
 	flags &^= m.FlagAA | m.FlagRD | m.FlagCD | m.FlagAD
 	flags |= m.FlagRA | q.Flags&(m.FlagRD|m.FlagCD)
-	if q.DO || q.Flags&m.FlagAD != 0 {
-		flags |= upAD // RFC 6840 5.8: AD only for clients that asked
+	if (q.DO || q.Flags&m.FlagAD != 0) && q.Flags&m.FlagCD == 0 && !stale {
+		// RFC 6840 5.8: AD only for clients that asked. Not with CD (the
+		// client checks for itself), and not on a stale answer, whose
+		// signatures may have expired since it was validated.
+		flags |= upAD
 	}
 	binary.BigEndian.PutUint16(out[2:], flags)
 

@@ -606,3 +606,118 @@ func TestServerTableBounded(t *testing.T) {
 		t.Fatalf("%d servers remembered, limit %d", n, maxServers)
 	}
 }
+
+// TestRRSIGTTLBoundsRRset: a validated RRset is kept no longer than the
+// TTL of its RRSIG as received (RFC 4035 5.3.3).
+func TestRRSIGTTLBoundsRRset(t *testing.T) {
+	name := m.WireName("a", "test")
+	sig := make([]byte, 18+1+64)
+	sig[1] = 1 // type covered: A
+	sets := groupRRsets([]rr{
+		{name: name, typ: 1, class: 1, ttl: 3600, data: []byte{192, 0, 2, 1}},
+		{name: name, typ: typeRRSIG, class: 1, ttl: 300, data: sig},
+		{name: name, typ: 28, class: 1, ttl: 3600, data: make([]byte, 16)},
+	})
+	if len(sets) != 2 || sets[0].ttl != 300 || len(sets[0].sigs) != 1 {
+		t.Fatalf("A: ttl %d, %d signatures", sets[0].ttl, len(sets[0].sigs))
+	}
+	if sets[1].ttl != 3600 {
+		t.Fatalf("AAAA without a signature: ttl %d", sets[1].ttl)
+	}
+}
+
+// TestAllowNeverOpensNonServers: allow_networks opens local networks, not
+// addresses that are never a name server, and not IPv6 when it is off.
+func TestAllowNeverOpensNonServers(t *testing.T) {
+	r := New(Config{BlockPrivate: true}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	all := []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0")}
+	for addr, want := range map[string][2]bool{ // without Allow, with Allow
+		"198.51.100.1":    {true, true},
+		"10.1.2.3":        {false, true},
+		"100.64.0.1":      {false, true},
+		"127.0.0.1":       {false, true},
+		"169.254.1.1":     {false, true},
+		"0.0.0.0":         {false, false},
+		"0.1.2.3":         {false, false},
+		"224.0.0.251":     {false, false},
+		"255.255.255.255": {false, false},
+		"2001:db8::1":     {false, false}, // IPv6 is off
+		"ff02::fb":        {false, false},
+	} {
+		a := netip.MustParseAddr(addr)
+		if got := r.allowed(&Config{BlockPrivate: true}, a); got != want[0] {
+			t.Errorf("%s without allow_networks: %v", addr, got)
+		}
+		if got := r.allowed(&Config{BlockPrivate: true, Allow: all}, a); got != want[1] {
+			t.Errorf("%s with allow_networks: %v", addr, got)
+		}
+	}
+	if !r.allowed(&Config{IPv6: true, BlockPrivate: true}, netip.MustParseAddr("2001:db8::1")) {
+		t.Error("IPv6 refused while on")
+	}
+}
+
+func TestParseAnchorStrict(t *testing.T) {
+	sha256 := strings.Repeat("ab", 32)
+	for s, ok := range map[string]bool{
+		"20326 8 2 " + sha256:                   true,
+		"20326 8 1 " + strings.Repeat("ab", 20): true,
+		"20326 8 4 " + strings.Repeat("ab", 48): true,
+		"-1 8 2 " + sha256:                      false,
+		"20326 -8 2 " + sha256:                  false,
+		"70000 8 2 " + sha256:                   false,
+		"20326 8 2 " + strings.Repeat("ab", 20): false, // SHA-256 is 32 bytes
+		"20326 8 2 " + sha256 + "ab":            false,
+		"20326 8 3 " + sha256:                   false, // not a supported digest
+		"20326 8 2":                             false,
+	} {
+		if _, err := ParseAnchor(s); (err == nil) != ok {
+			t.Errorf("%q: %v", s, err)
+		}
+	}
+	for _, a := range builtinAnchors {
+		if _, err := ParseAnchor(a); err != nil {
+			t.Errorf("built-in anchor %q: %v", a, err)
+		}
+	}
+}
+
+// TestCacheResizedOnReload: a smaller cache.size takes effect without a
+// restart.
+func TestCacheResizedOnReload(t *testing.T) {
+	r := New(Config{CacheSize: 100000}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	exp := time.Now().Add(time.Hour)
+	fill := func(prefix string) {
+		for i := range 20000 {
+			r.sets.set(fmt.Sprintf("%s%d", prefix, i), &cachedSet{}, exp)
+		}
+	}
+	fill("a")
+	if n := r.sets.len(); n != 20000 {
+		t.Fatalf("size 100000 kept %d of 20000", n)
+	}
+	r.SetConfig(Config{CacheSize: 8000})
+	fill("b")
+	if n := r.sets.len(); n > 4000+64*16 {
+		t.Fatalf("size 8000 keeps %d RRsets", n)
+	}
+}
+
+// TestNSECIndexSwept: expired NSEC records leave with the janitor, not
+// only when their zone happens to fill up.
+func TestNSECIndexSwept(t *testing.T) {
+	f := loadFixture(t)
+	var x nsecIndex
+	x.add(dotted("example.com."), f.set(t, "example.com.", "example.com.", 6), f.proofs("example.com."), 300, f.now)
+	if len(x.zones) != 1 {
+		t.Fatal("nothing indexed")
+	}
+	x.sweep(f.now.Add(time.Minute))
+	if len(x.zones) != 1 {
+		t.Fatal("swept before expiry")
+	}
+	x.sweep(f.now.Add(10 * time.Minute))
+	if len(x.zones) != 0 {
+		t.Fatalf("%d zones left after expiry", len(x.zones))
+	}
+}

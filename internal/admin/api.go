@@ -104,6 +104,15 @@ func (a *Admin) login(w http.ResponseWriter, r *http.Request, c *call) {
 	if !a.notLocked(w, c) {
 		return
 	}
+	// Each password check takes 64 MiB and two run at a time: a crowd of
+	// logins is turned away instead of queueing without end.
+	if loginQueue.Add(1) > maxLoginQueue {
+		loginQueue.Add(-1)
+		w.Header().Set("Retry-After", "5")
+		writeError(w, http.StatusServiceUnavailable, "too many people are signing in; try again in a moment")
+		return
+	}
+	defer loginQueue.Add(-1)
 	hash := acc.Password
 	userOK := constEq(req.Username, acc.Username)
 	if !userOK {

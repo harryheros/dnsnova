@@ -36,6 +36,16 @@ func newTTLMap[V any](limit int) *ttlMap[V] {
 	return t
 }
 
+// setLimit changes the capacity; entries over it leave as others arrive.
+func (t *ttlMap[V]) setLimit(limit int) {
+	for i := range t.shards {
+		s := &t.shards[i]
+		s.mu.Lock()
+		s.max = max(limit/len(t.shards), 16)
+		s.mu.Unlock()
+	}
+}
+
 func (t *ttlMap[V]) shard(k string) *ttlShard[V] {
 	return &t.shards[maphash.String(t.seed, k)%uint64(len(t.shards))]
 }
@@ -53,7 +63,8 @@ func (t *ttlMap[V]) set(k string, v V, expire time.Time) {
 	s := t.shard(k)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.m[k]; !ok && len(s.m) >= s.max {
+	_, ok := s.m[k]
+	for !ok && len(s.m) >= s.max { // more than once only after the limit was lowered
 		var victim string
 		var first time.Time
 		n := 0

@@ -98,3 +98,89 @@ func TestLongCNAMEChainFailsClosed(t *testing.T) {
 		t.Fatal("a short clean chain was blocked")
 	}
 }
+
+// TestNoRecursionRefused: a query without RD is refused, whether or not
+// the answer is in the cache, and no upstream is asked for it.
+func TestNoRecursionRefused(t *testing.T) {
+	r, auth, _ := newTest(t)
+	norec := func(id uint16, name string) []byte {
+		q := dnstest.Query(id, name, 1, true, false)
+		q[2] &^= 0x01
+		return q
+	}
+	res := r.Resolve(norec(1, "norec.test"), true)
+	if p := dnstest.Parse(t, res.Resp); p.Rcode != m.RcodeRefused || p.AN != 0 {
+		t.Fatalf("RD=0, not cached: %+v", p)
+	}
+	if code, ok := edeCode(res.Resp); !ok || code != m.EDENotAuth {
+		t.Errorf("EDE %d %v", code, ok)
+	}
+	if n := auth.Count("norec.test."); n != 0 {
+		t.Fatalf("upstream asked %d times for a query without RD", n)
+	}
+	r.Resolve(dnstest.Query(2, "cached.test", 1, false, false), true)
+	if p := dnstest.Parse(t, r.Resolve(norec(3, "cached.test"), true).Resp); p.Rcode != m.RcodeRefused || p.AN != 0 {
+		t.Fatalf("RD=0 read the cache: %+v", p)
+	}
+	// names this server answers itself do not need recursion
+	if p := dnstest.Parse(t, r.Resolve(norec(4, "localhost"), true).Resp); p.Rcode != 0 || p.AN != 1 {
+		t.Fatalf("localhost without RD: %+v", p)
+	}
+}
+
+// TestADNotWithCDNorStale: AD is not passed on to a client that set CD,
+// and not on a stale answer.
+func TestADNotWithCDNorStale(t *testing.T) {
+	r, auth, c := newTest(t)
+	auth.SetTTL(60)
+	cd := dnstest.Query(1, "signed.test", 1, true, true)
+	cd[3] |= 0x10
+	if p := dnstest.Parse(t, r.Resolve(cd, true).Resp); p.AD() || p.AN != 1 {
+		t.Fatalf("CD client: %+v", p)
+	}
+	if p := dnstest.Parse(t, r.Resolve(dnstest.Query(2, "signed.test", 1, true, true), true).Resp); !p.AD() {
+		t.Fatal("fresh answer without AD")
+	}
+	c.add(2 * time.Minute)
+	res := r.Resolve(dnstest.Query(3, "signed.test", 1, true, true), true)
+	if p := dnstest.Parse(t, res.Resp); res.Status != "stale" || p.AD() {
+		t.Fatalf("stale answer: %s AD=%v", res.Status, p.AD())
+	}
+}
+
+// TestMinTTLLeavesValidatedAnswers: an answer marked as validated (AD) is
+// not stretched by min_ttl, also for a client that gets no signatures.
+func TestMinTTLLeavesValidatedAnswers(t *testing.T) {
+	s := settings()
+	s.MinTTL = 600
+	auth := dnstest.NewAuth()
+	auth.SetTTL(60)
+	r := New(s, dnstest.Exchanger{Auth: auth}, stats.New())
+	for i, name := range []string{"signed.test", "signed.test"} { // miss, then hit
+		res := r.ResolveOpts(dnstest.Query(uint16(i), name, 1, false, false), Opts{UDP: true})
+		for _, ttl := range dnstest.Parse(t, res.Resp).TTLs {
+			if ttl > 60 {
+				t.Fatalf("%s: validated answer stretched to TTL %d", res.Status, ttl)
+			}
+		}
+	}
+}
+
+// badversUpstream answers RCODE 16 (BADVERS): 0 in the header, 1 in OPT.
+type badversUpstream struct{}
+
+func (badversUpstream) Exchange(_ context.Context, msg []byte) ([]byte, error) {
+	q, _, _ := m.ParseQuery(msg)
+	b := []byte{msg[0], msg[1], 0x81, 0x80, 0, 1, 0, 0, 0, 0, 0, 1}
+	b = append(b, msg[m.HeaderLen:q.QEnd]...)
+	return append(b, 0, 0, 41, 4, 208, 1, 0, 0, 0, 0, 0), nil
+}
+
+// TestExtendedRcodeIsFailure: such an answer is a failure, not "no data".
+func TestExtendedRcodeIsFailure(t *testing.T) {
+	r := New(settings(), badversUpstream{}, stats.New())
+	res := r.ResolveOpts(dnstest.Query(1, "ext.test", 1, true, false), Opts{UDP: true})
+	if p := dnstest.Parse(t, res.Resp); p.Rcode != m.RcodeServFail {
+		t.Fatalf("BADVERS from upstream answered as RCODE %d (%s)", p.Rcode, res.Status)
+	}
+}
