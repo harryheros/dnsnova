@@ -264,8 +264,14 @@ func (g *Guard) Permitted(ip netip.Addr) bool {
 	if len(g.deny) > 0 && g.deny.Contains(ip) {
 		return false
 	}
-	return !g.private || g.allow.Contains(ip)
+	// in private mode the machine itself may always ask: programs on it use
+	// 127.0.0.1 and are not a network anyone could list
+	return !g.private || (LoopbackPermitted && ip.IsLoopback()) || g.allow.Contains(ip)
 }
+
+// LoopbackPermitted lets the machine itself query in private mode. Tests
+// whose clients all come from 127.0.0.1 turn it off to check the list.
+var LoopbackPermitted = true
 
 // Sweep drops idle limiter state; call it about once a minute.
 func (g *Guard) Sweep() {

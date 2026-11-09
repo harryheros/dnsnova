@@ -131,3 +131,12 @@ func TestDenyList(t *testing.T) {
 		t.Error("private mode with a deny list")
 	}
 }
+
+func TestPrivateAllowsThisMachine(t *testing.T) {
+	g := New(Limits{Private: true, Allow: ACL{netip.MustParsePrefix("192.168.1.0/24")}})
+	for ip, want := range map[string]bool{"127.0.0.1": true, "::1": true, "192.168.1.9": true, "192.168.2.9": false, "203.0.113.5": false} {
+		if got := g.Permitted(netip.MustParseAddr(ip)); got != want {
+			t.Errorf("%s: permitted %v, want %v", ip, got, want)
+		}
+	}
+}
