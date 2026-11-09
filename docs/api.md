@@ -50,7 +50,7 @@ curl -s -b jar -X POST -H "X-CSRF-Token: $csrf" $api/cache/clear
 
 | Method and path | Body | Result |
 | --- | --- | --- |
-| `GET /setup` | | `{"needed": true, "code_required": false, "secure": false}`: whether an administrator still has to be created, whether this client must give the setup code (not from loopback, private networks or the installer's SSH address), and whether this connection is HTTPS |
+| `GET /setup` | | `{"needed": true, "code_required": false, "secure": false}`: whether an administrator still has to be created, whether this client must give the setup code (not from loopback, private networks or the installer's SSH address; a request forwarded by a reverse proxy, recognised by its Forwarded, X-Forwarded-For, X-Real-IP or Via header, always needs the code), and whether this connection is HTTPS |
 | `POST /setup` | `{"code", "username", "password"}` | `201` and a session. `code` is the one-time setup code from `<data_dir>/secrets/setup-code`, which the installer prints: 8 letters and digits as `XXXX-XXXX`; case, spaces and dashes are ignored. After 20 wrong codes from any addresses, a new code replaces it. Passwords need at least 10 characters. |
 | `POST /login` | `{"username", "password", "totp"}` | A session: `{"username", "csrf", "totp", "secure", "client_ip"}`. With two-step verification on and no `totp`, `401` with `"totp_required": true`. |
 | `POST /logout` | | `204` |
@@ -72,12 +72,13 @@ early or late, and each code works only once.
 
 | Method and path | Result |
 | --- | --- |
-| `GET /status` | Version, start time, mode, domains, every open listener by protocol, certificate state, cache size, privacy facts and configuration warnings. |
+| `GET /status` | Version, start time, mode, domains, every open listener by protocol, certificate state, cache size, privacy facts, configuration warnings and `filter` (`{"enabled", "rules", "lists": [{"source", "rules", "skipped", "updated", "checked", "error"}]}`). |
 | `GET /stats?range=1h\|24h\|7d` | Totals for the range: queries by protocol (`udp`, `tcp`, `dot`, `doh`, `doh3`, `doq`), rejections by reason, answers by source, `cache_ratio`, response-time percentiles (`p50_ms`, `p95_ms`) for cache hits, upstream answers and all; `series`, one point per minute, five minutes or hour, for charts; `top_domains` and `top_nxdomains` (`[{"name", "count"}]`, domains asked for by at least 5 networks within an hour); and `top_limited_networks`, the /24 and /48 networks that hit the rate limits most (at most the last 24 hours). Kept in memory only. |
-| `GET /querylog?limit=500&q=` | The query log: `{"state": {"on", "until", "full_ip", "stopped", "count"}, "entries": [{"time", "client", "proto", "name", "type", "rcode", "source", "ms"}]}`, newest first. `q` keeps entries whose name or client contains it. |
+| `GET /querylog?limit=500&q=` | The query log: `{"state": {"on", "until", "full_ip", "stopped", "count"}, "entries": [{"time", "client", "proto", "name", "type", "rcode", "source", "ms", "filtered"}]}`, newest first. `source` is `blocked` for a name the filter answered; `filtered` marks queries that came in through a filtered address. `q` keeps entries whose name or client contains it. |
 | `GET /upstreams` | Each upstream: `address`, `role` (`primary` or `fallback`), `healthy`, `latency_ms` (smoothed), `queries`, `errors`, `last_ok`, `last_error`. |
 | `GET /events?limit=50` | Recent log records, newest first (up to 200): start-up, errors, setting changes with the user and keys, certificates. Queries are never among them. |
 | `POST /cache/clear` | `204` |
+| `POST /filter/update` | `204`: downloads every filter list now, whatever its age, and applies them. |
 | `POST /stats/clear` | `204`: forgets the statistics and domain lists (Prometheus counters keep counting). |
 | `GET /guide` | The setup guide's data: the status page fields, `plain` with every address DNS listens on, and `profile`, where the Apple profile can be downloaded (null when the status page is off). |
 
@@ -108,9 +109,9 @@ on the DNS-over-HTTPS addresses, without sign-in. In private mode they are
 | Method and path | Result |
 | --- | --- |
 | `GET /` | The page. |
-| `GET /status.json` | `{"domain", "mode", "healthy", "encrypted", "doh", "http3", "dot", "doq", "plain", "check", "query_log", "query_log_full_ip"}`. `plain` lists public port-53 addresses in public mode. |
+| `GET /status.json` | `{"domain", "mode", "healthy", "encrypted", "doh", "http3", "dot", "doq", "plain", "check", "query_log", "query_log_full_ip", "filtered"}`. `plain` lists public port-53 addresses in public mode; `filtered` (only while filtering is on) holds the filtered service's `doh`, `dot`, `doq`, `plain` and `rules`. |
 | `GET /check/{token}` | `{"seen", "proto"}`: whether a query for `{token}.check.<domain>` reached this server in the last five minutes, and over `udp`, `tcp`, `dot`, `doh`, `doh3` or `doq`. Tokens are 16 to 40 letters and digits. |
-| `GET /dnsnova.mobileconfig?p=doh` | An Apple configuration profile for DNS over HTTPS (`p=dot`: DNS over TLS, only when it listens on port 853). |
+| `GET /dnsnova.mobileconfig?p=doh` | An Apple configuration profile for DNS over HTTPS (`p=dot`: DNS over TLS, only when it listens on port 853; `p=doh-filtered` and `p=dot-filtered`: the filtered service, installed next to the unfiltered one). |
 
 Queries for `{token}.check.<domain>` are answered by DNSNova itself
 (NXDOMAIN, not cached) and never sent upstream.

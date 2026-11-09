@@ -8,7 +8,7 @@
 // protocol it came over (nothing else), and /check/<name> says so. Any
 // other DNS never reaches this server, so the name is never seen.
 
-import { guides, tabs } from "./guides.js";
+import { guides, tabs, filtered } from "./guides.js";
 
 const SVGNS = "http://www.w3.org/2000/svg";
 
@@ -49,6 +49,7 @@ const LINE = {
   lock: [["rect", { x: 3, y: 11, width: 18, height: 11, rx: 2 }], ["path", { d: "M7 11V7a5 5 0 0 1 10 0v4" }]],
   phone: [["rect", { x: 5, y: 2, width: 14, height: 20, rx: 2 }], ["path", { d: "M12 18h.01" }]],
   list: [["path", { d: "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" }]],
+  filter: [["path", { d: "M10 20a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14z" }]],
   code: [["path", { d: "m16 18 6-6-6-6M8 6l-6 6 6 6" }]],
   search: [["circle", { cx: 11, cy: 11, r: 7 }], ["path", { d: "M20 20l-3.5-3.5" }]],
   sun: [["circle", { cx: 12, cy: 12, r: 4 }], ["path", { d: "M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" }]],
@@ -172,8 +173,10 @@ async function boot() {
     info.doq ? ["DNS over QUIC", info.doq] : null,
     ...(info.plain || []).map((ip) => ["Plain DNS", ip]),
   ].filter(Boolean);
+  const filt = filtered(info, { h, copyrow }, "");
   const addresses = dcard("s5", "Addresses", "list",
     addrRows.length ? h("div", { class: "addrs" }, addrRows.map(([k, v]) => copyrow(k, v))) : h("p", { class: "empty small" }, "No addresses are published."),
+    filt ? h("div", { class: "filtered" }, h("h3", null, line("filter", 14), "With filtering"), ...filt) : null,
     h("footer", { class: "dfoot" }, h("span", null, info.http3 ? "HTTPS also over HTTP/3" : "HTTPS over HTTP/1.1 and HTTP/2"), h("span", null, info.mode === "public" ? "Open to everyone" : "Private")));
 
   const guide = dcard("s7", "Use this server", "phone", ...tabs(guides(info, { h, copyrow }), { h, fill }),

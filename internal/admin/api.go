@@ -23,7 +23,7 @@ func subtleEq(a, b string) bool { return subtle.ConstantTimeCompare([]byte(a), [
 
 func (a *Admin) getSetup(w http.ResponseWriter, r *http.Request, c *call) {
 	needed := a.sec.account() == nil
-	writeJSON(w, http.StatusOK, map[string]any{"needed": needed, "code_required": needed && !a.sec.setupTrusted(c.ip), "secure": r.TLS != nil})
+	writeJSON(w, http.StatusOK, map[string]any{"needed": needed, "code_required": needed && !a.trusted(c), "secure": r.TLS != nil})
 }
 
 func (a *Admin) postSetup(w http.ResponseWriter, r *http.Request, c *call) {
@@ -31,6 +31,8 @@ func (a *Admin) postSetup(w http.ResponseWriter, r *http.Request, c *call) {
 	if !decode(w, r, 4<<10, &req) {
 		return
 	}
+	a.setupMu.Lock()
+	defer a.setupMu.Unlock()
 	if a.sec.account() != nil {
 		writeError(w, http.StatusConflict, "setup is already done; log in instead")
 		return
@@ -39,7 +41,7 @@ func (a *Admin) postSetup(w http.ResponseWriter, r *http.Request, c *call) {
 		return
 	}
 	code := a.SetupCode()
-	if a.sec.setupTrusted(c.ip) {
+	if a.trusted(c) {
 		// no code needed from here
 	} else if code == "" || !constEq(normalizeCode(req.Code), normalizeCode(code)) {
 		a.lock.fail(c.ip, a.Now())
@@ -256,6 +258,7 @@ func (a *Admin) status(w http.ResponseWriter, r *http.Request, c *call) {
 		"domains":        nonNil(cfg.TLS.Domains),
 		"listeners":      a.b.Listeners(),
 		"certificate":    a.b.Certificate(),
+		"filter":         a.b.FilterStatus(),
 		"cache":          map[string]int{"positive": pos, "negative": neg, "capacity": cfg.Cache.Size},
 		"retention":      cfg.Stats.Retention,
 		"serves_dns":     cfg.ServesDNS(),

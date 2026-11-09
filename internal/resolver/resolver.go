@@ -6,11 +6,14 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	m "github.com/harryheros/dnsnova/internal/dnsmsg"
+	"github.com/harryheros/dnsnova/internal/filter"
 	"github.com/harryheros/dnsnova/internal/stats"
 )
 
@@ -53,14 +56,15 @@ var (
 
 // Resolver is safe for concurrent use.
 type Resolver struct {
-	set   atomic.Pointer[Settings]
-	ups   atomic.Pointer[upHolder]
-	sem   atomic.Pointer[chan struct{}]
-	cache *cache
-	sf    flightGroup
-	zones zoneLimiter
-	stats *stats.Stats
-	now   func() time.Time
+	set    atomic.Pointer[Settings]
+	filter atomic.Pointer[filter.Set]
+	ups    atomic.Pointer[upHolder]
+	sem    atomic.Pointer[chan struct{}]
+	cache  *cache
+	sf     flightGroup
+	zones  zoneLimiter
+	stats  *stats.Stats
+	now    func() time.Time
 }
 
 type upHolder struct{ x Exchanger }
@@ -88,6 +92,9 @@ func (r *Resolver) SetSettings(s Settings) {
 	}
 }
 
+// SetFilter replaces the block rules of the filtered service (nil: none).
+func (r *Resolver) SetFilter(f *filter.Set) { r.filter.Store(f) }
+
 // SetUpstreams replaces the upstream group.
 func (r *Resolver) SetUpstreams(x Exchanger) { r.ups.Store(&upHolder{x}) }
 
@@ -97,42 +104,83 @@ func (r *Resolver) ClearCache() { r.cache.clear() }
 // CacheCounts returns the number of positive and negative cache entries.
 func (r *Resolver) CacheCounts() (positive, negative int) { return r.cache.counts() }
 
+// Opts describe how a query arrived.
+type Opts struct {
+	UDP       bool // apply the client's UDP size limit
+	Encrypted bool // DoT, DoH or DoQ: pad responses for clients that pad (RFC 8467)
+	Filter    bool // the query came in through the filtered service
+}
+
+// BlockedTTL is how long clients may remember that a name is blocked: short,
+// so an allow rule takes effect soon.
+const BlockedTTL = 60
+
 // Result is the outcome of Resolve.
 type Result struct {
 	Resp   []byte   // nil: drop the packet
 	Q      *m.Query // nil if the packet could not be parsed
 	Source int      // stats.Source*
 	Status string   // for logs: hit, stale, miss, local, refused, ...
+	// Filtered: answered by the filtered service (whether or not blocked).
+	Filtered bool
 }
 
 // Resolve answers one raw query. udp applies the client's UDP size limit.
 func (r *Resolver) Resolve(req []byte, udp bool) Result {
+	return r.ResolveOpts(req, Opts{UDP: udp})
+}
+
+// ResolveOpts answers one raw query that arrived as o describes.
+func (r *Resolver) ResolveOpts(req []byte, o Opts) Result {
+	res, _ := r.resolve(req, o, true)
+	return res
+}
+
+// ResolveCached answers a query only if no upstream needs to be asked:
+// from the cache, a local name or an error. It reports false when the query
+// needs an upstream; nothing has been counted then, and the caller should
+// call ResolveOpts (typically on another goroutine). A busy UDP listener
+// answers most queries this way without starting a goroutine for each.
+func (r *Resolver) ResolveCached(req []byte, o Opts) (Result, bool) {
+	return r.resolve(req, o, false)
+}
+
+func (r *Resolver) resolve(req []byte, o Opts, mayFetch bool) (Result, bool) {
 	start := r.now()
 	s := r.set.Load()
 	q, rc, err := m.ParseQuery(req)
 	if err != nil {
 		r.stats.Rejected[stats.RejectMalformed].Add(1)
-		return Result{Status: "malformed"}
+		return Result{Status: "malformed"}, true
 	}
+	f := finisher{r: r, req: req, q: q, o: o, s: s}
 	if rc != 0 {
-		return r.done(Result{Resp: m.ErrorResponse(req, q, rc), Q: q, Source: stats.SourceLocal, Status: m.RcodeString(rc)})
+		return f.done(Result{Resp: m.ErrorResponse(req, q, rc), Q: q, Source: stats.SourceLocal, Status: strings.ToLower(m.RcodeString(rc))}, nil), true
 	}
 	switch {
 	case q.Class != m.ClassIN, q.Type == m.TypeAXFR, q.Type == m.TypeIXFR:
-		return r.done(Result{Resp: m.ErrorResponse(req, q, m.RcodeRefused), Q: q, Source: stats.SourceLocal, Status: "refused"})
+		return f.done(Result{Resp: m.ErrorResponse(req, q, m.RcodeRefused), Q: q, Source: stats.SourceLocal, Status: "refused"},
+			m.EDE(m.EDENotSupported, "zone transfers and non-IN classes are not served")), true
 	case q.Type == m.TypeANY && s.BlockANY:
-		return r.done(Result{Resp: m.ErrorResponse(req, q, m.RcodeNotImp), Q: q, Source: stats.SourceLocal, Status: "notimp"})
+		return f.done(Result{Resp: m.ErrorResponse(req, q, m.RcodeNotImp), Q: q, Source: stats.SourceLocal, Status: "notimp"},
+			m.EDE(m.EDENotSupported, "ANY queries are not answered (RFC 8482)")), true
 	}
 	if s.CheckZone != "" && isProbe(q.Name, s.CheckZone) {
-		return r.done(Result{Resp: r.fit(m.NegativeSOA(req, q, s.CheckZone, 0, m.RcodeNXDomain), req, q, udp, s), Q: q, Source: stats.SourceLocal, Status: "probe"})
+		return f.done(Result{Resp: m.NegativeSOA(req, q, s.CheckZone, 0, m.RcodeNXDomain), Q: q, Source: stats.SourceLocal, Status: "probe"}, nil), true
 	}
 	if s.Local != nil {
 		if resp := s.Local.answer(req, q); resp != nil {
-			return r.done(Result{Resp: r.fit(resp, req, q, udp, s), Q: q, Source: stats.SourceLocal, Status: "local"})
+			return f.done(Result{Resp: resp, Q: q, Source: stats.SourceLocal, Status: "local"}, nil), true
 		}
 	}
 	if resp := localAnswer(req, q, s); resp != nil {
-		return r.done(Result{Resp: r.fit(resp, req, q, udp, s), Q: q, Source: stats.SourceLocal, Status: "local"})
+		return f.done(Result{Resp: resp, Q: q, Source: stats.SourceLocal, Status: "local"}, nil), true
+	}
+	if o.Filter && r.filter.Load().Blocked(q.Name) {
+		// NXDOMAIN with an SOA so clients remember it briefly, and an
+		// Extended DNS Error so people and programs can tell it was blocked.
+		return f.done(Result{Resp: m.NegativeSOA(req, q, q.Name, BlockedTTL, m.RcodeNXDomain), Q: q, Source: stats.SourceBlocked, Status: "blocked"},
+			m.EDE(m.EDEBlocked, "blocked by this server's filter")), true
 	}
 
 	key := q.CacheKey()
@@ -142,18 +190,24 @@ func (r *Resolver) Resolve(req []byte, udp bool) Result {
 		if s.Prefetch && e.ttl >= 10 && e.expire.Sub(now) < time.Duration(e.ttl)*time.Second/10 {
 			r.refreshAsync(key, q, e, now)
 		}
-		res := Result{Resp: r.build(e, req, q, now, false, udp, s), Q: q, Source: stats.SourceCache, Status: "hit"}
+		res := Result{Resp: r.build(e, req, q, now, false, s), Q: q, Source: stats.SourceCache, Status: "hit"}
+		if e.failure {
+			res.Status = "servfail"
+		}
 		r.stats.LatencyCache.Observe(r.now().Sub(start))
-		return r.done(res)
+		return f.done(res, e.ede), true
 	}
-	stale := e != nil && s.ServeStale > 0 && now.Before(e.expire.Add(s.ServeStale))
+	stale := e != nil && !e.failure && s.ServeStale > 0 && now.Before(e.expire.Add(s.ServeStale))
 	if stale {
 		r.refreshAsync(key, q, e, now)
-		res := Result{Resp: r.build(e, req, q, now, true, udp, s), Q: q, Source: stats.SourceStale, Status: "stale"}
+		res := Result{Resp: r.build(e, req, q, now, true, s), Q: q, Source: stats.SourceStale, Status: "stale"}
 		r.stats.LatencyCache.Observe(r.now().Sub(start))
-		return r.done(res)
+		return f.done(res, append(slices.Clip(e.ede), m.EDE(m.EDEStaleAnswer, "")...)), true
 	}
 
+	if !mayFetch {
+		return Result{}, false
+	}
 	fresh, err := r.sf.do(key, func() (*entry, error) { return r.fetch(q) })
 	if err != nil {
 		switch {
@@ -162,16 +216,42 @@ func (r *Resolver) Resolve(req []byte, udp bool) Result {
 		case errors.Is(err, errZoneBusy):
 			r.stats.Rejected[stats.RejectZoneBusy].Add(1)
 		}
-		return r.done(Result{Resp: m.ErrorResponse(req, q, m.RcodeServFail), Q: q, Source: stats.SourceUpstream, Status: "servfail"})
+		return f.done(Result{Resp: m.ErrorResponse(req, q, m.RcodeServFail), Q: q, Source: stats.SourceUpstream, Status: "servfail"},
+			m.EDE(m.EDEOther, "server busy")), true
 	}
-	res := Result{Resp: r.build(fresh, req, q, r.now(), false, udp, s), Q: q, Source: stats.SourceUpstream, Status: "miss"}
+	res := Result{Resp: r.build(fresh, req, q, r.now(), false, s), Q: q, Source: stats.SourceUpstream, Status: "miss"}
+	if fresh.failure {
+		res.Status = "servfail"
+	}
 	r.stats.LatencyUpstream.Observe(r.now().Sub(start))
-	return r.done(res)
+	return f.done(res, fresh.ede), true
 }
 
-func (r *Resolver) done(res Result) Result {
-	r.stats.Sources[res.Source].Add(1)
-	r.stats.Rcode(m.Rcode(res.Resp))
+// finisher prepares every response the same way, whatever produced it.
+type finisher struct {
+	r   *Resolver
+	req []byte
+	q   *m.Query
+	o   Opts
+	s   *Settings
+}
+
+// done adds Extended DNS Errors (for clients that use EDNS), keeps UDP
+// answers within the client's size limit, pads encrypted answers for
+// clients that pad, and counts the result.
+func (f finisher) done(res Result, ede []byte) Result {
+	res.Filtered = f.o.Filter
+	if res.Resp != nil && f.q != nil && f.q.EDNS {
+		res.Resp = m.AddOptions(res.Resp, ede)
+	}
+	if res.Resp != nil && f.q != nil {
+		res.Resp = f.r.fit(res.Resp, f.req, f.q, f.o.UDP, f.s)
+		if f.o.Encrypted && f.q.Padding {
+			res.Resp = m.Pad(res.Resp, m.PaddingBlock)
+		}
+	}
+	f.r.stats.Sources[res.Source].Add(1)
+	f.r.stats.Rcode(m.Rcode(res.Resp))
 	return res
 }
 
@@ -205,27 +285,40 @@ func (r *Resolver) fetch(q *m.Query) (*entry, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), s.Timeout)
 	defer cancel()
+	var e *entry
 	resp, err := r.ups.Load().x.Exchange(ctx, m.BuildUpstreamQuery(q))
-	if err != nil {
-		return nil, err
+	if err == nil {
+		e, err = analyze(resp, q)
 	}
-	e, err := analyze(resp, q)
 	if err != nil {
-		return nil, err
+		// Nobody answered usefully: remember the failure briefly (RFC 9520).
+		if e = failureEntry(q); e == nil {
+			return nil, err
+		}
 	}
 	e.stored = r.now()
 	if e.cacheable {
-		e.ttl = clampTTL(e.ttl, e.negative, s)
+		e.ttl = clampTTL(e.ttl, e.negative, e.failure, s)
 		e.cacheable = e.ttl > 0
 	}
 	e.expire = e.stored.Add(time.Duration(e.ttl) * time.Second)
+	key := q.CacheKey()
+	if e.failure && s.ServeStale > 0 {
+		// An answer that can still be served stale is better than SERVFAIL.
+		if old := r.cache.get(key); old != nil && !old.failure && e.stored.Before(old.expire.Add(s.ServeStale)) {
+			e.cacheable = false
+		}
+	}
 	if e.cacheable {
-		r.cache.set(q.CacheKey(), e)
+		r.cache.set(key, e)
 	}
 	return e, nil
 }
 
-func clampTTL(t uint32, negative bool, s *Settings) uint32 {
+func clampTTL(t uint32, negative, failure bool, s *Settings) uint32 {
+	if failure {
+		return t // FailTTL: short by design, not subject to min_ttl
+	}
 	if negative {
 		return min(t, s.MaxNegTTL)
 	}
@@ -233,7 +326,7 @@ func clampTTL(t uint32, negative bool, s *Settings) uint32 {
 }
 
 // build turns a cached entry into the response for one particular query.
-func (r *Resolver) build(e *entry, req []byte, q *m.Query, now time.Time, stale, udp bool, s *Settings) []byte {
+func (r *Resolver) build(e *entry, req []byte, q *m.Query, now time.Time, stale bool, s *Settings) []byte {
 	out := make([]byte, len(e.msg), len(e.msg)+11)
 	copy(out, e.msg)
 
@@ -277,26 +370,11 @@ func (r *Resolver) build(e *entry, req []byte, q *m.Query, now time.Time, stale,
 		binary.BigEndian.PutUint32(out[off:], t)
 	}
 
-	ar := m.U16(out, 10)
-	switch {
-	case e.optStart >= 0 && !q.EDNS:
-		if e.optLast {
-			out = out[:e.optStart]
-			ar--
-		}
-	case e.optStart >= 0 && q.EDNS:
-		binary.BigEndian.PutUint16(out[e.optStart+3:], uint16(s.UDPMaxSize))
-		if q.DO {
-			out[e.optStart+7] |= 0x80
-		} else {
-			out[e.optStart+7] &^= 0x80
-		}
-	case e.optStart < 0 && q.EDNS:
+	if q.EDNS { // the client's own OPT record; the upstream's was removed
 		out = m.AppendOPT(out, uint16(s.UDPMaxSize), q.DO)
-		ar++
+		binary.BigEndian.PutUint16(out[10:], m.U16(out, 10)+1)
 	}
-	binary.BigEndian.PutUint16(out[10:], ar)
-	return r.fit(out, req, q, udp, s)
+	return out
 }
 
 // fit truncates a UDP response that exceeds the client's limit.

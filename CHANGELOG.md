@@ -8,6 +8,58 @@ All notable changes are listed here. Versions follow
 
 First development release of the 1.0 core.
 
+- Filtering, as a second door on the same server (off by default,
+  `[filter]`). The usual addresses stay unfiltered; clients that want
+  blocking use the filtered plain-DNS address (`filter.listen`), a filtered
+  name for DoT, DoQ and DoH (`filter.names`, told apart by the TLS name), or
+  the DoH path `/filtered`. `filter.all` filters every address instead.
+  Blocked names are answered NXDOMAIN with Extended DNS Error 15 (Blocked).
+  Lists in AdGuard (`||domain^`, `@@||domain^`), hosts and plain-domain
+  format, by URL or file; the ShieldNova list is suggested. Copies are kept
+  on disk, so filtering works at once after a restart and while a list
+  cannot be downloaded; an update that loses more than half of a list's
+  rules is refused. About 50 ns per check with 200,000 rules.
+- Web interface: Settings › Filtering with each list's state and "Update
+  now"; blocked answers in the Overview and statistics; in the query log,
+  blocked queries are marked, with an "Allow" button that adds the domain
+  to `filter.allow`; the setup guide and the status page list the filtered
+  addresses, with their own Apple profiles. Prometheus:
+  `dnsnova_answers_total{source="blocked"}`.
+- Changing `doh.path` on a running server no longer fails with "address
+  already in use".
+
+- **Security**: setup through a reverse proxy. Behind nginx or Caddy on the
+  same machine every visitor arrives from 127.0.0.1, which counted as "the
+  server itself", so the first visitor from the internet could create the
+  administrator without the setup code. Requests carrying proxy headers
+  (Forwarded, X-Forwarded-For, X-Real-IP, Via, ...) now always need the code.
+- **Security**: simultaneous setup requests could each create an
+  administrator (the last one stayed, every one got a session). Setup now
+  runs one request at a time.
+- An upstream's EDNS options are no longer passed to clients. Padding an
+  upstream added for its encrypted link reached plain-UDP clients (an
+  answer of about 40 bytes could leave as 450), as did cookies and NSID.
+  Extended DNS Errors from the upstream are still passed on.
+- EDNS version other than 0 is answered with BADVERS (RFC 6891).
+- Extended DNS Errors (RFC 8914): Stale Answer when serving from an expired
+  entry, Network Error when no upstream answered, Not Supported for ANY and
+  zone transfers; the upstream's own (for example DNSSEC Bogus) are kept.
+- Resolution failures (SERVFAIL) are remembered for 2 seconds (RFC 9520),
+  so a broken domain or an unreachable upstream is not asked again for every
+  client. A failure never replaces an answer that can still be served stale.
+- EDNS padding (RFC 7830, RFC 8467): answers over DoT, DoH and DoQ are
+  padded to blocks of 468 bytes for clients that pad their queries, so the
+  size of an encrypted answer reveals less about the name.
+- Faster UDP: on Linux each address has one socket per CPU core (up to 16,
+  SO_REUSEPORT), and answers from the cache are sent without starting a
+  goroutine per query. About 47% more answers per second in a 2-core test.
+- Queries are recorded in the query log before the answer is sent, so a
+  client that reads the log right after its answer finds the query there.
+- Web interface: the Overview no longer stays narrow after visiting Settings
+  or the setup guide; no focus ring around the whole page after navigating;
+  the median response figure no longer spreads out ("<0.1", not "< 0 . 1").
+- golang.org/x/sys is now a direct dependency (SO_REUSEPORT).
+
 - DNS over UDP and TCP; DNS over TLS; DNS over QUIC (RFC 9250, UDP 853);
   DNS over HTTPS over HTTP/1.1, HTTP/2 and HTTP/3 (same port, TCP and UDP),
   built in or behind a reverse proxy. HTTP/1.1 and HTTP/2 responses advertise

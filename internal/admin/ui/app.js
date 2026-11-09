@@ -3,7 +3,7 @@
 // holds no privileges of its own. Text from the server is always inserted as
 // text, never as HTML.
 
-import { guides, tabs } from "./guides.js";
+import { guides, tabs, filtered } from "./guides.js";
 
 // ---------- small helpers ----------
 
@@ -62,6 +62,7 @@ const LINE = {
   shield: [["path", { d: "M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" }]],
   user: [["path", { d: "M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" }], ["circle", { cx: 12, cy: 7, r: 4 }]],
   compare: [["path", { d: "M8 3 4 7l4 4M4 7h16M16 21l4-4-4-4M20 17H4" }]],
+  filter: [["path", { d: "M10 20a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14z" }]],
   sliders: [["path", { d: "M20 7h-9M14 17H5" }], ["circle", { cx: 17, cy: 17, r: 3 }], ["circle", { cx: 7, cy: 7, r: 3 }]],
   power: [["path", { d: "M12 2v10M18.4 6.6a9 9 0 1 1-12.77.04" }]],
   alert: [["path", { d: "m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3M12 9v4M12 17h.01" }]],
@@ -566,7 +567,7 @@ function changedValues(before, after) {
 
 const NAV = [
   ["Status", [["Overview", "overview", "overview"], ["Upstreams", "upstreams", "upstreams"], ["Query log", "querylog", "querylog"]]],
-  ["Settings", [["DNS & upstreams", "settings/dns", "dns"], ["Encrypted DNS", "settings/encryption", "lock"], ["Access & limits", "settings/access", "shield"], ["Admin", "settings/admin", "user"]]],
+  ["Settings", [["DNS & upstreams", "settings/dns", "dns"], ["Filtering", "settings/filter", "filter"], ["Encrypted DNS", "settings/encryption", "lock"], ["Access & limits", "settings/access", "shield"], ["Admin", "settings/admin", "user"]]],
   ["Tools", [["Setup guide", "tools/guide", "phone"], ["Compare upstreams", "tools/lookup", "compare"]]],
 ];
 
@@ -593,7 +594,8 @@ async function showApp() {
     setMenu(false);
     drawNav();
     stopTimer();
-    fill(main, );
+    main.classList.remove("narrow"); // only settings and the guide use the narrow layout
+    fill(main);
     const page = PAGES_BY_ROUTE[route()] || PAGES_BY_ROUTE.overview;
     page(main);
     main.focus({ preventScroll: true });
@@ -791,6 +793,7 @@ function drawOverview(st, stats, ups, events, range) {
   const total = Object.values(stats.queries).reduce((a, b) => a + b, 0);
   const rejected = Object.values(stats.rejected).reduce((a, b) => a + b, 0);
   const answered = Object.values(stats.answers).reduce((a, b) => a + b, 0);
+  const blocked = stats.answers.blocked || 0;
   const states = ups.map((u) => upState(u, ups).cls);
   const failing = states.filter((x) => x === "err").length, slow = states.filter((x) => x === "warn").length;
   const health = failing ? ["err", `${failing} of ${ups.length} upstreams failing`]
@@ -810,7 +813,8 @@ function drawOverview(st, stats, ups, events, range) {
       h("div", { class: "hero" },
         h("div", { class: "label" }, "Median response · " + label),
         h("div", { class: "heroval" }, h("span", { class: "big" }, total ? fmt.ms(stats.latency.all.p50_ms) : "–"), h("span", { class: "unit big-unit" }, "ms")),
-        h("div", { class: "line" }, total ? `${answered ? fmt.pct(stats.cache_ratio) : "0%"} answered from cache` : "Waiting for the first queries")),
+        h("div", { class: "line" }, total ? `${answered ? fmt.pct(stats.cache_ratio) : "0%"} answered from cache` +
+          (blocked ? ` · ${fmt.pct(blocked / answered)} blocked` : "") : "Waiting for the first queries")),
       h("dl", { class: "kpis" },
         kpi("Queries", fmt.short(total), null, label),
         kpi("95th percentile", total && stats.latency.all.p95_ms ? fmt.ms(stats.latency.all.p95_ms) : "–", "ms", "of response times"),
@@ -1074,9 +1078,11 @@ function queryLogPage(main) {
         h("thead", null, h("tr", null, ["Time", "Client", "Protocol", "Domain", "Type", "Result", "From", "Time taken"].map((t, i) => h("th", { scope: "col", class: i === 7 ? "r" : "" }, t)))),
         h("tbody", null, r.entries.map((q) => h("tr", null,
           h("td", { class: "mono small" }, new Date(q.time).toLocaleTimeString([], { hour12: false })),
-          h("td", { class: "mono small" }, q.client), h("td", { class: "small" }, q.proto),
+          h("td", { class: "mono small" }, q.client), h("td", { class: "small" }, q.proto, q.filtered ? h("span", { class: "tag", title: "Through the filtered service" }, "filtered") : null),
           h("td", { class: "mono small ellipsis", title: q.name }, q.name), h("td", { class: "small" }, q.type),
-          h("td", { class: "small " + (q.rcode === "NOERROR" ? "" : "warn") }, q.rcode), h("td", { class: "small muted" }, q.source),
+          h("td", { class: "small " + (q.rcode === "NOERROR" ? "" : "warn") }, q.rcode),
+          h("td", { class: "small " + (q.source === "blocked" ? "warn" : "muted") }, q.source,
+            q.source === "blocked" ? h("button", { type: "button", class: "btn link small", title: "Never block " + q.name, onclick: () => allowDomain(q.name).catch((e) => toast(e.message, "err")) }, "Allow") : null),
           h("td", { class: "r num small" }, (q.ms ? fmt.ms(q.ms) : "<0.1") + " ms"))))))
         : h("p", { class: "empty small", style: { margin: 0 } }, st.on ? (filter.value ? "No queries match." : "Waiting for queries…") : "No queries recorded."));
     } catch (e) { if (e.status !== 401) fill(table, errorBox(e)); }
@@ -1102,9 +1108,11 @@ function guidePage(main) {
         return;
       }
       const addrs = [...(info.plain || []).map((ip) => ["DNS server", ip]), info.doh ? ["DNS over HTTPS", info.doh] : null, info.dot ? ["DNS over TLS", info.dot] : null, info.doq ? ["DNS over QUIC", info.doq] : null].filter(Boolean);
+      const filt = filtered(info, { h, copyrow }, info.profile);
       fill(body,
         h("section", { class: "card" }, h("h2", null, "Addresses"), h("div", { class: "addrs" }, addrs.map(([k, v]) => copyrow(k, v))),
           info.port && info.port !== 53 ? h("p", { class: "notice warn small", style: { margin: 0 } }, `Plain DNS is on port ${info.port}. Most phones, computers and routers can only use port 53; set the port where they allow it.`) : null),
+        filt ? h("section", { class: "card" }, h("h2", null, "Addresses with filtering"), ...filt) : null,
         h("section", { class: "card" }, h("h2", null, "Point a device or your router at DNSNova"),
           h("p", { class: "small muted", style: { margin: 0 } }, "Setting it once on the router covers every device on the network. Set it on a device to use it there only, or when away from home with encrypted DNS."),
           ...tabs(guides(info, { h, copyrow }), { h, fill })));
@@ -1141,6 +1149,27 @@ const SETTINGS = {
       ] },
       { title: "Clients", fields: [
         { key: "ddr.enabled", label: "Discovery (DDR)", type: "bool", help: "Devices asking over plain DNS learn the encrypted addresses and switch automatically." },
+      ] },
+    ],
+  },
+  filter: {
+    title: "Filtering",
+    filterStatus: true,
+    sections: [
+      { title: "Filtered service", fields: [
+        { key: "filter.enabled", label: "Filtering", type: "bool", help: "Offer a second way in that blocks ads, trackers and malicious sites. The usual addresses answer as before; people choose which one to use." },
+        { key: "filter.doh_path", label: "DoH path", type: "text", help: "DNS over HTTPS with filtering: the usual address with this path instead of the usual one.", show: (v) => v["filter.enabled"] && !v["filter.all"] },
+        { key: "filter.names", label: "Names", type: "list", help: "For DNS over TLS and QUIC (and HTTPS), such as filtered.dns.example.com. Point each at this server; Let\u2019s Encrypt certificates include them.", show: (v) => v["filter.enabled"] && !v["filter.all"] },
+        { key: "filter.listen", label: "Plain DNS addresses", type: "list", help: "Addresses that filter plain DNS (UDP and TCP), such as a second IP address with port 53. Not the same as the usual DNS addresses.", show: (v) => v["filter.enabled"] && !v["filter.all"] },
+        { key: "filter.all", label: "Filter every address", type: "bool", help: "For a home or office server where everyone should be filtered.", show: (v) => v["filter.enabled"] },
+      ] },
+      { title: "Lists", action: ["Update now", async () => { const st = await api("POST", "/filter/update"); toast(`${st.rules.toLocaleString()} rules in force`); }], fields: [
+        { key: "filter.lists", label: "Block lists", type: "list", help: "Addresses of lists to download, one per line (adblock domain rules, hosts files or plain domains). ShieldNova's list is preset: it blocks very little by mistake.", show: (v) => v["filter.enabled"] },
+        { key: "filter.update_interval", label: "Update every", type: "text", help: "Such as 24h. A failed or much shorter download keeps the copy in use.", show: (v) => v["filter.enabled"] },
+      ] },
+      { title: "Your rules", fields: [
+        { key: "filter.allow", label: "Never block", type: "list", help: "One domain per line; covers every name under it and wins over every list. Use it when something stops working.", show: (v) => v["filter.enabled"] },
+        { key: "filter.block", label: "Also block", type: "list", help: "One domain per line; covers every name under it.", show: (v) => v["filter.enabled"] },
       ] },
     ],
   },
@@ -1210,6 +1239,7 @@ const PAGES_BY_ROUTE = {
   overview, upstreams: upstreamsPage, querylog: queryLogPage, "tools/lookup": lookupPage, "tools/guide": guidePage,
   "settings/dns": (m) => settingsPage(m, "dns"),
   "settings/encryption": (m) => settingsPage(m, "encryption"),
+  "settings/filter": (m) => settingsPage(m, "filter"),
   "settings/access": (m) => settingsPage(m, "access"),
   "settings/admin": (m) => settingsPage(m, "admin"),
 };
@@ -1231,6 +1261,7 @@ async function settingsPage(main, id) {
   const form = { hash: cfg.hash, cur, val: { ...cur }, rows: {}, problems: {} };
   const parts = [];
   if (page.certificate) parts.push(await certificateCard());
+  if (page.filterStatus) parts.push(await filterCard());
   for (const sec of page.sections) {
     const card = h("section", { class: "card pad0", "aria-label": sec.title },
       h("div", { class: "pagehead", style: { margin: "12px 0 4px" } }, h("h2", null, sec.title),
@@ -1429,6 +1460,32 @@ async function certificateCard() {
     h("div", { class: "pagehead" }, h("h2", null, "Certificate status"), line),
     c.ready ? h("div", { class: "small muted" }, (c.names || []).join(", "), c.issuer ? " · " + c.issuer : "") : null,
     c.last_error ? h("p", { class: "small err", style: { margin: 0 } }, c.last_error) : null);
+}
+
+async function filterCard() {
+  const st = (await api("GET", "/status")).filter;
+  const head = st.enabled
+    ? h("span", { class: "ok", style: { fontWeight: 600 } }, `${st.rules.toLocaleString()} rules in force`)
+    : h("span", { class: "muted" }, "Off");
+  const short = (src) => src.replace(/^https?:\/\//, "").replace(/^raw\.githubusercontent\.com\//, "");
+  return h("section", { class: "card", "aria-label": "Filter status" },
+    h("div", { class: "pagehead" }, h("h2", null, "Filter status"), head),
+    st.enabled && (st.lists || []).length ? h("div", { class: "lists" }, st.lists.map((l) => h("div", { class: "listrow" },
+      h("div", { class: "mono small ellipsis", title: l.source }, short(l.source)),
+      h("div", { class: "small " + (l.error ? "warn" : "muted") },
+        l.rules ? `${l.rules.toLocaleString()} rules` : "Not downloaded yet",
+        l.updated ? " · updated " + fmt.time(l.updated, "full") : "",
+        l.error ? " · " + l.error : "")))) : null,
+    st.enabled ? null : h("p", { class: "small muted", style: { margin: 0 } }, "Turn it on below. Nothing changes for the usual addresses."));
+}
+
+// allowDomain adds a name to filter.allow (from the query log).
+async function allowDomain(name) {
+  const cfg = await api("GET", "/config");
+  const cur = (cfg.settings.find((x) => x.key === "filter.allow") || {}).value || [];
+  if (cur.includes(name)) { toast(`${name} is already allowed`); return; }
+  await api("PATCH", "/config", { hash: cfg.hash, set: { "filter.allow": [...cur, name] } });
+  toast(`${name} will no longer be blocked`);
 }
 
 function clientAddresses(cur) {

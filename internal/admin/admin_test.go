@@ -22,6 +22,7 @@ import (
 
 	"github.com/harryheros/dnsnova/internal/config"
 	"github.com/harryheros/dnsnova/internal/events"
+	"github.com/harryheros/dnsnova/internal/filter"
 	"github.com/harryheros/dnsnova/internal/insight"
 	"github.com/harryheros/dnsnova/internal/stats"
 	"github.com/harryheros/dnsnova/internal/tlsmgr"
@@ -72,7 +73,9 @@ func (f *fake) Addresses() []HostAddress {
 func (f *fake) Lookup(_ context.Context, name string, qt uint16, specs []string) []LookupResult {
 	return []LookupResult{{Upstream: strings.Join(specs, ","), Rcode: "NOERROR", Answers: []string{fmt.Sprintf("%q %d", name, qt)}}}
 }
-func (f *fake) Snapshot() *config.Snapshot { f.mu.Lock(); defer f.mu.Unlock(); return f.snap }
+func (f *fake) FilterStatus() filter.Status  { return filter.Status{Enabled: true, Rules: 7} }
+func (f *fake) UpdateFilter(context.Context) { f.mu.Lock(); f.cleared += 100; f.mu.Unlock() }
+func (f *fake) Snapshot() *config.Snapshot   { f.mu.Lock(); defer f.mu.Unlock(); return f.snap }
 func (f *fake) ApplyConfig(src []byte, expected string) (*config.Snapshot, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -647,6 +650,52 @@ func TestSetupTrustedWithoutCode(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(e.dir, "secrets", "setup-trust")); !os.IsNotExist(err) {
 		t.Fatal("setup-trust left behind")
+	}
+}
+
+// Behind a reverse proxy on the same machine every visitor arrives from
+// 127.0.0.1. Such requests must not count as "the server itself", or the
+// first visitor from the internet could create the administrator.
+func TestSetupThroughProxyNeedsCode(t *testing.T) {
+	e := newEnv(t)
+	for _, h := range []string{"X-Forwarded-For", "X-Real-IP", "Forwarded", "Via"} {
+		if r := e.do(e.c, "GET", "/api/v1/setup", nil, h, "203.0.113.9"); r.body["code_required"] != true {
+			t.Fatalf("%s: code not required for a proxied request: %s", h, r.raw)
+		}
+	}
+	body := map[string]string{"username": "ops", "password": "correct horse battery"}
+	if r := e.do(e.c, "POST", "/api/v1/setup", body, "X-Forwarded-For", "203.0.113.9"); r.code != http.StatusForbidden {
+		t.Fatalf("proxied setup without code: %d %s", r.code, r.raw)
+	}
+	body["code"] = e.a.SetupCode()
+	if r := e.do(e.c, "POST", "/api/v1/setup", body, "X-Forwarded-For", "203.0.113.9"); r.code != 201 {
+		t.Fatalf("proxied setup with the code: %d %s", r.code, r.raw)
+	}
+}
+
+// Two setups at the same moment: exactly one administrator is created.
+func TestConcurrentSetupCreatesOneAccount(t *testing.T) {
+	e := newEnv(t)
+	var wg sync.WaitGroup
+	codes := make(chan int, 8)
+	for i := range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r := e.do(e.client(), "POST", "/api/v1/setup", map[string]string{"username": fmt.Sprintf("user%d", i), "password": "correct horse battery"})
+			codes <- r.code
+		}()
+	}
+	wg.Wait()
+	close(codes)
+	created := 0
+	for c := range codes {
+		if c == 201 {
+			created++
+		}
+	}
+	if created != 1 {
+		t.Fatalf("%d setups succeeded, want exactly 1", created)
 	}
 }
 

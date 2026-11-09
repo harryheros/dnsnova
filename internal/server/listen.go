@@ -26,41 +26,77 @@ import (
 
 // ---- UDP ----
 
+// udpListener serves one address. On Linux it has one socket per CPU core
+// (up to 16) sharing the address with SO_REUSEPORT, so the kernel spreads
+// queries across cores; each socket has its own reader. An answer always
+// leaves through the socket its query came in on.
 type udpListener struct {
-	conn *net.UDPConn
-	wg   sync.WaitGroup
+	key   string         // the address as configured, to tell which service it is
+	conn  *net.UDPConn   // the first socket (for its address)
+	conns []*net.UDPConn // every socket, conn included
+	wg    sync.WaitGroup
+}
+
+// udpSockets is how many sockets listenUDP opens per address.
+func udpSockets() int {
+	if !canReusePort {
+		return 1
+	}
+	return min(max(runtime.NumCPU(), 1), 16)
 }
 
 func (s *Server) listenUDP(addr string) (*udpListener, error) {
-	ua, err := net.ResolveUDPAddr("udp", addr)
-	if err != nil {
-		return nil, err
+	lc := net.ListenConfig{}
+	n := udpSockets()
+	if n > 1 {
+		lc.Control = reusePort
 	}
-	c, err := net.ListenUDP("udp", ua)
-	if err != nil {
-		return nil, err
+	l := &udpListener{key: addr}
+	bind := addr
+	for i := 0; i < n; i++ {
+		pc, err := lc.ListenPacket(context.Background(), "udp", bind)
+		if err != nil {
+			for _, c := range l.conns {
+				c.Close()
+			}
+			return nil, err
+		}
+		c := pc.(*net.UDPConn)
+		c.SetReadBuffer(4 << 20)
+		c.SetWriteBuffer(4 << 20)
+		if i == 0 {
+			l.conn = c
+			bind = c.LocalAddr().String() // with port 0 (tests), the port the first socket got
+		}
+		l.conns = append(l.conns, c)
 	}
-	c.SetReadBuffer(4 << 20)
-	c.SetWriteBuffer(4 << 20)
-	l := &udpListener{conn: c}
-	for i := 0; i < max(runtime.NumCPU(), 2); i++ {
-		l.wg.Add(1)
-		go s.serveUDP(l)
+	// Readers per socket: with one socket, several readers share it.
+	readers := 2
+	if n == 1 {
+		readers = max(runtime.NumCPU(), 2)
 	}
-	s.Log.Info("listening", "proto", "udp", "addr", c.LocalAddr().String())
+	for _, c := range l.conns {
+		for range readers {
+			l.wg.Add(1)
+			go s.serveUDP(l, c)
+		}
+	}
+	s.Log.Info("listening", "proto", "udp", "addr", l.conn.LocalAddr().String(), "sockets", n)
 	return l, nil
 }
 
 func (l *udpListener) close() {
-	l.conn.Close()
+	for _, c := range l.conns {
+		c.Close()
+	}
 	l.wg.Wait()
 }
 
-func (s *Server) serveUDP(l *udpListener) {
+func (s *Server) serveUDP(l *udpListener, conn *net.UDPConn) {
 	defer l.wg.Done()
 	buf := make([]byte, 65535)
 	for {
-		n, addr, err := l.conn.ReadFromUDPAddrPort(buf)
+		n, addr, err := conn.ReadFromUDPAddrPort(buf)
 		if err != nil {
 			if isClosed(err) {
 				return
@@ -77,6 +113,14 @@ func (s *Server) serveUDP(l *udpListener) {
 			s.reject(v, ip) // never answer over UDP: that is what an attacker wants
 			continue
 		}
+		// Most queries are answered from the cache: do that right here, and
+		// start a goroutine only for those that must wait for an upstream.
+		start := time.Now()
+		filtered := st.filterPlain(l.key)
+		if res, ok := s.resolveCached(buf[:n], true, "udp", filtered); ok {
+			s.answerUDP(conn, st, ip, addr, buf[:n], res, start)
+			continue
+		}
 		select {
 		case s.udpInflight <- struct{}{}:
 		default:
@@ -88,26 +132,29 @@ func (s *Server) serveUDP(l *udpListener) {
 		s.wg.Add(1)
 		go func() {
 			defer func() { <-s.udpInflight; s.wg.Done() }()
-			start := time.Now()
-			res := s.resolve(pkt, true, "udp")
-			if res.Resp == nil {
-				return
-			}
-			resp := res.Resp
-			switch st.guard.RRL.Check(ip, res.Q.Name, res.Q.Type, m.Rcode(resp)) {
-			case guard.Drop:
-				s.Stats.Rejected[stats.RejectRRLDrop].Add(1)
-				s.Limited.Add(insight.NetworkOf(ip).String(), ip)
-				return
-			case guard.Slip:
-				s.Stats.Rejected[stats.RejectRRLSlip].Add(1)
-				s.Limited.Add(insight.NetworkOf(ip).String(), ip)
-				resp = m.Truncated(pkt, res.Q, m.Rcode(resp))
-			}
-			l.conn.WriteToUDPAddrPort(resp, addr)
-			s.logQuery(st, ip, "udp", res, start)
+			s.answerUDP(conn, st, ip, addr, pkt, s.resolve(pkt, true, "udp", filtered), start)
 		}()
 	}
+}
+
+// answerUDP applies response rate limiting and sends one UDP answer.
+func (s *Server) answerUDP(conn *net.UDPConn, st *state, ip netip.Addr, addr netip.AddrPort, pkt []byte, res resolver.Result, start time.Time) {
+	if res.Resp == nil {
+		return
+	}
+	resp := res.Resp
+	switch st.guard.RRL.Check(ip, res.Q.Name, res.Q.Type, m.Rcode(resp)) {
+	case guard.Drop:
+		s.Stats.Rejected[stats.RejectRRLDrop].Add(1)
+		s.Limited.Add(insight.NetworkOf(ip).String(), ip)
+		return
+	case guard.Slip:
+		s.Stats.Rejected[stats.RejectRRLSlip].Add(1)
+		s.Limited.Add(insight.NetworkOf(ip).String(), ip)
+		resp = m.Truncated(pkt, res.Q, m.Rcode(resp))
+	}
+	s.logQuery(st, ip, "udp", res, start) // before sending: a client may read the log as soon as it has its answer
+	conn.WriteToUDPAddrPort(resp, addr)
 }
 
 func (s *Server) reject(v guard.Verdict, ip netip.Addr) {
@@ -142,7 +189,7 @@ func (s *Server) logQuery(st *state, ip netip.Addr, proto string, res resolver.R
 	if s.QLog.On() {
 		s.QLog.Add(insight.Query{
 			Time: start, Proto: proto, Name: strings.ToLower(strings.TrimSuffix(name, ".")),
-			Type: m.TypeString(res.Q.Type), Rcode: m.RcodeString(rc), Source: stats.SourceName(res.Source),
+			Type: m.TypeString(res.Q.Type), Rcode: m.RcodeString(rc), Source: stats.SourceName(res.Source), Filtered: res.Filtered,
 			MS: float64(time.Since(start).Microseconds()) / 1000,
 		}, ip)
 	}
@@ -151,6 +198,7 @@ func (s *Server) logQuery(st *state, ip netip.Addr, proto string, res resolver.R
 // ---- TCP (pipelined queries are answered concurrently) ----
 
 type tcpListener struct {
+	key   string // the address as configured
 	proto int
 	ln    net.Listener
 	wg    sync.WaitGroup
@@ -168,7 +216,7 @@ func (s *Server) listenTCP(addr string, tlsConf *tls.Config, proto int, name str
 	if tlsConf != nil {
 		ln = tls.NewListener(ln, tlsConf)
 	}
-	l := &tcpListener{proto: proto, ln: ln, conns: map[net.Conn]struct{}{}}
+	l := &tcpListener{key: addr, proto: proto, ln: ln, conns: map[net.Conn]struct{}{}}
 	l.wg.Add(1)
 	go s.serveTCP(l)
 	s.Log.Info("listening", "proto", name, "addr", ln.Addr().String())
@@ -226,13 +274,16 @@ func (s *Server) serveTCP(l *tcpListener) {
 				s.tcpConns.Add(-1)
 				l.wg.Done()
 			}()
-			s.serveTCPConn(c, ip, l.proto, st.cfg.Limits.TCPPipeline, st.cfg.Limits.TCPIdleTimeout)
+			s.serveTCPConn(c, ip, l.key, l.proto, st.cfg.Limits.TCPPipeline, st.cfg.Limits.TCPIdleTimeout)
 		}()
 	}
 }
 
-func (s *Server) serveTCPConn(c net.Conn, ip netip.Addr, proto, pipeline int, idle time.Duration) {
+func (s *Server) serveTCPConn(c net.Conn, ip netip.Addr, key string, proto, pipeline int, idle time.Duration) {
 	name := "tcp"
+	// Which service: plain DNS by the address it came to, DoT by the name
+	// the client asked for in the TLS handshake (SNI).
+	filtered := func(st *state) bool { return st.filterPlain(key) }
 	if proto == stats.DoT {
 		name = "dot"
 		// the TLS handshake must finish within the idle timeout too
@@ -242,6 +293,8 @@ func (s *Server) serveTCPConn(c net.Conn, ip netip.Addr, proto, pipeline int, id
 			return
 		}
 		c.SetDeadline(time.Time{})
+		sni := c.(*tls.Conn).ConnectionState().ServerName
+		filtered = func(st *state) bool { return st.filterName(sni) }
 	}
 	var wmu sync.Mutex
 	var wg sync.WaitGroup
@@ -281,10 +334,10 @@ func (s *Server) serveTCPConn(c net.Conn, ip netip.Addr, proto, pipeline int, id
 		go func() {
 			defer func() { <-inflight; wg.Done() }()
 			start := time.Now()
-			res := s.resolve(msg, false, name)
+			res := s.resolve(msg, false, name, filtered(st))
 			if res.Resp != nil {
-				writeTCP(c, &wmu, res.Resp)
 				s.logQuery(st, ip, name, res, start)
+				writeTCP(c, &wmu, res.Resp)
 			}
 		}()
 	}
@@ -323,10 +376,7 @@ func (s *Server) listenHTTP(addr, path string, h http.Handler, tlsConf *tls.Conf
 
 func (s *Server) serveHTTP(ln net.Listener, addr, path string, h http.Handler, tlsConf *tls.Config) *httpListener {
 	if path != "" {
-		mux := http.NewServeMux()
-		mux.Handle(path, h)
-		mux.Handle("/", http.HandlerFunc(s.handlePublic))
-		h = mux
+		h = s.dohMux(path, h)
 	}
 	srv := &http.Server{
 		Handler:           h,
@@ -458,15 +508,19 @@ func (s *Server) handleDoH(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	start := time.Now()
-	res := s.resolve(msg, false, name)
+	sni := ""
+	if r.TLS != nil {
+		sni = r.TLS.ServerName
+	}
+	res := s.resolve(msg, false, name, st.filterDoH(r.URL.Path, r.Host, sni))
 	if res.Resp == nil {
 		http.Error(w, "malformed dns message", http.StatusBadRequest)
 		return
 	}
+	s.logQuery(st, ip, name, res, start)
 	w.Header().Set("Content-Type", "application/dns-message")
 	w.Header().Set("Cache-Control", fmt.Sprintf("max-age=%d", m.ResponseMinTTL(res.Resp)))
 	w.Write(res.Resp)
-	s.logQuery(st, ip, name, res, start)
 }
 
 func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
