@@ -269,7 +269,7 @@ func (s *Server) Events(limit int) []events.Event { return s.EventLog.Recent(lim
 func (s *Server) Cache() (positive, negative int) { return s.res.CacheCounts() }
 
 // ClearCache implements admin.Backend.
-func (s *Server) ClearCache() { s.res.ClearCache() }
+func (s *Server) ClearCache() { s.res.ClearCache(); s.Rec.ClearCache() }
 
 // Listeners implements admin.Backend.
 func (s *Server) Listeners() map[string][]string {

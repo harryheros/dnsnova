@@ -307,7 +307,7 @@ function signFooter() {
 
 // ---------- setup wizard ----------
 
-const WIZ_STEPS = ["Administrator", "Addresses", "Upstreams", "Encrypted DNS", "Review"];
+const WIZ_STEPS = ["Administrator", "Addresses", "Resolution", "Encrypted DNS", "Review"];
 
 async function showWizard(code, codeRequired) {
   const w = { step: 0, code, codeRequired, cfg: null, hash: "", values: {}, addrs: [], clientIP: "" };
@@ -448,16 +448,28 @@ const WIZ_VIEWS = [
       ["Google", ["https://dns.google/dns-query", "tls://dns.google"]],
       ["Quad9", ["https://dns.quad9.net/dns-query", "tls://dns.quad9.net"]],
     ];
-    put(body, wizHead(w, "Upstreams", "Where queries go when the answer is not cached; the fastest healthy one answers. Cloudflare and Quad9 are filled in, both over encrypted DNS. Keep them or choose others."),
+    const rec = h("input", { type: "checkbox", checked: !!w.values["recursion.enabled"] });
+    const primLabel = h("span");
+    const sync = () => {
+      primLabel.textContent = rec.checked ? "Upstreams, asked only when a domain\u2019s name servers cannot be reached (optional)" : "Primary, one per line: https://…/dns-query, tls://host, quic://host or an IP address";
+      fbLabel.hidden = rec.checked;
+    };
+    const fbLabel = h("label", { class: "block" }, "Fallback, used only if all primaries fail (optional)", fb);
+    rec.addEventListener("change", sync);
+    put(body, wizHead(w, "Resolution", "Where answers come from when they are not cached."),
+      h("label", { class: "check" }, rec, h("span", null, h("strong", null, "Resolve names itself"),
+        h("span", { class: "small muted", style: { display: "block" } }, "Ask the root servers and each domain\u2019s own name servers, with DNSSEC checks. No third party sees the queries. Otherwise the upstreams below answer: Cloudflare and Quad9 are filled in, over encrypted DNS."))),
       h("div", { class: "chips" }, h("span", { class: "small muted" }, "Add:"), presets.map(([n, list]) =>
         h("button", { type: "button", class: "btn small", onclick: () => { prim.value = [...new Set([...lines(prim.value), list[0]])].join("\n"); } }, n))),
-      h("label", { class: "block" }, "Primary, one per line: https://…/dns-query, tls://host, quic://host or an IP address", prim),
-      h("label", { class: "block" }, "Fallback, used only if all primaries fail (optional)", fb),
+      h("label", { class: "block" }, primLabel, prim),
+      fbLabel,
       wizNav(w, render, () => {
+        w.values["recursion.enabled"] = rec.checked;
         w.values["upstream.primary"] = lines(prim.value);
-        w.values["upstream.fallback"] = lines(fb.value);
-        if (!w.values["upstream.primary"].length) throw new Error("Add at least one primary upstream.");
+        w.values["upstream.fallback"] = rec.checked ? [] : lines(fb.value);
+        if (!rec.checked && !w.values["upstream.primary"].length) throw new Error("Add at least one primary upstream, or let DNSNova resolve names itself.");
       }));
+    sync();
   },
   // 3: encrypted DNS
   (w, body, render) => {
@@ -796,9 +808,11 @@ function drawOverview(st, stats, ups, events, range) {
   const blocked = stats.answers.blocked || 0;
   const states = ups.map((u) => upState(u, ups).cls);
   const failing = states.filter((x) => x === "err").length, slow = states.filter((x) => x === "warn").length;
-  const health = failing ? ["err", `${failing} of ${ups.length} upstreams failing`]
-    : slow ? ["warn", `${slow} upstream${slow === 1 ? " is" : "s are"} slow`]
-      : ["ok", `All ${ups.length} upstream${ups.length === 1 ? "" : "s"} healthy`];
+  const rec = st.recursion && st.recursion.enabled ? st.recursion : null;
+  const health = rec ? (rec.healthy ? ["ok", "Resolving from the root servers"] : ["err", "Name servers cannot be reached"])
+    : failing ? ["err", `${failing} of ${ups.length} upstreams failing`]
+      : slow ? ["warn", `${slow} upstream${slow === 1 ? " is" : "s are"} slow`]
+        : ["ok", `All ${ups.length} upstream${ups.length === 1 ? "" : "s"} healthy`];
   const open = PROTOS.map(([k]) => k).filter((k) => (st.listeners || {})[k]);
 
   // ---- summary ----
@@ -836,6 +850,26 @@ function drawOverview(st, stats, ups, events, range) {
     h("footer", { class: "dfoot" },
       h("span", null, `${primaries.length} primary · ${ups.length - primaries.length} fallback`),
       h("span", { class: "num" }, lats.length ? "avg " + fmt.ms(lats.reduce((a, b) => a + b, 0) / lats.length) + " ms" : "")));
+
+  // with recursion, the card shows resolution instead of upstreams
+  const recCard = rec ? (() => {
+    const checked = rec.secure + rec.insecure + rec.bogus;
+    const share = (n) => (checked ? fmt.pct(n / checked) : "–");
+    const rows = [
+      ["ok", "Signed and verified", rec.dnssec ? share(rec.secure) : "off", "DNSSEC"],
+      ["", "Not signed", rec.dnssec ? share(rec.insecure) : "–", "the domain does not use DNSSEC"],
+      [rec.bogus ? "warn" : "", "Failed the check", fmt.short(rec.bogus), "refused (SERVFAIL)"],
+      ["", "Queries to name servers", fmt.short(rec.queries), rec.queries ? `${fmt.pct(rec.timeouts / rec.queries)} timed out` : "since start"],
+    ];
+    if (rec.fallback) rows.push(["", "Answered by upstreams", fmt.short(rec.fallbacks), "when no name server answered"]);
+    return card("s4", "Resolution", "upstreams", h("a", { href: "#/settings/dns", class: "small" }, "Settings"),
+      h("ul", { class: "slots" }, rows.map(([cls, name, value, note]) => h("li", { class: "slot tall" },
+        h("span", { class: "dot " + (cls || "muted") }),
+        h("div", { class: "grow" }, h("div", { class: "small" }, name), h("div", { class: "small muted" }, note)),
+        h("span", { class: "num strong" }, value)))),
+      h("footer", { class: "dfoot" }, h("span", null, "From the root servers"),
+        h("span", { class: "num" }, `${fmt.short(rec.cache.zones)} zones · ${fmt.short(rec.cache.servers)} servers`)));
+  })() : null;
 
   // ---- four lists ----
   const protoMax = Math.max(1, ...PROTOS.map(([k]) => stats.queries[k] || 0));
@@ -898,7 +932,7 @@ function drawOverview(st, stats, ups, events, range) {
     h("footer", { class: "dfoot" }, h("span", null, "In memory only"), h("a", { href: "#/querylog" }, "Query log")));
 
   const notServing = st.serves_dns === false ? h("p", { class: "notice warn s12" }, "DNS is not served yet: no address is set. Choose addresses and upstreams in ", h("a", { href: "#/settings/access" }, "Access & limits"), " and ", h("a", { href: "#/settings/dns" }, "DNS & upstreams"), ".") : null;
-  return [h("div", { class: "dash" }, notServing, summary, chart, upCard, protos,
+  return [h("div", { class: "dash" }, notServing, summary, chart, recCard || upCard, protos,
     topCard("Top domains", "dns", stats.top_domains || [], "Nothing listed yet"),
     topCard("Not found", "alert", stats.top_nxdomains || [], "None"),
     rejCard, evCard, certCard, privCard)];
@@ -1124,17 +1158,28 @@ function guidePage(main) {
 
 // Field types: text, list (one per line), bool, number, select, listen (a
 // switch that fills a listen list from server.listen with a port).
+// upstream settings matter without recursion, or as its fallback
+const upShown = (v) => !v["recursion.enabled"] || v["recursion.fallback"];
+
 const SETTINGS = {
   dns: {
     title: "DNS & upstreams",
     sections: [
+      { title: "Resolution", fields: [
+        { key: "recursion.enabled", label: "Resolve names itself", type: "bool", help: "Ask the root servers and each domain\u2019s own name servers directly, instead of upstreams. No third party sees the queries, and answers are checked with DNSSEC." },
+        { key: "recursion.dnssec", label: "Check DNSSEC", type: "bool", help: "Answers that fail the check are refused rather than passed on. Leave it on.", show: (v) => v["recursion.enabled"] },
+        { key: "recursion.qname_minimisation", label: "Minimal names", type: "bool", help: "Each server is told only the part of the name it needs: the root sees \u201ccom\u201d, not the whole name.", show: (v) => v["recursion.enabled"] },
+        { key: "recursion.fallback", label: "Fall back to upstreams", type: "bool", help: "When no name server of a domain can be reached, ask the upstreams below. Never after a failed DNSSEC check.", show: (v) => v["recursion.enabled"] },
+        { key: "recursion.ipv6", label: "Use IPv6", type: "bool", help: "Also reach name servers over IPv6, when this server has it.", show: (v) => v["recursion.enabled"] },
+        { key: "recursion.allow_networks", label: "Private networks to query", type: "list", help: "Networks with your own name servers, such as 10.0.0.0/8. A public server otherwise never sends queries into private networks.", show: (v) => v["recursion.enabled"] },
+      ] },
       { title: "Upstreams", fields: [
-        { key: "upstream.primary", label: "Primary upstreams", type: "list", help: "Asked first, in parallel; the fastest answer wins. https://…/dns-query, tls://host, quic://host, udp://IP or an IP address." },
-        { key: "upstream.fallback", label: "Fallback upstreams", type: "list", help: "Used only when every primary fails or is slow." },
-        { key: "upstream.bootstrap", label: "Bootstrap servers", type: "list", help: "Plain DNS servers (IP addresses) used only to find the upstreams' own addresses." },
-        { key: "upstream.parallel", label: "Ask at once", type: "number", help: "How many primaries to ask in parallel." },
-        { key: "upstream.timeout", label: "Timeout", type: "text", help: "How long to wait for an upstream, such as 3s." },
-        { key: "upstream.fallback_delay", label: "Fallback delay", type: "text", help: "Ask the fallbacks if the primaries have not answered after this long." },
+        { key: "upstream.primary", label: "Primary upstreams", type: "list", help: "Asked first, in parallel; the fastest answer wins. https://…/dns-query, tls://host, quic://host, udp://IP or an IP address. With recursion, only used as a fallback.", show: upShown },
+        { key: "upstream.fallback", label: "Fallback upstreams", type: "list", help: "Used only when every primary fails or is slow.", show: upShown },
+        { key: "upstream.bootstrap", label: "Bootstrap servers", type: "list", help: "Plain DNS servers (IP addresses) used only to find the upstreams' own addresses.", show: upShown },
+        { key: "upstream.parallel", label: "Ask at once", type: "number", help: "How many primaries to ask in parallel.", show: upShown },
+        { key: "upstream.timeout", label: "Timeout", type: "text", help: "How long to wait for an upstream, such as 3s.", show: upShown },
+        { key: "upstream.fallback_delay", label: "Fallback delay", type: "text", help: "Ask the fallbacks if the primaries have not answered after this long.", show: upShown },
       ] },
       { title: "Cache", action: ["Clear cache", async () => { await api("POST", "/cache/clear"); toast("Cache cleared"); }], fields: [
         { key: "cache.size", label: "Size", type: "number", help: "Most answers kept." },
@@ -1262,6 +1307,7 @@ async function settingsPage(main, id) {
   const parts = [];
   if (page.certificate) parts.push(await certificateCard());
   if (page.filterStatus) parts.push(await filterCard());
+  const sectionCards = [];
   for (const sec of page.sections) {
     const card = h("section", { class: "card pad0", "aria-label": sec.title },
       h("div", { class: "pagehead", style: { margin: "12px 0 4px" } }, h("h2", null, sec.title),
@@ -1271,6 +1317,7 @@ async function settingsPage(main, id) {
       form.rows[f.key] = { f, row };
       card.append(row.el);
     }
+    sectionCards.push([card, sec]);
     parts.push(card);
   }
   if (id === "encryption") parts.push(clientAddresses(cur));
@@ -1285,6 +1332,8 @@ async function settingsPage(main, id) {
       row.el.hidden = f.show ? !f.show(form.val) : false;
       row.sync();
     }
+    // a section whose fields are all hidden is hidden too
+    for (const [card, sec] of sectionCards) card.hidden = sec.fields.every((f) => f.show && !f.show(form.val));
     drawReview();
   };
   const changed = () => changedValues(form.cur, form.val);

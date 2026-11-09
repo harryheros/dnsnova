@@ -8,12 +8,26 @@ All notable changes are listed here. Versions follow
 
 First development release of the 1.0 core.
 
+- Recursion (off by default, `[recursion]`): DNSNova resolves names itself,
+  from the root servers down, so no third party sees the queries. DNSSEC
+  validation from the built-in root keys (KSK-2017 and KSK-2024): RSA,
+  ECDSA and Ed25519 signatures, NSEC and NSEC3 proofs, and answers
+  synthesised from validated NSEC records (RFC 8198). Forged answers become
+  SERVFAIL with an Extended DNS Error saying why. QNAME minimisation
+  (RFC 9156), IPv6, TCP and EDNS fallback, protection against cache
+  poisoning, name server loops and oversized delegations, and no queries
+  into private networks on a public server. The upstreams can step in when
+  a domain's own servers cannot be reached, never after a failed DNSSEC
+  check. In the setup wizard, the web interface and the metrics.
 - Filtering, as a second door on the same server (off by default,
   `[filter]`). The usual addresses stay unfiltered; clients that want
   blocking use the filtered plain-DNS address (`filter.listen`), a filtered
   name for DoT, DoQ and DoH (`filter.names`, told apart by the TLS name), or
   the DoH path `/filtered`. `filter.all` filters every address instead.
   Blocked names are answered NXDOMAIN with Extended DNS Error 15 (Blocked).
+  Answers whose CNAME chain leads to a blocked name are blocked as well
+  (trackers disguised as a site's own subdomain), unless the name asked for
+  is allowed explicitly.
   Lists in AdGuard (`||domain^`, `@@||domain^`), hosts and plain-domain
   format, by URL or file; the ShieldNova list is suggested. Copies are kept
   on disk, so filtering works at once after a restart and while a list
@@ -28,6 +42,10 @@ First development release of the 1.0 core.
 - About 75% more answers per second for names not in the cache: the
   buffer for each upstream answer over UDP is reused instead of allocated
   (64 KB per query, most of the CPU time went to garbage collection).
+- `tools/resolver-check.sh`: checks a running server from the outside next
+  to a reference resolver.
+- `tools/bench`: a load generator (UDP, DoT, DoH) and a stand-in upstream;
+  results and method in docs/benchmark.md.
 - Changing `doh.path` on a running server no longer fails with "address
   already in use".
 

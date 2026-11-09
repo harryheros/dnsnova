@@ -130,12 +130,42 @@ func (s *Server) serveUDP(l *udpListener, conn *net.UDPConn) {
 		pkt := make([]byte, n)
 		copy(pkt, buf[:n])
 		s.wg.Add(1)
-		go func() {
+		s.dispatch(func() {
 			defer func() { <-s.udpInflight; s.wg.Done() }()
 			s.answerUDP(conn, st, ip, addr, pkt, s.resolve(pkt, true, "udp", filtered), start)
-		}()
+		})
 	}
 }
+
+// dispatch runs job on an idle worker, or a new one. Workers stay for a
+// while after their job, so the goroutine stacks that deep lookups grow are
+// reused instead of grown again for every query (about a tenth of the CPU
+// time when resolving from the root).
+func (s *Server) dispatch(job func()) {
+	select {
+	case s.jobs <- job:
+	default:
+		go s.worker(job)
+	}
+}
+
+func (s *Server) worker(job func()) {
+	idle := time.NewTimer(workerIdle)
+	defer idle.Stop()
+	for {
+		job()
+		idle.Reset(workerIdle)
+		select {
+		case job = <-s.jobs:
+		case <-idle.C:
+			return
+		case <-s.ctx.Done():
+			return
+		}
+	}
+}
+
+const workerIdle = 20 * time.Second
 
 // answerUDP applies response rate limiting and sends one UDP answer.
 func (s *Server) answerUDP(conn *net.UDPConn, st *state, ip netip.Addr, addr netip.AddrPort, pkt []byte, res resolver.Result, start time.Time) {
@@ -553,6 +583,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 		}
 		fmt.Fprintf(w, "dnsnova_upstream_healthy{upstream=%q,role=%q} %d\n", u.U.String(), role(u.Fallback), h)
 	}
+	s.writeRecursionMetrics(w)
 }
 
 func role(fallback bool) string {
@@ -575,9 +606,13 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		}
 	}
 	status, code := "ok", http.StatusOK
+	recursion := st.cfg.Recursion.Enabled
 	switch {
-	case total == 0 && !st.cfg.ServesDNS():
+	case total == 0 && !recursion && !st.cfg.ServesDNS():
 		status = "setup" // a fresh install: only the web interface runs
+	case recursion && (s.Rec.Healthy() || healthy > 0):
+	case recursion:
+		status, code = "unhealthy", http.StatusServiceUnavailable
 	case healthy == 0:
 		status, code = "unhealthy", http.StatusServiceUnavailable
 	}
@@ -588,6 +623,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		"status":            status,
 		"upstreams_healthy": healthy,
 		"upstreams_total":   total,
+		"recursion":         recursion,
 		"uptime_seconds":    int(time.Since(s.Stats.Started).Seconds()),
 	})
 }

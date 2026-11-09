@@ -74,6 +74,25 @@ type Backend interface {
 	// downloads them now.
 	FilterStatus() filter.Status
 	UpdateFilter(ctx context.Context)
+	// RecursionStatus describes resolving from the root servers.
+	RecursionStatus() Recursion
+}
+
+// Recursion is the state of resolving from the root servers.
+type Recursion struct {
+	Enabled           bool           `json:"enabled"`
+	DNSSEC            bool           `json:"dnssec"`
+	QNameMinimisation bool           `json:"qname_minimisation"`
+	Fallback          bool           `json:"fallback"` // upstreams are asked when no authoritative server answers
+	Healthy           bool           `json:"healthy"`
+	Queries           int64          `json:"queries"` // sent to authoritative servers
+	Timeouts          int64          `json:"timeouts"`
+	TCP               int64          `json:"tcp"`
+	Secure            int64          `json:"secure"` // answers by DNSSEC result
+	Insecure          int64          `json:"insecure"`
+	Bogus             int64          `json:"bogus"`
+	Fallbacks         int64          `json:"fallbacks"`
+	Cache             map[string]int `json:"cache"`
 }
 
 // Tops are the lists shown beside the statistics.

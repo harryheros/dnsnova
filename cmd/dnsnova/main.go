@@ -1,5 +1,5 @@
-// Command dnsnova is a forwarding DNS server for public and private
-// resolvers.
+// Command dnsnova is a DNS server for public and private resolvers: it
+// resolves names itself or forwards them to upstreams.
 package main
 
 import (

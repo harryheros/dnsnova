@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/harryheros/dnsnova/internal/filter"
+	"github.com/harryheros/dnsnova/internal/recursor"
 	"github.com/harryheros/dnsnova/internal/upstream"
 )
 
@@ -127,6 +128,18 @@ type Config struct {
 		Names          []string // DoT, DoQ and DoH names of the filtered service
 		Listen         []string // plain DNS addresses (UDP and TCP) of the filtered service
 	}
+	// Recursion resolves names from the root servers instead of asking
+	// upstreams, and validates answers with DNSSEC.
+	Recursion struct {
+		Enabled           bool
+		DNSSEC            bool
+		QNameMinimisation bool
+		IPv6              bool
+		Fallback          bool     // ask the upstreams when no authoritative server answers
+		AllowNetworks     []string // networks that may be queried although private or local
+		TrustAnchors      []string // replace the root trust anchors: "tag algorithm digest-type digest"
+		RootHints         []string // replace the root server addresses
+	}
 }
 
 // DefaultFilterList is ShieldNova's full list: privacy, ads and security,
@@ -171,6 +184,10 @@ func Defaults() *Config {
 	c.Filter.Lists = []string{DefaultFilterList}
 	c.Filter.UpdateInterval = 24 * time.Hour
 	c.Filter.DoHPath = "/filtered"
+	c.Recursion.DNSSEC = true
+	c.Recursion.QNameMinimisation = true
+	c.Recursion.IPv6 = true
+	c.Recursion.Fallback = true
 	return c
 }
 
@@ -303,8 +320,8 @@ func (c *Config) validate(lines map[string]int) (Errors, []string) {
 
 	errs, warns = c.validateTLS(lines, errs, warns)
 
-	if len(c.Upstream.Primary) == 0 && dns {
-		bad("upstream.primary", "at least one upstream is required")
+	if len(c.Upstream.Primary) == 0 && dns && !c.Recursion.Enabled {
+		bad("upstream.primary", "at least one upstream is required (or turn on recursion.enabled)")
 	}
 	for _, key := range []string{"upstream.primary", "upstream.fallback"} {
 		list := c.Upstream.Primary
@@ -373,6 +390,7 @@ func (c *Config) validate(lines map[string]int) (Errors, []string) {
 		}
 	}
 	errs, warns = c.validateFilter(lines, errs, warns)
+	errs, warns = c.validateRecursion(lines, errs, warns)
 	if c.Log.Queries {
 		warns = append(warns, "log.queries no longer writes queries to the system log; start the query log in the admin interface instead (it is kept in memory and stops by itself)")
 	}
@@ -432,6 +450,55 @@ func (c *Config) PublicListenIPs() []netip.Addr {
 		}
 		a := ap.Addr().Unmap()
 		if a.IsGlobalUnicast() && !a.IsPrivate() && !slices.Contains(out, a) {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+func (c *Config) validateRecursion(lines map[string]int, errs Errors, warns []string) (Errors, []string) {
+	bad := func(key, msg string) { errs = append(errs, &Error{Line: lines[key], Key: key, Msg: msg}) }
+	r := &c.Recursion
+	for _, n := range r.AllowNetworks {
+		if _, err := netip.ParsePrefix(n); err != nil {
+			bad("recursion.allow_networks", fmt.Sprintf("%q: give a network such as 10.0.0.0/8", n))
+		}
+	}
+	for _, a := range r.TrustAnchors {
+		if _, err := recursor.ParseAnchor(a); err != nil {
+			bad("recursion.trust_anchors", fmt.Sprintf("%q: %v", a, err))
+		}
+	}
+	for _, h := range r.RootHints {
+		if _, err := netip.ParseAddr(h); err != nil {
+			bad("recursion.root_hints", fmt.Sprintf("%q is not an IP address", h))
+		}
+	}
+	if r.Enabled && r.Fallback && len(c.Upstream.Primary) == 0 {
+		warns = append(warns, "recursion.fallback: no upstreams are set, so there is nothing to fall back to")
+	}
+	if r.Enabled && !r.DNSSEC {
+		warns = append(warns, "recursion.dnssec is off: answers are not checked, so forged ones can get through")
+	}
+	return errs, warns
+}
+
+// RecursionNetworks returns recursion.allow_networks parsed.
+func (c *Config) RecursionNetworks() []netip.Prefix {
+	var out []netip.Prefix
+	for _, n := range c.Recursion.AllowNetworks {
+		if p, err := netip.ParsePrefix(n); err == nil {
+			out = append(out, p.Masked())
+		}
+	}
+	return out
+}
+
+// RecursionRootHints returns recursion.root_hints parsed.
+func (c *Config) RecursionRootHints() []netip.Addr {
+	var out []netip.Addr
+	for _, h := range c.Recursion.RootHints {
+		if a, err := netip.ParseAddr(h); err == nil {
 			out = append(out, a)
 		}
 	}
@@ -707,11 +774,21 @@ var fields = map[string]field{
 	"filter.doh_path":        str(func(c *Config) *string { return &c.Filter.DoHPath }),
 	"filter.names":           strList(func(c *Config) *[]string { return &c.Filter.Names }),
 	"filter.listen":          strList(func(c *Config) *[]string { return &c.Filter.Listen }),
+
+	"recursion.enabled":            boolean(func(c *Config) *bool { return &c.Recursion.Enabled }),
+	"recursion.dnssec":             boolean(func(c *Config) *bool { return &c.Recursion.DNSSEC }),
+	"recursion.qname_minimisation": boolean(func(c *Config) *bool { return &c.Recursion.QNameMinimisation }),
+	"recursion.ipv6":               boolean(func(c *Config) *bool { return &c.Recursion.IPv6 }),
+	"recursion.fallback":           boolean(func(c *Config) *bool { return &c.Recursion.Fallback }),
+	"recursion.allow_networks":     strList(func(c *Config) *[]string { return &c.Recursion.AllowNetworks }),
+	"recursion.trust_anchors":      strList(func(c *Config) *[]string { return &c.Recursion.TrustAnchors }),
+	"recursion.root_hints":         strList(func(c *Config) *[]string { return &c.Recursion.RootHints }),
 }
 
 var knownTables = map[string]bool{
 	"server": true, "doh": true, "dot": true, "doq": true, "tls": true, "ddr": true, "upstream": true, "cache": true,
 	"access": true, "limits": true, "metrics": true, "log": true, "admin": true, "status": true, "local": true, "stats": true, "filter": true,
+	"recursion": true,
 }
 
 func want(v Value, k Kind) error {

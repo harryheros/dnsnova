@@ -166,6 +166,53 @@ func ReadQName(msg []byte, off int) (string, int, error) {
 	return string(b), off, nil
 }
 
+// ReadName reads a name that may be compressed (RFC 1035 section 4.1.4) and
+// returns it lowercased in wire format without the final zero, plus the
+// offset just after the name where it starts (not after a pointer target).
+func ReadName(msg []byte, off int) (string, int, error) {
+	var b []byte
+	next := -1
+	for hops := 0; ; {
+		if off < 0 || off >= len(msg) {
+			return "", 0, ErrMalformed
+		}
+		c := int(msg[off])
+		switch {
+		case c == 0:
+			if next < 0 {
+				next = off + 1
+			}
+			return string(b), next, nil
+		case c&0xC0 == 0xC0:
+			if off+2 > len(msg) {
+				return "", 0, ErrMalformed
+			}
+			if next < 0 {
+				next = off + 2
+			}
+			ptr := int(U16(msg, off) & 0x3FFF)
+			if hops++; hops > 64 || ptr >= off {
+				return "", 0, ErrMalformed // loops and forward pointers
+			}
+			off = ptr
+		case c&0xC0 != 0 || off+1+c > len(msg):
+			return "", 0, ErrMalformed
+		default:
+			b = append(b, byte(c))
+			for _, ch := range msg[off+1 : off+1+c] {
+				if ch >= 'A' && ch <= 'Z' {
+					ch += 'a' - 'A'
+				}
+				b = append(b, ch)
+			}
+			if len(b) > maxNameLen-1 {
+				return "", 0, ErrMalformed
+			}
+			off += 1 + c
+		}
+	}
+}
+
 // RR describes one resource record inside a message.
 type RR struct {
 	Type, Class uint16
