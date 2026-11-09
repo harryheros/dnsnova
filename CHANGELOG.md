@@ -19,7 +19,9 @@ First stable release.
   connections and 3,000 DoQ and HTTP/3 connections (measured at about
   25 KB and 70 KB each), as each phone keeps one open.
 - Setup in the browser: the wizard asks who can use plain DNS (everyone,
-  chosen addresses, or only this server for an encrypted-only resolver),
+  chosen addresses, with 127.0.0.1 ticked so programs on the server itself
+  can use it, or only this server for an encrypted-only resolver), and warns
+  that devices and the server's own resolver can only use port 53,
   offers a separate filtered address when there is a domain, and can
   filter everyone instead.
   Encrypted DNS settings start with the domain: entering one chooses a free
