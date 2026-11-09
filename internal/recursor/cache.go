@@ -191,13 +191,22 @@ func newInfra() *infra { return &infra{m: map[netip.Addr]*server{}} }
 
 const unknownRTT = 250 * time.Millisecond
 
+// maxServers bounds what is remembered about name servers: about 100
+// bytes each.
+const maxServers = 100000
+
 func (in *infra) get(a netip.Addr) *server {
 	s := in.m[a]
 	if s == nil {
-		if len(in.m) > 100000 { // forget idle servers
-			for k, v := range in.m {
-				if time.Since(v.lastUsed) > time.Hour {
-					delete(in.m, k)
+		if len(in.m) >= maxServers { // forget idle servers, then any
+			for _, idle := range []time.Duration{time.Hour, infraForget, 0} {
+				for k, v := range in.m {
+					if time.Since(v.lastUsed) > idle {
+						delete(in.m, k)
+					}
+				}
+				if len(in.m) < maxServers*3/4 {
+					break
 				}
 			}
 		}

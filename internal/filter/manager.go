@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -63,11 +64,15 @@ type Manager struct {
 	HTTP    *http.Client
 	Now     func() time.Time
 
-	mu    sync.Mutex
-	set   Settings
-	lists map[string]*ListStatus
-	wake  chan struct{}
-	rules atomic.Int64
+	mu sync.Mutex
+	// rebuildMu: one rebuild at a time, each reading the settings when it
+	// starts. Otherwise a slow rebuild for old settings could publish its
+	// rules after a quicker one for the new settings.
+	rebuildMu sync.Mutex
+	set       Settings
+	lists     map[string]*ListStatus
+	wake      chan struct{}
+	rules     atomic.Int64
 }
 
 // NewManager returns a manager storing copies in dir; publish receives the
@@ -75,7 +80,7 @@ type Manager struct {
 func NewManager(dir string, log *slog.Logger, publish func(*Set)) *Manager {
 	return &Manager{
 		dir: dir, log: log, publish: publish,
-		HTTP:  &http.Client{Timeout: 60 * time.Second},
+		HTTP:  &http.Client{Timeout: 60 * time.Second, CheckRedirect: checkRedirect},
 		Now:   time.Now,
 		lists: map[string]*ListStatus{},
 		wake:  make(chan struct{}, 1),
@@ -192,6 +197,27 @@ func (m *Manager) stamps(src string) (updated, checked time.Time) {
 	return
 }
 
+// checkRedirect limits where a list server can send the download: a few
+// redirects at most, never from HTTPS to plain HTTP, and never to an
+// address on this machine or a private network (where it could reach
+// services that are not meant to be asked, such as a cloud's metadata
+// address).
+func checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 5 {
+		return errors.New("too many redirects")
+	}
+	if via[0].URL.Scheme == "https" && req.URL.Scheme != "https" {
+		return errors.New("redirected from HTTPS to " + req.URL.Scheme)
+	}
+	if ip, err := netip.ParseAddr(strings.Trim(req.URL.Hostname(), "[]")); err == nil {
+		ip = ip.Unmap()
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+			return errors.New("redirected to a local address")
+		}
+	}
+	return nil
+}
+
 // path is where the copy of src is kept.
 func (m *Manager) path(src string) string {
 	sum := sha256.Sum256([]byte(src))
@@ -305,6 +331,8 @@ func (m *Manager) store(src string, data []byte) error {
 // rebuild combines the stored copies and the operator's rules into a new
 // Set and publishes it.
 func (m *Manager) rebuild() {
+	m.rebuildMu.Lock()
+	defer m.rebuildMu.Unlock()
 	m.mu.Lock()
 	s := m.set
 	m.mu.Unlock()

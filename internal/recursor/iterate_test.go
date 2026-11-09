@@ -593,3 +593,16 @@ func TestIPv6Works(t *testing.T) {
 		t.Fatalf("only %d queries over working, faster IPv6", v6.Load())
 	}
 }
+
+// TestServerTableBounded: the table of name servers stops growing.
+func TestServerTableBounded(t *testing.T) {
+	in := newInfra()
+	now := time.Now()
+	for i := range maxServers + 5000 {
+		a := netip.AddrFrom4([4]byte{10, byte(i >> 16), byte(i >> 8), byte(i)})
+		in.ok(a, time.Millisecond, now)
+	}
+	if n := in.size(); n > maxServers {
+		t.Fatalf("%d servers remembered, limit %d", n, maxServers)
+	}
+}

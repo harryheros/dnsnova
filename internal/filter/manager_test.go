@@ -187,3 +187,41 @@ func writeFile(t *testing.T, path, data string) {
 		t.Fatal(err)
 	}
 }
+
+func TestCheckRedirect(t *testing.T) {
+	req := func(u string) *http.Request { r, _ := http.NewRequest("GET", u, nil); return r }
+	from := []*http.Request{req("https://lists.example/a.txt")}
+	for u, ok := range map[string]bool{
+		"https://cdn.example/a.txt":                true,
+		"http://cdn.example/a.txt":                 false, // HTTPS to HTTP
+		"https://127.0.0.1/a.txt":                  false,
+		"https://169.254.169.254/latest/meta-data": false, // cloud metadata
+		"https://10.0.0.5/a.txt":                   false,
+		"https://[::1]/a.txt":                      false,
+	} {
+		if err := checkRedirect(req(u), from); (err == nil) != ok {
+			t.Errorf("%s: %v", u, err)
+		}
+	}
+	many := []*http.Request{from[0], from[0], from[0], from[0], from[0]}
+	if checkRedirect(req("https://cdn.example/a.txt"), many) == nil {
+		t.Error("no limit on redirects")
+	}
+}
+
+// TestRebuildsKeepOrder: rebuilds for older settings never publish after
+// the newest.
+func TestRebuildsKeepOrder(t *testing.T) {
+	h := newHarness(t, t.TempDir())
+	var wg sync.WaitGroup
+	for i := range 50 {
+		wg.Go(func() {
+			h.m.Configure(Settings{Enabled: true, Interval: time.Hour, Block: []string{fmt.Sprintf("n%d.example", i)}})
+		})
+	}
+	wg.Wait()
+	h.m.Configure(Settings{Enabled: true, Interval: time.Hour, Block: []string{"last.example"}})
+	if !h.blocked(t, "last.example") || h.blocked(t, "n1.example") {
+		t.Fatal("the rules published are not those of the newest settings")
+	}
+}

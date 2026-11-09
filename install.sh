@@ -153,15 +153,20 @@ preflight() {
     if have curl; then DL="curl"; elif have wget; then DL="wget"; else die "curl or wget is required"; fi
 }
 
+# HTTPS only: a download over plain HTTP could be swapped on the way. A
+# mirror given in DNSNOVA_RELEASE_URL may be plain HTTP (a local test).
+PROTO='=https'
+case "${DNSNOVA_RELEASE_URL:-}" in http://*) PROTO='=https,http' ;; esac
+
 fetch() { # fetch URL FILE [progress]
     # a progress bar for the download itself, when someone is watching
     if [ -n "${3:-}" ] && [ -t 2 ]; then
-        if [ "$DL" = curl ]; then curl -fL -# --proto '=https,http' --retry 2 -o "$2" "$1"
+        if [ "$DL" = curl ]; then curl -fL -# --proto "$PROTO" --retry 2 -o "$2" "$1"
         elif wget --help 2>&1 | grep -q -- --show-progress; then wget -q --show-progress -O "$2" "$1"
         else wget -O "$2" "$1"; fi
         return
     fi
-    if [ "$DL" = curl ]; then curl -fsSL --proto '=https,http' --retry 2 -o "$2" "$1"
+    if [ "$DL" = curl ]; then curl -fsSL --proto "$PROTO" --retry 2 -o "$2" "$1"
     else wget -q -O "$2" "$1"; fi
 }
 

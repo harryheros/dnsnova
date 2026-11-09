@@ -12,6 +12,18 @@ All notable changes are listed here. Versions follow
   rule, IPv6 turned off in the system, no address to send from) pauses it
   for 10 minutes at once, instead of failing again for every name, which
   could end in SERVFAIL. Where IPv6 works it is used as before.
+- `cache.size` is honoured: a small cache was rounded up to 4,096 entries.
+- `cache.min_ttl` no longer stretches answers that carry DNSSEC
+  signatures, which a validating client could then use past their time.
+- Filtering: a CNAME chain too long to check every name (over 32) is
+  blocked on the filtered service rather than let through; rules for
+  older settings can no longer be published after newer ones when lists
+  are rebuilt at the same time.
+- Filter list downloads follow at most 5 redirects, never from HTTPS to
+  plain HTTP or to an address on this machine or a private network; lists
+  fetched over plain HTTP are warned about.
+- Recursion remembers at most 100,000 name servers.
+- The installer downloads over HTTPS only.
 - The installer shows a progress bar while it downloads, when run in a
   terminal.
 
