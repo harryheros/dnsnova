@@ -5,7 +5,8 @@
 #
 #   bash resolver-check.sh [server] [reference]
 #
-# server defaults to 127.0.0.1, reference to 1.1.1.1. Needs dig
+# server defaults to 127.0.0.1, reference to 1.1.1.1. For another port than
+# 53, write address#port, such as 127.0.0.1#5353. Needs dig
 # (Debian, Ubuntu: apt install dnsutils; Fedora, RHEL: dnf install bind-utils).
 
 S=${1:-127.0.0.1}
@@ -23,9 +24,10 @@ note() { warn=$((warn + 1)); printf '  \033[33mnote\033[0m  %s\n' "$*"; }
 
 # ask SERVER ARGS...: sets out, status, flags, ms, answers
 ask() {
-	local srv=$1
+	local srv=${1%%#*} port=53
+	case "$1" in *#*) port=${1##*#} ;; esac
 	shift
-	out=$(dig @"$srv" +time=5 +tries=1 +noall +comments +answer +stats "$@" 2>&1)
+	out=$(dig @"$srv" -p "$port" +time=5 +tries=1 +noall +comments +answer +stats "$@" 2>&1)
 	status=$(printf '%s\n' "$out" | sed -n 's/.*status: \([A-Z]*\).*/\1/p' | head -1)
 	flags=$(printf '%s\n' "$out" | sed -n 's/^;; flags: \([a-z ]*\).*/\1/p' | head -1)
 	ms=$(printf '%s\n' "$out" | sed -n 's/^;; Query time: \([0-9]*\) msec.*/\1/p' | head -1)
@@ -38,7 +40,7 @@ has_flag() { case " $flags " in *" $1 "*) return 0 ;; esac; return 1; }
 echo "Checking $S (reference: $R)"
 ask "$S" example.com
 if [ "$status" = TIMEOUT ]; then
-	echo "No answer from $S. Is the server running and reachable on port 53?" >&2
+	echo "No answer from $S. Is the server running, and is the port right (address#port)?" >&2
 	exit 1
 fi
 
