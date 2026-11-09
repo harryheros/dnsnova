@@ -2,6 +2,7 @@ package recursor
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/netip"
@@ -438,5 +439,35 @@ func TestAddressesNotAsked(t *testing.T) {
 	}
 	if r.allowed(c, netip.MustParseAddr("2001:db8::1")) {
 		t.Error("IPv6 used while off")
+	}
+}
+
+// TestBrokenIPv6 has every domain's name servers on IPv4 and on IPv6, where
+// IPv6 silently drops everything (a route that leads nowhere). Asking over
+// IPv6 first would cost a timeout for many names.
+func TestBrokenIPv6(t *testing.T) {
+	n := world()
+	com := n.servers[comA].zones[0]
+	for i := range 15 {
+		v4 := netip.AddrFrom4([4]byte{192, 0, 2, byte(100 + i)})
+		v6 := netip.MustParseAddr(fmt.Sprintf("2001:db8::%x", 0x100+i))
+		z := fmt.Sprintf("z%d.com.", i)
+		more := zone("com.", z+" NS ns."+z, "ns."+z+" A "+v4.String(), "ns."+z+" AAAA "+v6.String())
+		com.recs = append(com.recs, more.recs...)
+		n.servers[v4] = &fakeServer{zones: []*fakeZone{zone(z, "www."+z+" A 198.51.100.7")}}
+		n.servers[v6] = &fakeServer{silent: true}
+	}
+	r := New(Config{IPv6: true, RootHints: []netip.Addr{rootA},
+		Allow: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24"), netip.MustParsePrefix("2001:db8::/32")}},
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	r.send = n.send
+	start := time.Now()
+	for i := range 15 {
+		if msg := ask(t, r, fmt.Sprintf("www.z%d.com", i), m.TypeA); msg.rcode != m.RcodeNoError || len(msg.answer) == 0 {
+			t.Fatalf("z%d: rcode %d", i, msg.rcode)
+		}
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("15 names took %v: broken IPv6 is waited for", d)
 	}
 }

@@ -70,6 +70,8 @@ type Recursor struct {
 	socks   sockPool
 	nsecs   nsecIndex
 	v6down  atomic.Int64
+	v6ok    atomic.Int64 // unix nanos of the last answer over IPv6
+	v6fails atomic.Int64 // IPv6 timeouts in a row
 	lastOK  atomic.Int64 // unix nanos of the last answer from any server
 	failRun atomic.Int64 // queries without an answer since then
 	// send is replaced by tests.

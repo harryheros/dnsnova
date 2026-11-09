@@ -297,8 +297,13 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 	tried := 0
 	for len(addrs) > 0 && tried < 8 {
 		scores := make(map[netip.Addr]time.Duration, len(addrs))
+		v6proven := r.v6Proven()
 		for _, a := range addrs {
 			scores[a] = r.infra.score(a, d.zone, now)
+			if a.Is6() && !v6proven {
+				// IPv6 that may be silently broken: IPv4 first
+				scores[a] += v6Penalty
+			}
 		}
 		slices.SortStableFunc(addrs, func(a, b netip.Addr) int { return int(scores[a] - scores[b]) })
 		a := addrs[0]
@@ -409,6 +414,39 @@ func (r *Recursor) cachedAddrs(host string, cfg *Config) []netip.Addr {
 
 func (r *Recursor) v6Down() bool { return r.now().UnixNano() < r.v6down.Load() }
 
+// IPv6 can be configured yet broken: packets vanish instead of failing at
+// once (a router announcing a route it does not carry). Every server asked
+// over it would then cost a timeout, several per name. So IPv6 is preferred
+// only after it has answered, and three timeouts in a row without any
+// answer turn it off for v6Pause.
+const (
+	v6Penalty = 300 * time.Millisecond
+	v6Pause   = 10 * time.Minute
+)
+
+func (r *Recursor) v6Proven() bool {
+	ok := r.v6ok.Load()
+	return ok != 0 && r.now().Sub(time.Unix(0, ok)) < v6Pause
+}
+
+func (r *Recursor) v6Result(a netip.Addr, err error, now time.Time) {
+	if !a.Is6() {
+		return
+	}
+	switch {
+	case err == nil:
+		r.v6ok.Store(now.UnixNano())
+		r.v6fails.Store(0)
+	case errors.Is(err, syscall.ENETUNREACH) || errors.Is(err, syscall.EHOSTUNREACH):
+		r.v6down.Store(now.Add(v6Pause).UnixNano())
+	case errors.Is(err, context.DeadlineExceeded) || isTimeout(err):
+		if r.v6fails.Add(1) >= 3 && !r.v6Proven() {
+			r.v6down.Store(now.Add(v6Pause).UnixNano())
+			r.v6fails.Store(0)
+		}
+	}
+}
+
 // ask sends one question to one server: over UDP, then TCP if the answer
 // was truncated; without EDNS for servers that do not support it.
 func (r *Recursor) ask(ctx context.Context, a netip.Addr, name string, qtype uint16) (*message, error) {
@@ -426,14 +464,13 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, name string, qtype uin
 			if errors.Is(err, context.DeadlineExceeded) || isTimeout(err) {
 				r.Stats.Timeouts.Add(1)
 			}
-			if a.Is6() && (errors.Is(err, syscall.ENETUNREACH) || errors.Is(err, syscall.EHOSTUNREACH)) {
-				r.v6down.Store(now.Add(10 * time.Minute).UnixNano())
-			}
+			r.v6Result(a, err, now)
 			r.infra.fail(a, now)
 			r.failRun.Add(1)
 			return nil, err
 		}
 		r.infra.ok(a, time.Since(start), now)
+		r.v6Result(a, nil, now)
 		r.lastOK.Store(now.UnixNano())
 		r.failRun.Store(0)
 		msg, err := parseMessage(resp)
