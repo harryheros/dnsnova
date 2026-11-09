@@ -255,12 +255,15 @@ func (f finisher) blocked() Result {
 // site's own subdomain ("CNAME cloaking"). A name the operator allowed
 // explicitly is never blocked this way.
 func (f finisher) cnameBlocked(e *entry) bool {
-	if !f.o.Filter || len(e.cnames) == 0 {
+	if !f.o.Filter || (len(e.cnames) == 0 && !e.cnamesCut) {
 		return false
 	}
 	set := f.r.filter.Load()
 	if set == nil || set.Allowed(f.q.Name) {
 		return false
+	}
+	if e.cnamesCut {
+		return true // too long to check every name: fail closed
 	}
 	for _, c := range e.cnames {
 		if set.Blocked(c) {
@@ -332,7 +335,11 @@ func (r *Resolver) fetch(q *m.Query) (*entry, error) {
 	}
 	e.stored = r.now()
 	if e.cacheable {
-		e.ttl = clampTTL(e.ttl, e.negative, e.failure, s)
+		if e.signed && !e.negative && !e.failure {
+			e.ttl = clampSigned(e.ttl, s)
+		} else {
+			e.ttl = clampTTL(e.ttl, e.negative, e.failure, s)
+		}
 		e.cacheable = e.ttl > 0
 	}
 	e.expire = e.stored.Add(time.Duration(e.ttl) * time.Second)
@@ -357,6 +364,12 @@ func clampTTL(t uint32, negative, failure bool, s *Settings) uint32 {
 		return min(t, s.MaxNegTTL)
 	}
 	return min(max(t, s.MinTTL), s.MaxTTL)
+}
+
+// clampSigned: answers with DNSSEC signatures keep their own TTLs (up to
+// max_ttl); min_ttl does not stretch them.
+func clampSigned(t uint32, s *Settings) uint32 {
+	return min(t, s.MaxTTL)
 }
 
 // build turns a cached entry into the response for one particular query.
@@ -390,7 +403,7 @@ func (r *Resolver) build(e *entry, req []byte, q *m.Query, now time.Time, stale 
 		} else {
 			t = e.ttls[i]
 			if e.cacheable {
-				if !e.negative {
+				if !e.negative && !e.signed {
 					t = max(t, s.MinTTL)
 				}
 				t = min(t, e.ttl)
