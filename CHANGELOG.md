@@ -4,9 +4,9 @@ All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
 **Security**.
 
-## Unreleased
+## 1.0.0 (2026-11-08)
 
-First development release of the 1.0 core.
+First stable release.
 
 - Recursion (off by default, `[recursion]`): DNSNova resolves names itself,
   from the root servers down, so no third party sees the queries. DNSSEC
