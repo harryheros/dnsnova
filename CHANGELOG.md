@@ -69,6 +69,8 @@ First stable release.
 - About 75% more answers per second for names not in the cache: the
   buffer for each upstream answer over UDP is reused instead of allocated
   (64 KB per query, most of the CPU time went to garbage collection).
+- The installer shows a progress bar while it downloads, when run in a
+  terminal.
 - `tools/resolver-check.sh`: checks a running server from the outside next
   to a reference resolver.
 - `tools/bench`: a load generator (UDP, DoT, DoH) and a stand-in upstream;
