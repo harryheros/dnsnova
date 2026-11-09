@@ -72,8 +72,13 @@ type Recursor struct {
 	v6down  atomic.Int64
 	v6ok    atomic.Int64 // unix nanos of the last answer over IPv6
 	v6fails atomic.Int64 // IPv6 timeouts in a row
-	lastOK  atomic.Int64 // unix nanos of the last answer from any server
-	failRun atomic.Int64 // queries without an answer since then
+	// hostV6 reports whether this machine has an IPv6 address that can
+	// reach the internet; checked at most once a minute (v6Checked)
+	hostV6    func() bool
+	v6Checked atomic.Int64
+	v6Host    atomic.Bool
+	lastOK    atomic.Int64 // unix nanos of the last answer from any server
+	failRun   atomic.Int64 // queries without an answer since then
 	// send is replaced by tests.
 	send func(ctx context.Context, addr netip.AddrPort, q []byte, tcp bool) ([]byte, error)
 }
@@ -126,6 +131,7 @@ func New(c Config, log *slog.Logger) *Recursor {
 		log:    log,
 		now:    time.Now,
 		port:   53,
+		hostV6: hasGlobalIPv6,
 	}
 	r.send = r.exchange
 	r.SetConfig(c)
