@@ -419,16 +419,24 @@ const WIZ_VIEWS = [
     const current = new Set(allNow || localNow ? [] : cur.map(hostOf));
     const virtual = /^(docker|veth|br-|virbr|cni|flannel|lxc|lxd|vmnet|vboxnet|zt)/;
     const usable = w.addrs.filter((a) => !a.loopback && !/^fe80/i.test(a.address));
-    const list = [...new Set([...usable.map((a) => a.address), ...current])];
+    // this machine's own address too: programs on it (its own resolver,
+    // proxies) ask 127.0.0.1 and would otherwise get no answer
+    const list = [...new Set([...usable.map((a) => a.address), "127.0.0.1", ...current])];
     const curPort = cur.length ? cur[0].slice(cur[0].lastIndexOf(":") + 1) : "53";
     const port = h("input", { type: "number", min: 1, max: 65535, value: curPort, inputmode: "numeric", "aria-label": "Port" });
     port.style.maxWidth = "120px";
+    // any port but 53 is unusable for most things: say so while it is typed
+    const portNote = h("p", { class: "notice warn small", style: { margin: 0 } },
+      "Devices, routers (DHCP) and this machine's own resolver (/etc/resolv.conf) can only use port 53. Choose another port only when another DNS server on this machine answers on 53 and forwards to DNSNova.");
+    const portSync = () => { portNote.hidden = String(port.value).trim() === "53"; };
+    port.addEventListener("input", portSync);
+    portSync();
     const boxes = list.map((ip) => {
       const info = w.addrs.find((a) => a.address === ip);
-      const pre = current.size ? current.has(ip) : info && !virtual.test(info.interface);
+      const pre = current.size ? current.has(ip) : ip === "127.0.0.1" || (info && !virtual.test(info.interface));
       const cb = h("input", { type: "checkbox", value: ip, checked: pre });
       return h("label", { class: "check" }, cb, h("span", { class: "mono" }, ip),
-        h("span", { class: "small muted", style: { marginLeft: "auto" } }, info ? `${info.public ? "public" : "private"} · ${info.interface}` : "configured"));
+        h("span", { class: "small muted", style: { marginLeft: "auto" } }, ip === "127.0.0.1" ? "this machine" : info ? `${info.public ? "public" : "private"} · ${info.interface}` : "configured"));
     });
     const listBox = h("fieldset", { style: { border: 0, margin: "0 0 0 28px", padding: 0, display: "flex", flexDirection: "column", gap: "8px" } },
       h("legend", { class: "sr-only" }, "Addresses"), boxes);
@@ -442,12 +450,13 @@ const WIZ_VIEWS = [
     const sync = () => { listBox.hidden = mode !== "some"; };
     const choices = h("div", { role: "radiogroup", "aria-label": "Who can use plain DNS", style: { display: "flex", flexDirection: "column", gap: "8px" } },
       option("all", "Everyone", "All addresses of this server, also ones it gets later. For a public resolver, or when the address can change."),
-      boxes.length ? [option("some", "Chosen addresses", "Only the addresses ticked below, for a server with several."), listBox] : null,
+      boxes.length ? [option("some", "Chosen addresses", "Only the addresses ticked below, for a server with several. Keep 127.0.0.1 ticked so programs on this machine can use it too."), listBox] : null,
       option("local", "Only this server (encrypted DNS only)", "Plain DNS stays on 127.0.0.1; devices connect over DNS over HTTPS, TLS or QUIC. The safest choice for a server on the internet."));
     sync();
     put(body, wizHead(w, "Addresses", "Who can use plain DNS (UDP and TCP), the kind routers and most devices are set to."),
       choices,
       h("label", { class: "block" }, "Port (53 is the standard DNS port; devices and routers expect it)", port),
+      portNote,
       h("p", { class: "small muted", style: { margin: 0 } }, "If another DNS server already uses this port, stop it first or choose another port."),
       wizNav(w, render, () => {
         const p = Number(port.value);
@@ -575,7 +584,7 @@ const WIZ_VIEWS = [
 function wizDone(w) {
   const plain = w.values["server.listen"] || [];
   const localOnly = plain.length > 0 && plain.every(isLocalAddr);
-  let ips = plain.map(hostOf).filter((x) => x && x !== "0.0.0.0" && x !== "::");
+  let ips = plain.map(hostOf).filter((x) => x && x !== "0.0.0.0" && x !== "::" && !/^(127\.|::1$)/.test(x));
   if (!ips.length && !localOnly) ips = w.addrs.filter((a) => !a.loopback && !/^fe80/i.test(a.address)).map((a) => a.address);
   if (localOnly) ips = [];
   const domain = (w.values["tls.domains"] || [])[0] || "";
@@ -1305,7 +1314,7 @@ const SETTINGS = {
         { key: "tls.key_file", label: "Key file", type: "text", help: "Its private key. DNSNova must be able to read it.", show: (v) => v["tls.certificate"] === "files" },
       ] },
       { title: "Protocols", fields: [
-        { key: "server.listen", label: "Plain DNS", type: "list", help: "UDP and TCP, usually port 53. List each address rather than 0.0.0.0. To offer only encrypted DNS, keep it on 127.0.0.1 (this machine)." },
+        { key: "server.listen", label: "Plain DNS", type: "list", help: "UDP and TCP on port 53: devices, routers and this machine's own resolver cannot use another port. List each address rather than 0.0.0.0, and keep 127.0.0.1:53 for programs on this machine. To offer only encrypted DNS, use 127.0.0.1:53 alone." },
         { key: "dot.listen", label: "DNS over TLS", type: "listen", port: 853, help: "Android Private DNS, iOS and most routers. TCP 853." },
         { key: "doq.listen", label: "DNS over QUIC", type: "listen", port: 853, help: "Faster on mobile networks; fewer clients support it. UDP 853." },
         { key: "doh.https_listen", label: "DNS over HTTPS", type: "listen", port: 443, help: "Browsers, Windows and iOS profiles. TCP 443." },
