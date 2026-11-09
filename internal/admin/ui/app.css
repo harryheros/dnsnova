@@ -344,6 +344,8 @@ details summary { cursor: pointer; color: var(--accent); font-size: 13px; }
 @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
 .hints { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
 .tabs { align-self: flex-start; flex-wrap: wrap; }
+/* on phones the device tabs fill even rows instead of leaving one alone on the last */
+@media (max-width: 640px) { .tabs { display: grid; grid-template-columns: repeat(3, 1fr); align-self: stretch; } }
 .tabbody { display: flex; flex-direction: column; gap: 10px; min-height: 250px; }
 .steps-list { margin: 0; padding: 0; list-style: none; counter-reset: step; display: flex; flex-direction: column; gap: 10px; font-size: 14px; }
 .steps-list > li:not(.bare) { counter-increment: step; position: relative; padding-left: 26px; }
@@ -414,3 +416,22 @@ details summary { cursor: pointer; color: var(--accent); font-size: 13px; }
 .filtered h3 { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; margin: 0; }
 td .btn.link.small { margin-left: 8px; padding: 0; min-height: 0; }
 .tag { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px; border: 1px solid var(--border); font-size: 11px; color: var(--muted); line-height: 18px; }
+
+/* settings: rarely changed fields fold away */
+details.adv { border-top: 1px solid var(--border); padding-top: 4px; }
+details.adv > summary { cursor: pointer; padding: 10px 0; font-size: 13px; font-weight: 500; color: var(--accent); list-style: none; }
+details.adv > summary::-webkit-details-marker { display: none; }
+details.adv > summary::before { content: "▸ "; }
+details.adv[open] > summary::before { content: "▾ "; }
+/* overview: a card with nothing to list says so instead of showing placeholders */
+.dcard .empty { margin: 4px 0 2px; line-height: 1.5; }
+/* tables that become one card per row on phones */
+@media (max-width: 640px) {
+  table.stack thead { display: none; }
+  table.stack tr { display: flex; flex-direction: column; padding: 10px 0; border-top: 1px solid var(--border); }
+  table.stack tr:first-child { border-top: 0; }
+  table.stack td { display: flex; justify-content: space-between; gap: 12px; border: 0; padding: 3px 0; text-align: right; }
+  table.stack td::before { content: attr(data-label); color: var(--muted); font-size: 12px; text-align: left; font-family: var(--sans); }
+  table.stack td.head { order: -1; justify-content: flex-start; font-weight: 600; padding-bottom: 6px; }
+  table.stack td.head::before { content: none; }
+}

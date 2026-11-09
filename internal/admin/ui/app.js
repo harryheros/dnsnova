@@ -873,7 +873,7 @@ function drawOverview(st, stats, ups, events, range) {
     : failing ? ["err", `${failing} of ${ups.length} upstreams failing`]
       : slow ? ["warn", `${slow} upstream${slow === 1 ? " is" : "s are"} slow`]
         : ["ok", `All ${ups.length} upstream${ups.length === 1 ? "" : "s"} healthy`];
-  const open = PROTOS.map(([k]) => k).filter((k) => (st.listeners || {})[k]);
+  const open = PROTOS.map(([k]) => k).filter((k) => (st.listeners || {})[k] || (k === "doh" && (st.listeners || {}).doh_proxy));
 
   // ---- summary ----
   const kpi = (lab, value, unit, note) => h("div", { class: "kpi" }, h("dt", null, lab),
@@ -936,21 +936,27 @@ function drawOverview(st, stats, ups, events, range) {
   const protos = card("s3", "Protocols", "dns", null,
     slots(PROTOS, SLOTS, ([k, n, d]) => {
       const c = stats.queries[k] || 0;
-      return h("li", { class: "slot" + (open.includes(k) ? "" : " off"), title: open.includes(k) ? `${n} ${d}` : `${n} ${d} (not listening)` }, h("span", { class: "nm ellipsis" }, h("strong", null, k === "doh3" ? "DoH3" : n), " ", h("span", { class: "muted small" }, k === "doh" ? "h2" : k === "doh3" ? "h3" : d.replace("TCP ", "").replace("UDP ", ""))),
+      const on = open.includes(k);
+      // the ports it really listens on, not the standard ones
+      const ports = [...new Set([...(st.listeners || {})[k] || [], ...(k === "doh" ? (st.listeners || {}).doh_proxy || [] : [])].map((a) => a.slice(a.lastIndexOf(":") + 1)))].join(", ");
+      const kind = k === "doh" ? "h2 " : k === "doh3" ? "h3 " : "";
+      return h("li", { class: "slot" + (on ? "" : " off"), title: on ? `${n} ${kind}on port ${ports}` : `${n}: off` }, h("span", { class: "nm ellipsis" }, h("strong", null, k === "doh3" ? "DoH3" : n), " ", h("span", { class: "muted small" }, on ? kind + ports : "off")),
         meter(c / protoMax), h("span", { class: "num" }, fmt.short(c)));
     }),
     h("footer", { class: "dfoot" }, h("span", null, "Total"), h("span", { class: "num strong" }, fmt.int(total))));
+  const privacyNote = "Only names asked from at least 5 different networks are listed, so no one person's browsing shows up.";
   const topCard = (title, ic, list, emptyNote) => {
     const most = Math.max(1, ...list.map((x) => x.count));
+    if (!list.length) return card("s3", title, ic, null, h("p", { class: "empty small muted" }, emptyNote, " ", privacyNote));
     return card("s3", title, ic, null,
       slots(list, SLOTS, (x, i) => h("li", { class: "slot" }, h("span", { class: "rank" }, i + 1), h("span", { class: "nm mono ellipsis", title: x.name }, x.name),
         meter(x.count / most), h("span", { class: "num" }, fmt.short(x.count)))),
-      h("footer", { class: "dfoot" }, h("span", null, list.length ? `Top ${Math.min(list.length, SLOTS)} of ${list.length}` : emptyNote), h("span", { class: "muted" }, "5+ networks")));
+      h("footer", { class: "dfoot" }, h("span", null, `Top ${Math.min(list.length, SLOTS)} of ${list.length}`), h("span", { class: "muted", title: privacyNote }, "asked from 5+ networks")));
   };
   const rej = Object.entries(stats.rejected).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
   const rejMax = Math.max(1, ...rej.map(([, v]) => v));
   const limited = stats.top_limited_networks || [];
-  const rejCard = card("s3", "Rejected", "shield", null,
+  const rejCard = !rej.length ? card("s3", "Rejected", "shield", null, h("p", { class: "empty small muted" }, "Nothing rejected. Queries over the limits or from blocked clients would be counted here.")) : card("s3", "Rejected", "shield", null,
     slots(rej, SLOTS, ([k, v]) => h("li", { class: "slot" }, h("span", { class: "nm ellipsis" }, REJECT_NAMES[k] || k), meter(v / rejMax), h("span", { class: "num" }, fmt.short(v)))),
     h("footer", { class: "dfoot" }, limited.length
       ? [h("span", null, "Busiest network"), h("span", { class: "mono" }, limited[0].name)]
@@ -958,13 +964,13 @@ function drawOverview(st, stats, ups, events, range) {
 
   // ---- events, certificate, privacy ----
   const merged = mergeEvents(events);
-  const evCard = card("s6", "Events", "info", h("span", { class: "small muted" }, "never queries"),
+  const evCard = card("s6", "Events", "info", null,
     slots(merged, SLOTS, (e) => h("li", { class: "slot" },
       h("span", { class: "evicon " + (e.level === "error" ? "err" : e.level === "warn" ? "warn" : "") }, line(eventIcon(e), 14)),
       h("span", { class: "nm ellipsis" + (e.level === "error" ? " err" : ""), title: e.message }, e.message),
       e.count > 1 ? h("span", { class: "count", title: `${e.count} times in a row` }, "×" + e.count) : h("span"),
       h("span", { class: "small muted mono", title: new Date(e.time).toString() }, fmt.time(e.time, Date.now() - new Date(e.time) > 86400e3)))),
-    h("footer", { class: "dfoot" }, h("span", null, "Starts, errors, logins and setting changes"), h("span", null, "last 200 kept in memory")));
+    h("footer", { class: "dfoot" }, h("span", null, "Starts, errors, logins and setting changes, never queries"), h("span", null, "last 200, in memory")));
 
   const c = st.certificate;
   const days = c.not_after ? Math.floor((new Date(c.not_after) - Date.now()) / 86400e3) : null;
@@ -984,17 +990,17 @@ function drawOverview(st, stats, ups, events, range) {
     ["Query log", pv.query_log ? (pv.query_log_full_ip ? "On, full addresses" : "On") : "Off", pv.query_log ? "warn" : "ok"],
     ["Queries on disk", "Never", "ok"],
     ["Addresses on disk", "Never", "ok"],
-    ["Client IP upstream", "Never", "ok"],
+    ["Client addresses sent on", "Never", "ok"],
     ["Telemetry", "None", "ok"],
   ];
   const privCard = card("s3", "Privacy", "shield", null,
     h("dl", { class: "kvs" }, privRows.map(([k, v, cls]) => h("div", null, h("dt", null, k), h("dd", { class: cls }, v)))),
     h("footer", { class: "dfoot" }, h("span", null, "In memory only"), h("a", { href: "#/querylog" }, "Query log")));
 
-  const notServing = st.serves_dns === false ? h("p", { class: "notice warn s12" }, "DNS is not served yet: no address is set. Choose addresses and upstreams in ", h("a", { href: "#/settings/access" }, "Access & limits"), " and ", h("a", { href: "#/settings/dns" }, "DNS & upstreams"), ".") : null;
+  const notServing = st.serves_dns === false ? h("p", { class: "notice warn s12" }, "DNS is not served yet: no address is set. Choose addresses in ", h("a", { href: "#/settings/encryption" }, "Encrypted DNS › Protocols"), " and where answers come from in ", h("a", { href: "#/settings/dns" }, "DNS & upstreams"), ".") : null;
   return [h("div", { class: "dash" }, notServing, summary, chart, recCard || upCard, protos,
-    topCard("Top domains", "dns", stats.top_domains || [], "Nothing listed yet"),
-    topCard("Not found", "alert", stats.top_nxdomains || [], "None"),
+    topCard("Top domains", "dns", stats.top_domains || [], "No domains to show yet."),
+    topCard("Not found", "alert", stats.top_nxdomains || [], "Names that do not exist will appear here."),
     rejCard, evCard, certCard, privCard)];
 }
 
@@ -1065,15 +1071,15 @@ function upstreamsPage(main) {
   const load = async () => {
     try {
       const { upstreams } = await api("GET", "/upstreams");
-      fill(body, h("section", { class: "card" }, h("div", { class: "tablewrap" }, h("table", null,
+      fill(body, h("section", { class: "card" }, h("div", { class: "tablewrap" }, h("table", { class: "stack" },
         h("thead", null, h("tr", null, ["State", "Upstream", "Role", "Latency", "Queries", "Errors", "Last error"].map((t, i) => h("th", { scope: "col", class: i >= 3 && i <= 5 ? "r" : "" }, t)))),
         h("tbody", null, upstreams.map((u) => h("tr", null,
-          h("td", null, (() => { const st = upState(u, upstreams); return h("span", { class: "state " + st.cls }, h("span", { class: "dot " + st.cls }), st.label); })()),
-          h("td", { class: "mono" }, u.address), h("td", { class: "muted" }, u.role),
-          h("td", { class: "r num" }, u.latency_ms ? fmt.ms(u.latency_ms) + " ms" : "–"),
-          h("td", { class: "r num" }, fmt.int(u.queries)),
-          h("td", { class: "r num" }, fmt.int(u.errors) + (u.queries ? ` · ${successRate(u)} ok` : "")),
-          h("td", { class: "muted" }, u.last_error ? fmt.ago(u.last_error) : "never"))))))),
+          h("td", { "data-label": "State" }, (() => { const st = upState(u, upstreams); return h("span", { class: "state " + st.cls }, h("span", { class: "dot " + st.cls }), st.label); })()),
+          h("td", { class: "mono head" }, u.address), h("td", { class: "muted", "data-label": "Role" }, u.role),
+          h("td", { class: "r num", "data-label": "Latency" }, u.latency_ms ? fmt.ms(u.latency_ms) + " ms" : "–"),
+          h("td", { class: "r num", "data-label": "Queries" }, fmt.int(u.queries)),
+          h("td", { class: "r num", "data-label": "Errors" }, fmt.int(u.errors) + (u.queries ? ` · ${successRate(u)} ok` : "")),
+          h("td", { class: "muted", "data-label": "Last error" }, u.last_error ? fmt.ago(u.last_error) : "never"))))))),
         h("p", { class: "small muted" }, "Latency is smoothed over recent queries. Slow means over 500 ms, or three times slower than the other primaries and over 50 ms. Standby: a fallback, used only when the primaries fail. Change the list in ", h("a", { href: "#/settings/dns" }, "DNS & upstreams"), "; ask each one the same question in ", h("a", { href: "#/tools/lookup" }, "Compare upstreams"), "."));
     } catch (e) { if (e.status !== 401) fill(body, errorBox(e)); }
   };
@@ -1236,18 +1242,18 @@ const SETTINGS = {
       { title: "Upstreams", fields: [
         { key: "upstream.primary", label: "Primary upstreams", type: "list", help: "Asked first, in parallel; the fastest answer wins. https://…/dns-query, tls://host, quic://host, udp://IP or an IP address. With recursion, only used as a fallback.", show: upShown },
         { key: "upstream.fallback", label: "Fallback upstreams", type: "list", help: "Used only when every primary fails or is slow.", show: upShown },
-        { key: "upstream.bootstrap", label: "Bootstrap servers", type: "list", help: "Plain DNS servers (IP addresses) used only to find the upstreams' own addresses.", show: upShown },
-        { key: "upstream.parallel", label: "Ask at once", type: "number", help: "How many primaries to ask in parallel.", show: upShown },
-        { key: "upstream.timeout", label: "Timeout", type: "text", help: "How long to wait for an upstream, such as 3s.", show: upShown },
-        { key: "upstream.fallback_delay", label: "Fallback delay", type: "text", help: "Ask the fallbacks if the primaries have not answered after this long.", show: upShown },
+        { key: "upstream.bootstrap", adv: true, label: "Bootstrap servers", type: "list", help: "Plain DNS servers (IP addresses) used only to find the upstreams' own addresses.", show: upShown },
+        { key: "upstream.parallel", adv: true, label: "Ask at once", type: "number", help: "How many primaries to ask in parallel.", show: upShown },
+        { key: "upstream.timeout", adv: true, label: "Timeout", type: "text", help: "How long to wait for an upstream, such as 3s.", show: upShown },
+        { key: "upstream.fallback_delay", adv: true, label: "Fallback delay", type: "text", help: "Ask the fallbacks if the primaries have not answered after this long.", show: upShown },
       ] },
       { title: "Cache", action: ["Clear cache", async () => { await api("POST", "/cache/clear"); toast("Cache cleared"); }], fields: [
         { key: "cache.size", label: "Size", type: "number", help: "Most answers kept." },
-        { key: "cache.prefetch", label: "Prefetch", type: "bool", help: "Refresh popular answers shortly before they expire." },
-        { key: "cache.serve_stale", label: "Serve stale", type: "text", help: "Keep answering from expired entries this long when upstreams fail (0s = off)." },
-        { key: "cache.min_ttl", label: "Minimum TTL", type: "text", help: "Answers are kept at least this long." },
-        { key: "cache.max_ttl", label: "Maximum TTL", type: "text", help: "Answers are kept at most this long." },
-        { key: "cache.max_negative_ttl", label: "Maximum negative TTL", type: "text", help: "Longest time to remember that a name does not exist." },
+        { key: "cache.prefetch", adv: true, label: "Prefetch", type: "bool", help: "Refresh popular answers shortly before they expire." },
+        { key: "cache.serve_stale", adv: true, label: "Serve stale", type: "text", help: "Keep answering from expired entries this long when upstreams fail (0s = off)." },
+        { key: "cache.min_ttl", adv: true, label: "Minimum TTL", type: "text", help: "Answers are kept at least this long." },
+        { key: "cache.max_ttl", adv: true, label: "Maximum TTL", type: "text", help: "Answers are kept at most this long." },
+        { key: "cache.max_negative_ttl", adv: true, label: "Maximum negative TTL", type: "text", help: "Longest time to remember that a name does not exist." },
       ] },
       { title: "Local names", fields: [
         { key: "local.records", label: "Names answered here", type: "list", help: "One per line: a name and an address, such as \u201cnas.home 192.168.1.5\u201d. \u201c*.dev.home 192.168.1.9\u201d covers every name under dev.home. Give a name both an IPv4 and an IPv6 address on two lines. 0.0.0.0 makes a name unreachable." },
@@ -1270,7 +1276,7 @@ const SETTINGS = {
       ] },
       { title: "Lists", action: ["Update now", async () => { const st = await api("POST", "/filter/update"); toast(`${st.rules.toLocaleString()} rules in force`); }], fields: [
         { key: "filter.lists", label: "Block lists", type: "list", help: "Addresses of lists to download, one per line (adblock domain rules, hosts files or plain domains). ShieldNova's list is preset: it blocks very little by mistake.", show: (v) => v["filter.enabled"] },
-        { key: "filter.update_interval", label: "Update every", type: "text", help: "Such as 24h. A failed or much shorter download keeps the copy in use.", show: (v) => v["filter.enabled"] },
+        { key: "filter.update_interval", adv: true, label: "Update every", type: "text", help: "Such as 24h. A failed or much shorter download keeps the copy in use.", show: (v) => v["filter.enabled"] },
       ] },
       { title: "Your rules", fields: [
         { key: "filter.allow", label: "Never block", type: "list", help: "One domain per line; covers every name under it and wins over every list. Use it when something stops working.", show: (v) => v["filter.enabled"] },
@@ -1294,7 +1300,7 @@ const SETTINGS = {
         { key: "tls.certificate", label: "Certificate", type: "select", options: [["acme", "Let's Encrypt (automatic, free)"], ["files", "My own certificate files"], ["off", "None (no encrypted DNS)"]], help: "Where the certificate for the domain comes from. One certificate serves DNS over HTTPS, TLS and QUIC." },
         { key: "tls.email", label: "Email", type: "text", help: "Let's Encrypt writes here before a certificate expires (optional).", show: (v) => v["tls.certificate"] === "acme" },
         { key: "tls.challenge", label: "Domain check", type: "select", options: [["", "Automatic (recommended)"], ["tls-alpn-01", "Through port 443"], ["http-01", "Through port 80"]], help: "Let's Encrypt connects to this server to confirm the domain points here, when the certificate is issued and every renewal. Automatic uses port 443 when DNS over HTTPS is on it, otherwise port 80. That port must be open to the internet.", show: (v) => v["tls.certificate"] === "acme" },
-        { key: "tls.ip_addresses", label: "Include IP addresses", type: "bool", help: "Lets clients switch to encrypted DNS automatically. Such certificates are renewed every few days.", show: (v) => v["tls.certificate"] === "acme" },
+        { key: "tls.ip_addresses", adv: true, label: "Include IP addresses", type: "bool", help: "Lets clients switch to encrypted DNS automatically. Such certificates are renewed every few days.", show: (v) => v["tls.certificate"] === "acme" },
         { key: "tls.cert_file", label: "Certificate file", type: "text", help: "PEM file with the full chain; reloaded when it changes.", show: (v) => v["tls.certificate"] === "files" },
         { key: "tls.key_file", label: "Key file", type: "text", help: "Its private key. DNSNova must be able to read it.", show: (v) => v["tls.certificate"] === "files" },
       ] },
@@ -1304,9 +1310,9 @@ const SETTINGS = {
         { key: "doq.listen", label: "DNS over QUIC", type: "listen", port: 853, help: "Faster on mobile networks; fewer clients support it. UDP 853." },
         { key: "doh.https_listen", label: "DNS over HTTPS", type: "listen", port: 443, help: "Browsers, Windows and iOS profiles. TCP 443." },
         { key: "doh.http3", label: "HTTP/3 for DNS over HTTPS", type: "bool", help: "Faster on mobile networks and patchy Wi-Fi. Uses UDP 443 on the same addresses; where that is blocked, clients use HTTP/2 instead.", show: (v) => v["doh.https_listen"].length > 0 },
-        { key: "doh.path", label: "DoH path", type: "text", help: "Usually /dns-query." },
+        { key: "doh.path", adv: true, label: "DoH path", type: "text", help: "Usually /dns-query." },
         { key: "status.enabled", label: "Public status page", type: "bool", help: "A page at the domain's address (https://domain/) with the addresses, setup steps for each kind of device, what this server keeps, and a check that a device is using it. It shows no statistics." },
-        { key: "doh.listen", label: "Behind a reverse proxy", type: "text", help: "Plain HTTP for nginx or Caddy, such as 127.0.0.1:8053. Leave empty if unused." },
+        { key: "doh.listen", adv: true, label: "Behind a reverse proxy", type: "text", help: "Plain HTTP for nginx or Caddy, such as 127.0.0.1:8053. Leave empty if unused." },
       ] },
     ],
     extra: ["Addresses for clients"],
@@ -1321,14 +1327,14 @@ const SETTINGS = {
       ] },
       { title: "Limits", fields: [
         { key: "limits.client_qps", label: "Per client", type: "number", help: "Queries a second from one address (0 = no limit). Phones on mobile networks often share one address." },
-        { key: "limits.client_burst", label: "Client burst", type: "number", help: "Short bursts allowed above that." },
-        { key: "limits.prefix_qps", label: "Per network", type: "number", help: "Queries a second from one IPv4 /24 or IPv6 /48 (0 = no limit)." },
-        { key: "limits.global_qps", label: "Whole server", type: "number", help: "Queries a second in total (0 = no limit)." },
-        { key: "limits.rrl_rate", label: "Response rate limiting", type: "number", help: "Identical answers a second to one network; stops reflection attacks (0 = off)." },
-        { key: "limits.block_any", label: "Refuse ANY queries", type: "bool", help: "They are mostly used for amplification." },
-        { key: "limits.tcp_connections", label: "TCP connections", type: "number", help: "Open TCP and DoT connections at most; each phone using DoT keeps one open. About 25 KB of memory each." },
-        { key: "limits.quic_connections", label: "QUIC connections", type: "number", help: "Open DoQ and HTTP/3 connections at most. About 70 KB of memory each." },
-        { key: "limits.upstream_concurrency", label: "Upstream queries at once", type: "number", help: "Queries waiting for upstreams at most." },
+        { key: "limits.client_burst", adv: true, label: "Client burst", type: "number", help: "Short bursts allowed above that." },
+        { key: "limits.prefix_qps", adv: true, label: "Per network", type: "number", help: "Queries a second from one IPv4 /24 or IPv6 /48 (0 = no limit)." },
+        { key: "limits.global_qps", adv: true, label: "Whole server", type: "number", help: "Queries a second in total (0 = no limit)." },
+        { key: "limits.rrl_rate", adv: true, label: "Response rate limiting", type: "number", help: "Identical answers a second to one network; stops reflection attacks (0 = off)." },
+        { key: "limits.block_any", adv: true, label: "Refuse ANY queries", type: "bool", help: "They are mostly used for amplification." },
+        { key: "limits.tcp_connections", adv: true, label: "TCP connections", type: "number", help: "Open TCP and DoT connections at most; each phone using DoT keeps one open. About 25 KB of memory each." },
+        { key: "limits.quic_connections", adv: true, label: "QUIC connections", type: "number", help: "Open DoQ and HTTP/3 connections at most. About 70 KB of memory each." },
+        { key: "limits.upstream_concurrency", adv: true, label: "Upstream queries at once", type: "number", help: "Queries waiting for upstreams at most." },
       ] },
     ],
   },
@@ -1379,11 +1385,14 @@ async function settingsPage(main, id) {
     const card = h("section", { class: "card pad0", "aria-label": sec.title },
       h("div", { class: "pagehead", style: { margin: "12px 0 4px" } }, h("h2", null, sec.title),
         sec.action ? h("button", { type: "button", class: "btn small", onclick: async () => { try { await sec.action[1](); } catch (e) { toast(e.message, "err"); } } }, sec.action[0]) : null));
+    // rarely changed settings fold away under "Advanced"
+    const adv = h("details", { class: "adv" }, h("summary", null, "Advanced"));
     for (const f of sec.fields) {
       const row = fieldRow(f, form, () => { refresh(); });
       form.rows[f.key] = { f, row };
-      card.append(row.el);
+      (f.adv ? adv : card).append(row.el);
     }
+    if (sec.fields.some((f) => f.adv)) card.append(adv);
     sectionCards.push([card, sec]);
     parts.push(card);
   }
@@ -1462,13 +1471,17 @@ async function settingsPage(main, id) {
     }
   };
   const setProblems = (probs) => {
-    for (const [k, { row }] of Object.entries(form.rows)) row.problem(probs[k]);
+    for (const [k, { row }] of Object.entries(form.rows)) {
+      row.problem(probs[k]);
+      if (probs[k]) row.el.closest("details")?.setAttribute("open", ""); // show a problem in Advanced
+    }
   };
   const labelOf = (k) => form.rows[k]?.f.label || k;
   refresh();
   if (state.focusKey && form.rows[state.focusKey]) {
     const el = form.rows[state.focusKey].row.el;
     el.hidden = false;
+    el.closest("details")?.setAttribute("open", "");
     el.scrollIntoView({ block: "center" });
     el.classList.add("flash");
     el.querySelector("input,select,textarea,button")?.focus({ preventScroll: true });
