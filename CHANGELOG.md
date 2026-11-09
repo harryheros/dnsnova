@@ -41,6 +41,9 @@ First stable release.
   Where IPv6 is configured but silently broken, recursion prefers IPv4
   until IPv6 has answered, and turns IPv6 off for 10 minutes after three
   timeouts in a row, instead of waiting for it on many names.
+  What is learnt about a name server's speed and failures is forgotten
+  after 15 minutes, so a server that timed out once is tried again instead
+  of being avoided for good.
 - Filtering, as a second door on the same server (off by default,
   `[filter]`). The usual addresses stay unfiltered; clients that want
   blocking use the filtered plain-DNS address (`filter.listen`), a filtered
