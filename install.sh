@@ -153,7 +153,14 @@ preflight() {
     if have curl; then DL="curl"; elif have wget; then DL="wget"; else die "curl or wget is required"; fi
 }
 
-fetch() { # fetch URL FILE
+fetch() { # fetch URL FILE [progress]
+    # a progress bar for the download itself, when someone is watching
+    if [ -n "${3:-}" ] && [ -t 2 ]; then
+        if [ "$DL" = curl ]; then curl -fL -# --proto '=https,http' --retry 2 -o "$2" "$1"
+        elif wget --help 2>&1 | grep -q -- --show-progress; then wget -q --show-progress -O "$2" "$1"
+        else wget -O "$2" "$1"; fi
+        return
+    fi
     if [ "$DL" = curl ]; then curl -fsSL --proto '=https,http' --retry 2 -o "$2" "$1"
     else wget -q -O "$2" "$1"; fi
 }
@@ -170,7 +177,7 @@ download() {
     fi
     local asset="dnsnova-linux-$ARCH.tar.gz"
     step "Downloading $asset"
-    fetch "$base/$asset" "$TMP/$asset" || die "download failed: $base/$asset
+    fetch "$base/$asset" "$TMP/$asset" progress || die "download failed: $base/$asset
   Has a release been published? See https://github.com/$REPO/releases"
     fetch "$base/SHA256SUMS" "$TMP/SHA256SUMS" || die "could not download SHA256SUMS"
     (cd "$TMP" && grep " $asset\$" SHA256SUMS | sha256sum -c --status) \
