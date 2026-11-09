@@ -8,8 +8,15 @@ All notable changes are listed here. Versions follow
 
 First stable release.
 
+- Default limits sized for a public resolver: 100 queries a second per
+  address (burst 400) and 1,000 per network (burst 4,000), since mobile
+  carriers put many people behind one address; 10,000 TCP and DoT
+  connections and 3,000 DoQ and HTTP/3 connections (measured at about
+  25 KB and 70 KB each), as each phone keeps one open.
 - Setup in the browser: the wizard asks who can use plain DNS (everyone,
-  chosen addresses, or only this server for an encrypted-only resolver).
+  chosen addresses, or only this server for an encrypted-only resolver),
+  offers a separate filtered address when there is a domain, and can
+  filter everyone instead.
   Encrypted DNS settings start with the domain: entering one chooses a free
   Let's Encrypt certificate and turns on DoT, DoQ and DoH. Let's Encrypt
   reads that answer 404 for a moment after issuance (database replicas a

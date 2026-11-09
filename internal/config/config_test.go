@@ -186,8 +186,8 @@ func TestTLSValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !c.DoH.HTTP3 || c.Limits.QUICConnections != 1000 {
-		t.Fatalf("HTTP/3 should be on by default with a 1000-connection cap: %v %d", c.DoH.HTTP3, c.Limits.QUICConnections)
+	if !c.DoH.HTTP3 || c.Limits.QUICConnections != 3000 {
+		t.Fatalf("HTTP/3 should be on by default with a 3000-connection cap: %v %d", c.DoH.HTTP3, c.Limits.QUICConnections)
 	}
 	if c.TLS.Challenge != "tls-alpn-01" {
 		t.Fatalf("with a listener on 443 the challenge should default to tls-alpn-01, got %q", c.TLS.Challenge)

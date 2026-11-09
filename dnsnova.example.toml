@@ -114,7 +114,7 @@ fallback = true
 # allow_networks = []
 
 [cache]
-size = 100000           # entries; 0 disables the cache
+size = 100000           # entries, about 1 to 2 KB each; 0 disables the cache
 min_ttl = 0             # raise short TTLs to at least this
 max_ttl = "24h"
 max_negative_ttl = "1h" # NXDOMAIN and "no records"
@@ -141,15 +141,20 @@ records = [
 retention = "7d"
 
 [limits]
-client_qps = 50             # per IPv4 address or IPv6 /56
-client_burst = 200
-prefix_qps = 500            # per IPv4 /24 or IPv6 /48
-prefix_burst = 2000
+# Mobile carriers put many people behind one IPv4 address, so these are
+# per address, not per person; abuse of UDP is limited further by rrl_rate.
+client_qps = 100            # per IPv4 address or IPv6 /56
+client_burst = 400
+prefix_qps = 1000           # per IPv4 /24 or IPv6 /48
+prefix_burst = 4000
 global_qps = 50000          # whole server; 0 = no limit
 upstream_concurrency = 2000 # upstream queries in flight
 zone_concurrency = 50       # upstream queries in flight per domain
-tcp_connections = 1000      # TCP and DoT
-quic_connections = 1000     # DoQ and HTTP/3; above half of it, new clients
+# Phones keep a DoT or DoQ connection open while in use, so each one is
+# roughly one device online. An idle connection takes about 25 KB (TCP, DoT)
+# or 70 KB (DoQ): the defaults need at most about 250 and 210 MB.
+tcp_connections = 10000     # TCP and DoT
+quic_connections = 3000     # DoQ and HTTP/3; above half of it, new clients
                             # must first prove their address (QUIC Retry)
 tcp_pipeline = 16           # concurrent queries per TCP, DoT, DoQ or HTTP/3 connection
 tcp_idle_timeout = "10s"    # also the idle timeout of QUIC connections
@@ -163,8 +168,9 @@ block_any = true            # answer ANY queries with NOTIMP
 listen = "127.0.0.1:9153"
 
 [admin]
-# The web interface and its API (docs/api.md). Leave it on 127.0.0.1 and reach it through an SSH tunnel
-# (ssh -L 7000:127.0.0.1:7000 you@server), or listen on ":7000" to reach it
+# The web interface and its API (docs/api.md). Leave it on 127.0.0.1 and
+# reach it through an SSH tunnel (ssh -L 7000:127.0.0.1:7000 you@server),
+# or listen on ":7000" to reach it
 # from anywhere, protected by a password, login lockout and optional
 # two-step verification. It uses HTTPS on the same port once a certificate
 # exists. Leave empty to turn it off.
