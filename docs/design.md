@@ -56,8 +56,10 @@ figure. Red is for errors only.
 - Text: the system font (`system-ui`: SF on Apple, Segoe UI on Windows,
   Roboto on Android). 14 px body, 1.45 line height.
 - Numbers, addresses, domains and code: the system monospace font, with
-  tabular figures so columns line up.
-- Sizes: 56 px hero number, 26 px key figures, 22 px page title, 15 px card
+  tabular figures so columns line up. The hero number is the exception: it
+  uses the text font with tabular figures, because at 52 px monospace
+  spreads short values such as "<0.1" apart.
+- Sizes: 52 px hero number, 26 px key figures, 22 px page title, 15 px card
   title, 14 px body, 13 px dense text, 12 px labels and notes, 10.5 px group
   titles (upper case, spaced).
 - Weights: 600 for titles and figures, 500 for labels, 400 for text.

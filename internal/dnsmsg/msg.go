@@ -39,6 +39,21 @@ const (
 	RcodeNXDomain = 3
 	RcodeNotImp   = 4
 	RcodeRefused  = 5
+	RcodeBadVers  = 16 // extended rcode (RFC 6891): carried partly in the OPT record
+
+	// EDNS options (RFC 6891).
+	OptPadding = 12 // RFC 7830
+	OptEDE     = 15 // Extended DNS Errors, RFC 8914
+
+	// Extended DNS Error codes (RFC 8914) used by dnsnova.
+	EDEOther        = 0
+	EDEStaleAnswer  = 3
+	EDEBlocked      = 15
+	EDENotSupported = 21
+	EDENetworkError = 23
+
+	// PaddingBlock is the response block size for EDNS padding (RFC 8467).
+	PaddingBlock = 468
 
 	FlagQR = 1 << 15
 	FlagAA = 1 << 10
@@ -75,6 +90,10 @@ type Query struct {
 	EDNS    bool
 	UDPSize uint16
 	DO      bool
+	// EDNSVersion is the version in the client's OPT record (0 is the only
+	// one defined); Padding reports whether the client padded its query.
+	EDNSVersion uint8
+	Padding     bool
 }
 
 // CacheKey identifies answers that may be shared between clients: the same
@@ -225,7 +244,13 @@ func ParseQuery(msg []byte) (*Query, int, error) {
 			}
 			q.EDNS = true
 			q.UDPSize = rr.Class
+			q.EDNSVersion = msg[rr.TTLOff+1]
 			q.DO = msg[rr.TTLOff+2]&0x80 != 0
+			return eachOption(msg[rr.RDOff:rr.End], func(code uint16, _ []byte) {
+				if code == OptPadding {
+					q.Padding = true
+				}
+			})
 		}
 		return nil
 	})
@@ -233,7 +258,139 @@ func ParseQuery(msg []byte) (*Query, int, error) {
 		q.EDNS = false
 		return q, RcodeFormErr, nil
 	}
+	if q.EDNS && q.EDNSVersion != 0 {
+		return q, RcodeBadVers, nil // RFC 6891 6.1.3: we only speak version 0
+	}
 	return q, 0, nil
+}
+
+// eachOption calls fn for every option in OPT record data.
+func eachOption(rdata []byte, fn func(code uint16, data []byte)) error {
+	for off := 0; off < len(rdata); {
+		if off+4 > len(rdata) {
+			return ErrMalformed
+		}
+		code, n := U16(rdata, off), int(U16(rdata, off+2))
+		if off+4+n > len(rdata) {
+			return ErrMalformed
+		}
+		fn(code, rdata[off+4:off+4+n])
+		off += 4 + n
+	}
+	return nil
+}
+
+// StripOPT removes the OPT record from a response and returns the message
+// without it, plus the raw Extended DNS Error options it carried (to be
+// passed on to clients). Every other option (padding, cookies, NSID, ...)
+// belongs to the hop it arrived on and is dropped. A message without OPT
+// is returned unchanged.
+func StripOPT(msg []byte) (out, ede []byte, err error) {
+	if len(msg) < HeaderLen || U16(msg, 4) > 1 {
+		return nil, nil, ErrMalformed
+	}
+	off := HeaderLen
+	if U16(msg, 4) == 1 {
+		if off, err = SkipName(msg, off); err != nil || off+4 > len(msg) {
+			return nil, nil, ErrMalformed
+		}
+		off += 4
+	}
+	an, ns, ar := int(U16(msg, 6)), int(U16(msg, 8)), int(U16(msg, 10))
+	if off, err = WalkRRs(msg, off, an+ns, nil); err != nil {
+		return nil, nil, err
+	}
+	start, end := -1, -1
+	if _, err = WalkRRs(msg, off, ar, func(rr RR) error {
+		if rr.Type == TypeOPT {
+			if start >= 0 || msg[rr.Start] != 0 {
+				return ErrMalformed
+			}
+			start, end = rr.Start, rr.End
+			return eachOption(msg[rr.RDOff:rr.End], func(code uint16, data []byte) {
+				if code == OptEDE && len(data) >= 2 {
+					ede = binary.BigEndian.AppendUint16(ede, code)
+					ede = binary.BigEndian.AppendUint16(ede, uint16(len(data)))
+					ede = append(ede, data...)
+				}
+			})
+		}
+		return nil
+	}); err != nil {
+		return nil, nil, err
+	}
+	if start < 0 {
+		return msg, nil, nil
+	}
+	out = make([]byte, 0, len(msg)-(end-start))
+	out = append(out, msg[:start]...)
+	out = append(out, msg[end:]...)
+	binary.BigEndian.PutUint16(out[10:], uint16(ar-1))
+	return out, ede, nil
+}
+
+// EDE returns an Extended DNS Error option (RFC 8914) with an optional text.
+func EDE(code uint16, text string) []byte {
+	b := binary.BigEndian.AppendUint16(nil, OptEDE)
+	b = binary.BigEndian.AppendUint16(b, uint16(2+len(text)))
+	b = binary.BigEndian.AppendUint16(b, code)
+	return append(b, text...)
+}
+
+// lastOPT returns the offset of the OPT record when it is the last record
+// of msg, or -1.
+func lastOPT(msg []byte) int {
+	if len(msg) < HeaderLen+11 || U16(msg, 10) == 0 {
+		return -1
+	}
+	off := HeaderLen
+	var err error
+	if U16(msg, 4) == 1 {
+		if off, err = SkipName(msg, off); err != nil || off+4 > len(msg) {
+			return -1
+		}
+		off += 4
+	}
+	n := int(U16(msg, 6)) + int(U16(msg, 8)) + int(U16(msg, 10))
+	found := -1
+	if _, err = WalkRRs(msg, off, n, func(rr RR) error {
+		if rr.Type == TypeOPT && rr.End == len(msg) {
+			found = rr.Start
+		}
+		return nil
+	}); err != nil {
+		return -1
+	}
+	return found
+}
+
+// AddOptions appends raw EDNS options to the OPT record that ends msg. A
+// message whose last record is not OPT is returned unchanged.
+func AddOptions(msg, opts []byte) []byte {
+	if len(opts) == 0 {
+		return msg
+	}
+	o := lastOPT(msg)
+	if o < 0 || len(msg)+len(opts) > 65535 {
+		return msg
+	}
+	rdl := int(U16(msg, o+9)) + len(opts)
+	out := append(msg, opts...)
+	binary.BigEndian.PutUint16(out[o+9:], uint16(rdl))
+	return out
+}
+
+// Pad adds an EDNS Padding option (RFC 7830) so the message length becomes
+// a multiple of block (RFC 8467 block-length padding). A message whose last
+// record is not OPT is returned unchanged.
+func Pad(msg []byte, block int) []byte {
+	if block <= 0 || lastOPT(msg) < 0 {
+		return msg
+	}
+	n := (block - (len(msg)+4)%block) % block
+	opt := binary.BigEndian.AppendUint16(nil, OptPadding)
+	opt = binary.BigEndian.AppendUint16(opt, uint16(n))
+	return AddOptions(msg, append(opt, make([]byte, n)...))
 }
 
 // BuildUpstreamQuery builds the query sent upstream: RD set, CD copied from
@@ -328,6 +485,9 @@ func ErrorResponse(req []byte, q *Query, rcode int) []byte {
 	}
 	if ar == 1 {
 		b = AppendOPT(b, EDNSSize, q.DO)
+		if rcode > 0xF {
+			b[len(b)-6] = byte(rcode >> 4) // upper bits of the extended rcode
+		}
 	}
 	return b
 }
@@ -542,6 +702,9 @@ var rcodeNames = []string{"NOERROR", "FORMERR", "SERVFAIL", "NXDOMAIN", "NOTIMP"
 func RcodeString(rc int) string {
 	if rc >= 0 && rc < len(rcodeNames) {
 		return rcodeNames[rc]
+	}
+	if rc == RcodeBadVers {
+		return "BADVERS"
 	}
 	return "RCODE" + strconv.Itoa(rc)
 }

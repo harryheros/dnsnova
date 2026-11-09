@@ -31,6 +31,7 @@ import (
 
 	"github.com/harryheros/dnsnova/internal/config"
 	"github.com/harryheros/dnsnova/internal/events"
+	"github.com/harryheros/dnsnova/internal/filter"
 	"github.com/harryheros/dnsnova/internal/insight"
 	"github.com/harryheros/dnsnova/internal/stats"
 	"github.com/harryheros/dnsnova/internal/tlsmgr"
@@ -69,6 +70,10 @@ type Backend interface {
 	// Lookup asks each upstream (the configured ones when specs is empty)
 	// for name (wire format) and type, bypassing the cache.
 	Lookup(ctx context.Context, name string, qtype uint16, specs []string) []LookupResult
+	// FilterStatus describes the filtered service's lists; UpdateFilter
+	// downloads them now.
+	FilterStatus() filter.Status
+	UpdateFilter(ctx context.Context)
 }
 
 // Tops are the lists shown beside the statistics.
@@ -110,6 +115,7 @@ type Upstream struct {
 // Admin serves the API.
 type Admin struct {
 	setupFails atomic.Int32 // wrong setup codes since the code was made
+	setupMu    sync.Mutex   // one administrator, even if two setups race
 	b          Backend
 	log        *slog.Logger
 	sec        *secrets
@@ -172,6 +178,11 @@ func (a *Admin) routes() {
 	m.Handle("DELETE /api/v1/querylog", auth(a.stopQueryLog))
 	m.Handle("GET /api/v1/system/addresses", auth(a.addresses))
 	m.Handle("POST /api/v1/tools/lookup", auth(a.lookup))
+	m.Handle("POST /api/v1/filter/update", auth(func(w http.ResponseWriter, r *http.Request, c *call) {
+		a.b.UpdateFilter(r.Context())
+		a.log.Info("admin: filter lists updated by hand", "from", c.ip.String())
+		writeJSON(w, http.StatusOK, a.b.FilterStatus())
+	}))
 
 	m.Handle("GET /api/v1/config", auth(a.getConfig))
 	m.Handle("POST /api/v1/config/preview", auth(a.previewConfig))
@@ -242,6 +253,9 @@ type call struct {
 	ip    netip.Addr
 	sess  *session
 	token string
+	// proxied: the request came through a reverse proxy, so ip is the
+	// proxy's address (often 127.0.0.1), not the visitor's.
+	proxied bool
 }
 
 func clientIP(r *http.Request) netip.Addr {
@@ -252,6 +266,24 @@ func clientIP(r *http.Request) netip.Addr {
 	return ap.Addr().Unmap()
 }
 
+// viaProxy reports whether a reverse proxy forwarded the request. Such a
+// request may come from anywhere on the internet even though the connection
+// is from the server itself, so it is never trusted as local.
+func viaProxy(r *http.Request) bool {
+	for _, h := range []string{"Forwarded", "X-Forwarded-For", "X-Real-Ip", "X-Forwarded-Host", "X-Forwarded-Proto", "Via"} {
+		if r.Header.Get(h) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func newCall(r *http.Request) *call { return &call{ip: clientIP(r), proxied: viaProxy(r)} }
+
+// trusted reports whether this request may create the administrator
+// without the setup code.
+func (a *Admin) trusted(c *call) bool { return !c.proxied && a.sec.setupTrusted(c.ip) }
+
 func safeMethod(m string) bool { return m == http.MethodGet || m == http.MethodHead }
 
 // public serves a handler without a session. State-changing requests must
@@ -261,7 +293,7 @@ func (a *Admin) public(h handler) http.Handler {
 		if !safeMethod(r.Method) && !sameOriginJSON(w, r) {
 			return
 		}
-		h(w, r, &call{ip: clientIP(r)})
+		h(w, r, newCall(r))
 	})
 }
 
@@ -269,7 +301,7 @@ func (a *Admin) public(h handler) http.Handler {
 // CSRF token in X-CSRF-Token.
 func (a *Admin) authed(h handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c := &call{ip: clientIP(r)}
+		c := newCall(r)
 		if ck, err := r.Cookie(cookieName); err == nil {
 			c.token = ck.Value
 			c.sess = a.sess.get(ck.Value, a.Now())

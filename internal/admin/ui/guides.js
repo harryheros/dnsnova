@@ -93,3 +93,27 @@ export function tabs(list, { h, fill }) {
   return [bar, body];
 }
 
+
+// filtered describes the filtered service (info.filtered): its addresses,
+// with Apple profiles when they can be offered, or null when it is off.
+// prof is the profile base URL ("" for the page's own origin, null: none).
+export function filtered(info, { h, copyrow }, prof) {
+  const f = info.filtered;
+  if (!f) return null;
+  const note = h("p", { class: "small muted", style: { margin: 0 } },
+    `Blocks ads, trackers and malicious sites (${f.rules.toLocaleString()} rules). Same server, same privacy; only these addresses filter.`);
+  if (!f.doh && !f.dot && !f.doq && !(f.plain || []).length) {
+    return [note, h("p", { class: "small", style: { margin: 0 } }, "Every address of this server filters.")];
+  }
+  const rows = [
+    f.doh ? ["DNS over HTTPS", f.doh] : null,
+    f.dot ? ["DNS over TLS", f.dot] : null,
+    f.doq ? ["DNS over QUIC", f.doq] : null,
+    ...(f.plain || []).map((ip) => ["Plain DNS", ip]),
+  ].filter(Boolean);
+  const apple = prof !== null && prof !== undefined && (f.doh || (f.dot && !f.dot.includes(":")));
+  return [note, h("div", { class: "addrs" }, rows.map(([k, v]) => copyrow(k, v))),
+    apple ? h("div", { class: "row" },
+      f.doh ? h("a", { class: "btn", href: prof + "/dnsnova.mobileconfig?p=doh-filtered" }, "Apple profile, DNS over HTTPS") : null,
+      f.dot && !f.dot.includes(":") ? h("a", { class: "btn", href: prof + "/dnsnova.mobileconfig?p=dot-filtered" }, "Apple profile, DNS over TLS") : null) : null];
+}

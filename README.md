@@ -49,8 +49,10 @@ Forgot the administrator password? Run `dnsnova -reset-admin` on the server; the
 
 - **Plain and encrypted DNS**: UDP and TCP on port 53, DNS over TLS, DNS over QUIC and DNS over HTTPS (HTTP/2 and HTTP/3), with an automatic Let's Encrypt certificate.
 - **Web interface**: response times, traffic, upstream health, most queried domains, every setting with a preview before it is applied, a setup guide for each kind of device, and light and dark appearance.
+- **Optional filtering, without forcing it on anyone**: one server, two doors. The usual addresses answer everything; a second address, name or DoH path blocks ads, trackers and malware (the [ShieldNova](https://github.com/harryheros/shieldnova) list by default, or any AdGuard-style, hosts or domain list). Lists update by themselves, a broken update never replaces a good list, and a wrongly blocked domain is allowed again with one click in the query log.
 - **Local names** such as `nas.home`, and a list of blocked clients.
 - **Public or private**: open to everyone with rate limits that stop abuse, or only to the networks you list.
+- **Built for busy servers**: one UDP socket per CPU core, cache hits answered without extra work, failures remembered briefly so a broken domain cannot flood the upstreams, and Extended DNS Errors that tell clients why an answer failed.
 - **Privacy**: queries and client addresses are never written to disk, no telemetry. A query log for troubleshooting runs in memory and stops by itself. See [PRIVACY.md](./PRIVACY.md).
 - **Status page** (optional): a public page with the addresses, setup steps, and a check that shows a visitor whether their device is using the server.
 

@@ -21,6 +21,7 @@ import (
 	"github.com/harryheros/dnsnova/internal/config"
 	m "github.com/harryheros/dnsnova/internal/dnsmsg"
 	"github.com/harryheros/dnsnova/internal/events"
+	"github.com/harryheros/dnsnova/internal/filter"
 	"github.com/harryheros/dnsnova/internal/guard"
 	"github.com/harryheros/dnsnova/internal/insight"
 	"github.com/harryheros/dnsnova/internal/resolver"
@@ -71,6 +72,10 @@ type Server struct {
 	Certs *tlsmgr.Manager
 	// ACMEHTTP overrides the HTTP client used for ACME (tests only).
 	ACMEHTTP *http.Client
+	// Filter keeps the block lists of the filtered service up to date.
+	Filter *filter.Manager
+	// FilterHTTP overrides the HTTP client used to download lists (tests only).
+	FilterHTTP *http.Client
 
 	mu      sync.Mutex // serialises reloads and listener changes
 	udp     map[string]*udpListener
@@ -133,6 +138,15 @@ func tlsSettings(c *config.Config) tlsmgr.Settings {
 	}
 	if c.TLS.IPAddresses {
 		t.IPs = c.PublicListenIPs()
+	}
+	if c.Filter.Enabled && c.TLS.Certificate == "acme" {
+		// One certificate also covers the filtered service's names.
+		t.Domains = slices.Clone(t.Domains)
+		for _, n := range c.Filter.Names {
+			if !nameIn(t.Domains, n) {
+				t.Domains = append(t.Domains, n)
+			}
+		}
 	}
 	return t
 }
@@ -269,6 +283,7 @@ func (s *Server) Start() error {
 	}
 	s.res = resolver.New(settingsFrom(snap.Config), st.group, s.Stats)
 	s.applyRetention(snap.Config)
+	s.startFilter(snap.Config)
 	s.Certs = tlsmgr.NewManager(snap.Config.Server.DataDir, s.Log)
 	s.Certs.HTTP = s.ACMEHTTP
 	s.tlsDoT = s.Certs.TLSConfig("dot")
@@ -335,6 +350,7 @@ func (s *Server) Apply(snap *config.Snapshot) error {
 	s.res.SetSettings(settingsFrom(snap.Config))
 	s.applyRetention(snap.Config)
 	s.res.SetUpstreams(st.group)
+	s.Filter.Configure(filterSettings(snap.Config))
 	s.hash = snap.Hash
 	if old != nil {
 		go func() { // let in-flight queries on the old upstreams finish
@@ -389,7 +405,7 @@ func (s *Server) syncListeners(c *config.Config) error {
 			a, l := a, l
 			um[a] = func() { l.close(); delete(s.udp, a) }
 		}
-		room("udp", um, wantSet(c.Server.Listen), func(a string) error {
+		room("udp", um, wantSet(plainListen(c)), func(a string) error {
 			l, err := s.listenUDP(a)
 			if err == nil {
 				s.udp[a] = l
@@ -402,7 +418,7 @@ func (s *Server) syncListeners(c *config.Config) error {
 			tls   *tls.Config
 			proto int
 			name  string
-		}{{s.tcp, c.Server.Listen, nil, stats.TCP, "tcp"}, {s.dot, c.DoT.Listen, s.tlsDoT, stats.DoT, "dot"}} {
+		}{{s.tcp, plainListen(c), nil, stats.TCP, "tcp"}, {s.dot, c.DoT.Listen, s.tlsDoT, stats.DoT, "dot"}} {
 			tm := map[string]func(){}
 			for a, l := range x.m {
 				a, l, m := a, l, x.m
@@ -437,10 +453,10 @@ func (s *Server) syncListeners(c *config.Config) error {
 		proto int
 		name  string
 	}{
-		{s.tcp, c.Server.Listen, nil, stats.TCP, "tcp"},
+		{s.tcp, plainListen(c), nil, stats.TCP, "tcp"},
 		{s.dot, c.DoT.Listen, s.tlsDoT, stats.DoT, "dot"},
 	}
-	for a := range wantSet(c.Server.Listen) {
+	for a := range wantSet(plainListen(c)) {
 		if _, ok := s.udp[a]; !ok {
 			l, err := s.listenUDP(a)
 			if err != nil {
@@ -486,14 +502,14 @@ func (s *Server) syncListeners(c *config.Config) error {
 	}
 	for a := range wantSet(c.DoH.HTTPSListen) {
 		old, ok := s.https[a]
-		if ok && old.path == c.DoH.Path && (old.h3 != nil) == c.DoH.HTTP3 {
+		if ok && old.path == dohPaths(c) && (old.h3 != nil) == c.DoH.HTTP3 {
 			continue
 		}
 		if ok { // the path or HTTP/3 changed: the address must be released first
 			old.close()
 			delete(s.https, a)
 		}
-		l, err := s.listenHTTPS(a, c.DoH.Path, http.HandlerFunc(s.handleDoH), s.tlsDoH, h3Conf)
+		l, err := s.listenHTTPS(a, dohPaths(c), http.HandlerFunc(s.handleDoH), s.tlsDoH, h3Conf)
 		if err != nil {
 			rollback()
 			return fmt.Errorf("listen https %s: %w", a, err)
@@ -504,8 +520,18 @@ func (s *Server) syncListeners(c *config.Config) error {
 	}
 	var newDoH, newMetrics *httpListener
 	var err error
-	if c.DoH.Listen != "" && (s.doh == nil || s.doh.addr != c.DoH.Listen || s.doh.path != c.DoH.Path) {
-		if newDoH, err = s.listenHTTP(c.DoH.Listen, c.DoH.Path, http.HandlerFunc(s.handleDoH), nil); err != nil {
+	if c.DoH.Listen != "" && (s.doh == nil || s.doh.addr != c.DoH.Listen || s.doh.path != dohPaths(c)) {
+		if old := s.doh; old != nil && old.addr == c.DoH.Listen {
+			// Same address, other paths: release the address first.
+			old.close()
+			s.doh = nil
+			reopen = append(reopen, func() {
+				if l, err := s.listenHTTP(old.addr, old.path, http.HandlerFunc(s.handleDoH), nil); err == nil {
+					s.doh = l
+				}
+			})
+		}
+		if newDoH, err = s.listenHTTP(c.DoH.Listen, dohPaths(c), http.HandlerFunc(s.handleDoH), nil); err != nil {
 			rollback()
 			return fmt.Errorf("listen doh %s: %w", c.DoH.Listen, err)
 		}
@@ -549,7 +575,7 @@ func (s *Server) syncListeners(c *config.Config) error {
 	}
 
 	// Everything new is open: now close what is no longer wanted.
-	want := wantSet(c.Server.Listen)
+	want := wantSet(plainListen(c))
 	for a, l := range s.udp {
 		if !want[a] {
 			l.close()
