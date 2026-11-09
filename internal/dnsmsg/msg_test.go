@@ -142,3 +142,28 @@ func FuzzParseQuery(f *testing.F) {
 		}
 	})
 }
+
+func TestReadName(t *testing.T) {
+	// "www.Example.com" at 12, then "a" + pointer to "example.com" at 16
+	msg := make([]byte, 12)
+	msg = append(msg, 3, 'w', 'w', 'w', 7, 'E', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0)
+	ptr := len(msg)
+	msg = append(msg, 1, 'a', 0xC0, 16)
+	name, next, err := m.ReadName(msg, ptr)
+	if err != nil || name != "\x01a\x07example\x03com" || next != ptr+4 {
+		t.Fatalf("%q %d %v", name, next, err)
+	}
+	if name, next, err := m.ReadName(msg, 12); err != nil || name != "\x03www\x07example\x03com" || next != ptr {
+		t.Fatalf("%q %d %v", name, next, err)
+	}
+	for _, bad := range [][]byte{
+		append(make([]byte, 12), 0xC0, 12),       // points at itself
+		append(make([]byte, 12), 0xC0, 20, 0, 0), // forward pointer
+		append(make([]byte, 12), 5, 'a'),         // runs past the end
+		append(make([]byte, 12), 0x80, 0),        // reserved label type
+	} {
+		if _, _, err := m.ReadName(bad, 12); err == nil {
+			t.Fatalf("accepted %v", bad[12:])
+		}
+	}
+}

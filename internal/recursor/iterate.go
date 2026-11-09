@@ -1,0 +1,506 @@
+package recursor
+
+import (
+	"context"
+	"encoding/binary"
+	"errors"
+	"io"
+	"math/rand/v2"
+	"net"
+	"net/netip"
+	"slices"
+	"sync"
+	"syscall"
+	"time"
+
+	m "github.com/harryheros/dnsnova/internal/dnsmsg"
+)
+
+// response is an authoritative server's answer to the full question.
+type response struct {
+	msg  *message
+	zone string // the zone of the server that answered
+}
+
+// ---- delegations ----
+
+func (r *Recursor) storeDeleg(d *delegation, ttl uint32) {
+	ttl = min(max(ttl, 5), 86400)
+	r.delegs.set(d.zone, d, r.now().Add(time.Duration(ttl)*time.Second))
+}
+
+// rootDeleg returns the root servers, priming them first (RFC 8109).
+func (r *Recursor) rootDeleg(ctx context.Context, t *task) *delegation {
+	if d, exp, ok := r.delegs.get(""); ok && r.now().Before(exp) {
+		return d
+	}
+	cfg := r.cfg.Load()
+	hints := &delegation{zone: "", ns: []nsHost{{addrs: cfg.RootHints}}}
+	v, _ := r.fl.do(ctx, "prime", func() (any, error) {
+		msg, err := r.query(ctx, t, hints, "", m.TypeNS)
+		if err == nil && msg.rcode == m.RcodeNoError {
+			if d, ttl := delegFrom(msg.answer, msg.additional, ""); d != nil &&
+				slices.ContainsFunc(d.ns, func(h nsHost) bool { return len(h.addrs) > 0 }) {
+				r.storeDeleg(d, ttl)
+				return d, nil
+			}
+		}
+		r.storeDeleg(hints, 60)
+		return hints, nil
+	})
+	if d, ok := v.(*delegation); ok {
+		return d
+	}
+	return hints
+}
+
+// delegFrom builds a delegation for zone from NS records and glue.
+func delegFrom(nsRecs, glue []rr, zone string) (*delegation, uint32) {
+	d := &delegation{zone: zone}
+	ttl := uint32(86400)
+	for _, rec := range nsRecs {
+		if rec.typ != m.TypeNS || rec.name != zone {
+			continue
+		}
+		host := lower(nameOf(rec.data))
+		if slices.ContainsFunc(d.ns, func(h nsHost) bool { return h.name == host }) || len(d.ns) >= 20 {
+			continue
+		}
+		ttl = min(ttl, rec.ttl)
+		h := nsHost{name: host}
+		for _, g := range glue {
+			if g.name != host || (g.typ != m.TypeA && g.typ != m.TypeAAAA) {
+				continue
+			}
+			if a, ok := netip.AddrFromSlice(g.data); ok {
+				h.addrs = append(h.addrs, a.Unmap())
+			}
+		}
+		d.ns = append(d.ns, h)
+	}
+	if len(d.ns) == 0 {
+		return nil, 0
+	}
+	return d, ttl
+}
+
+// nameOf returns the name at the start of record data (wire, no zero byte).
+func nameOf(d []byte) []byte {
+	for off := 0; off < len(d); {
+		l := int(d[off])
+		if l == 0 {
+			return d[:off]
+		}
+		off += 1 + l
+	}
+	return nil
+}
+
+// closestDeleg returns the deepest known delegation for qname. DS lives in
+// the parent zone, so for DS the zone of qname itself is skipped.
+func (r *Recursor) closestDeleg(ctx context.Context, t *task, qname string, qtype uint16) *delegation {
+	name := qname
+	if qtype == typeDS && name != "" {
+		name = parent(name)
+	}
+	now := r.now()
+	for name != "" {
+		if d, exp, ok := r.delegs.get(name); ok && now.Before(exp) {
+			return d
+		}
+		name = parent(name)
+	}
+	return r.rootDeleg(ctx, t)
+}
+
+// ---- iteration ----
+
+// iterate asks authoritative servers, following referrals from the closest
+// known delegation, until one answers qname/qtype (or says it does not exist).
+func (r *Recursor) iterate(ctx context.Context, t *task, qname string, qtype uint16) (*response, error) {
+	key := "i" + tkey(qname, qtype)
+	if t.stack[key] {
+		return nil, errLoop
+	}
+	t.stack[key] = true
+	defer delete(t.stack, key)
+	v, err := r.fl.do(ctx, key, func() (any, error) { return r.iterateOnce(ctx, t, qname, qtype) })
+	if err != nil {
+		return nil, err
+	}
+	return v.(*response), nil
+}
+
+func (r *Recursor) iterateOnce(ctx context.Context, t *task, qname string, qtype uint16) (*response, error) {
+	cfg := r.cfg.Load()
+	d := r.closestDeleg(ctx, t, qname, qtype)
+	known := d.zone
+	minimise := cfg.QNameMinimisation
+	steps := 0
+	for i := 0; i < maxReferrals; i++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		sendName, sendType := qname, qtype
+		if minimise && steps < 10 && labelCount(qname) > labelCount(known)+1 {
+			sendName, sendType = ancestorAt(qname, labelCount(known)+1), m.TypeA
+			steps++
+		}
+		msg, err := r.query(ctx, t, d, sendName, sendType)
+		if err != nil {
+			return nil, err
+		}
+		if child, ttl := referral(msg, d.zone, sendName); child != nil {
+			if qtype == typeDS && child.zone == qname {
+				return nil, ErrUnreachable // the parent must answer DS itself
+			}
+			r.storeDeleg(child, ttl)
+			r.storeReferralDS(msg, child.zone, d.zone)
+			d, known = child, child.zone
+			continue
+		}
+		if sendName != qname {
+			switch {
+			case msg.rcode == m.RcodeNXDomain && hasDenial(msg):
+				// RFC 8020: nothing exists below a name that does not
+				// exist. Signed zones prove it; unsigned ones are asked
+				// again with the full name, as some servers get this wrong.
+				return &response{msg: msg, zone: d.zone}, nil
+			case msg.rcode == m.RcodeNoError && !hasAlias(msg, sendName):
+				known = sendName // no zone cut here; one label further
+			default:
+				minimise = false
+			}
+			continue
+		}
+		return &response{msg: msg, zone: d.zone}, nil
+	}
+	return nil, errBudget
+}
+
+func hasDenial(msg *message) bool {
+	for _, a := range msg.authority {
+		if a.typ == typeNSEC || a.typ == typeNSEC3 {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAlias(msg *message, name string) bool {
+	for _, a := range msg.answer {
+		if (a.typ == m.TypeCNAME && a.name == name) || (a.typ == typeDNAME && isSub(name, a.name)) {
+			return true
+		}
+	}
+	return false
+}
+
+// referral returns the delegation a response refers to: NS records for a
+// zone below the server's zone that contains qname, and no answer.
+func referral(msg *message, zone, qname string) (*delegation, uint32) {
+	if msg.rcode != m.RcodeNoError || msg.aa() {
+		return nil, 0
+	}
+	for _, a := range msg.answer {
+		if a.name == qname {
+			return nil, 0
+		}
+	}
+	for _, a := range msg.authority {
+		if a.typ == m.TypeSOA {
+			return nil, 0
+		}
+	}
+	for _, a := range msg.authority {
+		if a.typ == m.TypeNS && a.name != zone && isSub(a.name, zone) && isSub(qname, a.name) {
+			return delegFrom(msg.authority, msg.additional, a.name)
+		}
+	}
+	return nil, 0
+}
+
+// storeReferralDS keeps the DS records (or the proof there are none) that
+// came with a referral, saving a query when the child is validated.
+func (r *Recursor) storeReferralDS(msg *message, child, zone string) {
+	if !r.cfg.Load().DNSSEC {
+		return
+	}
+	sets := groupRRsets(msg.authority)
+	now := r.now()
+	for _, s := range sets {
+		if s.name == child && s.typ == typeDS && len(s.sigs) > 0 {
+			cs := &cachedSet{set: s, zone: zone, orig: s.ttl}
+			r.sets.set(tkey(child, typeDS), cs, now.Add(time.Duration(min(s.ttl, 86400))*time.Second))
+			return
+		}
+	}
+	var proof []*rrset
+	ttl := uint32(3600)
+	for _, s := range sets {
+		if (s.typ == typeNSEC || s.typ == typeNSEC3) && len(s.sigs) > 0 {
+			proof = append(proof, s)
+			ttl = min(ttl, s.ttl)
+		}
+	}
+	if len(proof) > 0 {
+		ne := &negEntry{rcode: m.RcodeNoError, proof: proof, zone: zone, orig: ttl}
+		r.negs.set(tkey(child, typeDS), ne, now.Add(time.Duration(ttl)*time.Second))
+	}
+}
+
+// scrub drops records outside the zone of the server that sent them (they
+// could be used to poison the cache) and everything in the additional
+// section but addresses.
+func scrub(msg *message, zone string) {
+	keep := func(rrs []rr, addrOnly bool) []rr {
+		out := rrs[:0]
+		for _, x := range rrs {
+			if !isSub(x.name, zone) {
+				continue
+			}
+			if addrOnly && x.typ != m.TypeA && x.typ != m.TypeAAAA {
+				continue
+			}
+			out = append(out, x)
+		}
+		return out
+	}
+	msg.answer = keep(msg.answer, false)
+	msg.authority = keep(msg.authority, false)
+	msg.additional = keep(msg.additional, true)
+}
+
+// usable reports whether a response from a server for zone is an answer,
+// a negative answer or a referral, rather than a lame reply.
+func usable(msg *message, zone, qname string) bool {
+	if msg.aa() {
+		return true
+	}
+	if child, _ := referral(msg, zone, qname); child != nil {
+		return true
+	}
+	// some servers leave AA off negative answers; accept them with an SOA
+	for _, a := range msg.authority {
+		if a.typ == m.TypeSOA && isSub(qname, a.name) && len(msg.answer) == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// query asks the servers of d, best first, until one gives a usable reply.
+func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name string, qtype uint16) (*message, error) {
+	cfg := r.cfg.Load()
+	addrs := r.serverAddrs(ctx, t, d, cfg)
+	now := r.now()
+	tried := 0
+	for len(addrs) > 0 && tried < 8 {
+		scores := make(map[netip.Addr]time.Duration, len(addrs))
+		for _, a := range addrs {
+			scores[a] = r.infra.score(a, d.zone, now)
+		}
+		slices.SortStableFunc(addrs, func(a, b netip.Addr) int { return int(scores[a] - scores[b]) })
+		a := addrs[0]
+		addrs = addrs[1:]
+		if t.budget <= 0 {
+			return nil, errBudget
+		}
+		t.budget--
+		tried++
+		msg, err := r.ask(ctx, a, name, qtype)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			continue
+		}
+		if msg.rcode != m.RcodeNoError && msg.rcode != m.RcodeNXDomain {
+			r.infra.setLame(a, d.zone, now)
+			continue
+		}
+		scrub(msg, d.zone)
+		if !usable(msg, d.zone, name) {
+			r.infra.setLame(a, d.zone, now)
+			continue
+		}
+		return msg, nil
+	}
+	return nil, ErrUnreachable
+}
+
+// serverAddrs returns the addresses that may be asked for d, looking up
+// the addresses of name servers that came without glue.
+func (r *Recursor) serverAddrs(ctx context.Context, t *task, d *delegation, cfg *Config) []netip.Addr {
+	var out []netip.Addr
+	add := func(a netip.Addr) {
+		if r.allowed(cfg, a) && !(a.Is6() && r.v6Down()) && !slices.Contains(out, a) {
+			out = append(out, a)
+		}
+	}
+	var missing []string
+	for _, h := range d.ns {
+		for _, a := range h.addrs {
+			add(a)
+		}
+		if len(h.addrs) == 0 && h.name != "" {
+			if addrs := r.cachedAddrs(h.name, cfg); len(addrs) > 0 {
+				for _, a := range addrs {
+					add(a)
+				}
+			} else if !isSub(h.name, d.zone) { // in-zone names without glue cannot be found
+				missing = append(missing, h.name)
+			}
+		}
+	}
+	if len(out) >= 2 || len(missing) == 0 || t.depth >= maxDepth-2 {
+		return out
+	}
+	// glueless: look up a few name servers (NXNSAttack: not all of them)
+	rand.Shuffle(len(missing), func(i, j int) { missing[i], missing[j] = missing[j], missing[i] })
+	found := false
+	for i, host := range missing {
+		if i >= 3 || (found && len(out) >= 2) {
+			break
+		}
+		types := []uint16{m.TypeA}
+		if cfg.IPv6 && !r.v6Down() {
+			types = append(types, m.TypeAAAA)
+		}
+		for _, qt := range types {
+			ans, err := r.resolve(ctx, t, host, qt, false)
+			if err != nil || ans.rcode != m.RcodeNoError {
+				continue
+			}
+			for _, cs := range ans.chain {
+				if cs.set.typ != qt {
+					continue
+				}
+				for _, data := range cs.set.data {
+					if a, ok := netip.AddrFromSlice(data); ok {
+						add(a.Unmap())
+						found = true
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+func (r *Recursor) cachedAddrs(host string, cfg *Config) []netip.Addr {
+	var out []netip.Addr
+	types := []uint16{m.TypeA}
+	if cfg.IPv6 {
+		types = append(types, m.TypeAAAA)
+	}
+	now := r.now()
+	for _, qt := range types {
+		if cs, exp, ok := r.sets.get(tkey(host, qt)); ok && now.Before(exp) {
+			for _, data := range cs.set.data {
+				if a, ok := netip.AddrFromSlice(data); ok {
+					out = append(out, a.Unmap())
+				}
+			}
+		}
+	}
+	return out
+}
+
+func (r *Recursor) v6Down() bool { return r.now().UnixNano() < r.v6down.Load() }
+
+// ask sends one question to one server: over UDP, then TCP if the answer
+// was truncated; without EDNS for servers that do not support it.
+func (r *Recursor) ask(ctx context.Context, a netip.Addr, name string, qtype uint16) (*message, error) {
+	now := r.now()
+	edns := r.infra.useEDNS(a, now)
+	ap := netip.AddrPortFrom(a, r.port)
+	for attempt := 0; attempt < 2; attempt++ {
+		q := buildQuery(uint16(rand.Uint32()), name, qtype, edns)
+		start := time.Now()
+		c, cancel := context.WithTimeout(ctx, r.infra.timeout(a))
+		resp, err := r.send(c, ap, q, false)
+		cancel()
+		r.Stats.Queries.Add(1)
+		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) || isTimeout(err) {
+				r.Stats.Timeouts.Add(1)
+			}
+			if a.Is6() && (errors.Is(err, syscall.ENETUNREACH) || errors.Is(err, syscall.EHOSTUNREACH)) {
+				r.v6down.Store(now.Add(10 * time.Minute).UnixNano())
+			}
+			r.infra.fail(a, now)
+			r.failRun.Add(1)
+			return nil, err
+		}
+		r.infra.ok(a, time.Since(start), now)
+		r.lastOK.Store(now.UnixNano())
+		r.failRun.Store(0)
+		msg, err := parseMessage(resp)
+		if err != nil {
+			r.infra.setLame(a, "", now)
+			return nil, err
+		}
+		if msg.tc() {
+			c, cancel := context.WithTimeout(ctx, 2*r.infra.timeout(a)+time.Second)
+			resp, err = r.send(c, ap, q, true)
+			cancel()
+			r.Stats.TCP.Add(1)
+			if err != nil {
+				r.infra.fail(a, now)
+				return nil, err
+			}
+			if msg, err = parseMessage(resp); err != nil {
+				return nil, err
+			}
+		}
+		if edns && !msg.edns && (msg.rcode == m.RcodeFormErr || msg.rcode == m.RcodeNotImp) {
+			r.infra.setNoEDNS(a, now)
+			edns = false
+			continue
+		}
+		return msg, nil
+	}
+	return nil, ErrUnreachable
+}
+
+func isTimeout(err error) bool {
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
+}
+
+var udpBufs = sync.Pool{New: func() any { b := make([]byte, 65535); return &b }}
+
+// exchange sends q to addr and waits for the matching answer: over UDP
+// from the socket pool, over TCP on a new connection.
+func (r *Recursor) exchange(ctx context.Context, addr netip.AddrPort, q []byte, tcp bool) ([]byte, error) {
+	if !tcp {
+		return r.socks.exchangeUDP(ctx, addr, q)
+	}
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "tcp", addr.String())
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	if dl, ok := ctx.Deadline(); ok {
+		conn.SetDeadline(dl)
+	}
+	stop := context.AfterFunc(ctx, func() { conn.SetDeadline(time.Now()) })
+	defer stop()
+	if _, err := conn.Write(append(binary.BigEndian.AppendUint16(nil, uint16(len(q))), q...)); err != nil {
+		return nil, err
+	}
+	var lb [2]byte
+	if _, err := io.ReadFull(conn, lb[:]); err != nil {
+		return nil, err
+	}
+	resp := make([]byte, binary.BigEndian.Uint16(lb[:]))
+	if _, err := io.ReadFull(conn, resp); err != nil {
+		return nil, err
+	}
+	if !m.MatchResponse(q, resp) {
+		return nil, errFormat
+	}
+	return resp, nil
+}

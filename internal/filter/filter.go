@@ -30,6 +30,19 @@ func (s *Set) Rules() int {
 	return len(s.block) + len(s.blockExact)
 }
 
+// Allowed reports whether an allow rule covers name.
+func (s *Set) Allowed(name string) bool {
+	if s == nil {
+		return false
+	}
+	for i := 0; i < len(name); i += 1 + int(name[i]) {
+		if _, ok := s.allow[name[i:]]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 // Blocked reports whether a query name is blocked. name is in wire format
 // without the final zero byte, lowercased (as in dnsmsg.Query.Name).
 func (s *Set) Blocked(name string) bool {

@@ -16,8 +16,11 @@ type entry struct {
 	ttlOffs []int    // offsets of every TTL field except OPT's
 	ttls    []uint32 // their original values
 	ede     []byte   // Extended DNS Error options to pass on (RFC 8914)
-	rcode   int
-	tc      bool
+	// cnames are the CNAME targets in the answer (wire format, lowercase):
+	// the filtered service blocks an answer that leads to a blocked name.
+	cnames []string
+	rcode  int
+	tc     bool
 	// failure is a cached SERVFAIL (RFC 9520): an upstream's own, or one
 	// dnsnova made when no upstream could be reached. It is never served
 	// stale and never replaces an answer that can still be served stale.
@@ -77,6 +80,11 @@ func analyze(resp []byte, q *m.Query) (*entry, error) {
 			return m.ErrMalformed
 		}
 		t := collect(rr)
+		if rr.Type == m.TypeCNAME && len(e.cnames) < 16 {
+			if target, _, err := m.ReadName(resp, rr.RDOff); err == nil {
+				e.cnames = append(e.cnames, target)
+			}
+		}
 		if !hasAns || t < minAns {
 			minAns, hasAns = t, true
 		}
