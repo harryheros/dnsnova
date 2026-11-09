@@ -95,6 +95,24 @@ parallel = 2
 timeout = "3s"
 fallback_delay = "1.5s"
 
+[recursion]
+# Resolve names itself, from the root servers down, instead of forwarding
+# to the upstreams above: no third party sees the queries. Answers are
+# checked with DNSSEC (the root keys KSK-2017 and KSK-2024 are built in).
+enabled = false
+dnssec = true
+# Each server is sent only the part of the name it needs (RFC 9156): the
+# root sees "com", not "www.example.com".
+qname_minimisation = true
+# Also reach name servers over IPv6 (skipped automatically while it fails).
+ipv6 = true
+# When no name server of a domain can be reached, ask the upstreams above.
+# Never after a failed DNSSEC check.
+fallback = true
+# A public server never sends queries into private networks; list networks
+# with your own name servers here, e.g. ["10.0.0.0/8"].
+# allow_networks = []
+
 [cache]
 size = 100000           # entries; 0 disables the cache
 min_ttl = 0             # raise short TTLs to at least this

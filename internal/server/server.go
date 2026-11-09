@@ -24,6 +24,7 @@ import (
 	"github.com/harryheros/dnsnova/internal/filter"
 	"github.com/harryheros/dnsnova/internal/guard"
 	"github.com/harryheros/dnsnova/internal/insight"
+	"github.com/harryheros/dnsnova/internal/recursor"
 	"github.com/harryheros/dnsnova/internal/resolver"
 	"github.com/harryheros/dnsnova/internal/stats"
 	"github.com/harryheros/dnsnova/internal/tlsmgr"
@@ -55,6 +56,10 @@ type Server struct {
 	Domains, NXDomains, Limited *insight.Top
 	probes                      probes
 	statusPage                  *admin.StatusPage
+
+	// Rec resolves names itself while recursion is on.
+	Rec          *recursor.Recursor
+	recFallbacks atomic.Int64
 
 	// QLog records queries while an administrator has it running.
 	QLog *insight.QueryLog
@@ -91,6 +96,7 @@ type Server struct {
 	tlsH3   *tls.Config
 
 	udpInflight chan struct{}
+	jobs        chan func() // to idle workers (see dispatch)
 	tcpConns    atomic.Int64
 	quicConns   atomic.Int64
 
@@ -119,6 +125,7 @@ func New(store *config.Store, log *slog.Logger) (*Server, error) {
 		doq:         map[string]*quicListener{},
 		https:       map[string]*httpListener{},
 		udpInflight: make(chan struct{}, 20000),
+		jobs:        make(chan func()),
 	}
 	s.statusPage = admin.NewStatusPage(s)
 	s.ctx, s.cancel = context.WithCancel(context.Background())
@@ -234,10 +241,19 @@ func settingsFrom(c *config.Config) resolver.Settings {
 		Prefetch:            c.Cache.Prefetch,
 		BlockANY:            c.Limits.BlockANY,
 		UDPMaxSize:          c.Limits.UDPMaxSize,
-		Timeout:             c.Upstream.Timeout,
+		Timeout:             timeout(c),
 		UpstreamConcurrency: c.Limits.UpstreamConcurrency,
 		ZoneConcurrency:     c.Limits.ZoneConcurrency,
 	}
+}
+
+// timeout is how long a query may take: resolving from the root needs
+// more time than asking an upstream.
+func timeout(c *config.Config) time.Duration {
+	if c.Recursion.Enabled {
+		return max(2*c.Upstream.Timeout, 6*time.Second)
+	}
+	return c.Upstream.Timeout
 }
 
 func (s *Server) buildState(c *config.Config) (*state, error) {
@@ -281,7 +297,8 @@ func (s *Server) Start() error {
 	if err != nil {
 		return err
 	}
-	s.res = resolver.New(settingsFrom(snap.Config), st.group, s.Stats)
+	s.Rec = recursor.New(recConfig(snap.Config), s.Log)
+	s.res = resolver.New(settingsFrom(snap.Config), s.exchanger(snap.Config, st), s.Stats)
 	s.applyRetention(snap.Config)
 	s.startFilter(snap.Config)
 	s.Certs = tlsmgr.NewManager(snap.Config.Server.DataDir, s.Log)
@@ -303,10 +320,11 @@ func (s *Server) Start() error {
 	}
 	s.hash = snap.Hash
 	go s.res.Janitor(s.ctx)
+	go s.Rec.Janitor(s.ctx)
 	go s.sweeper()
 	go s.Certs.Run(s.ctx)
 	go s.recordHistory()
-	s.Log.Info("dnsnova started", "mode", snap.Config.Server.Mode,
+	s.Log.Info("dnsnova started", "mode", snap.Config.Server.Mode, "recursion", snap.Config.Recursion.Enabled,
 		"upstreams", len(snap.Config.Upstream.Primary), "fallbacks", len(snap.Config.Upstream.Fallback))
 	return nil
 }
@@ -349,7 +367,8 @@ func (s *Server) Apply(snap *config.Snapshot) error {
 	s.snap.Store(snap)
 	s.res.SetSettings(settingsFrom(snap.Config))
 	s.applyRetention(snap.Config)
-	s.res.SetUpstreams(st.group)
+	s.Rec.SetConfig(recConfig(snap.Config))
+	s.res.SetUpstreams(s.exchanger(snap.Config, st))
 	s.Filter.Configure(filterSettings(snap.Config))
 	s.hash = snap.Hash
 	if old != nil {

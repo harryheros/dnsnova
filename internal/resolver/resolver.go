@@ -177,10 +177,7 @@ func (r *Resolver) resolve(req []byte, o Opts, mayFetch bool) (Result, bool) {
 		return f.done(Result{Resp: resp, Q: q, Source: stats.SourceLocal, Status: "local"}, nil), true
 	}
 	if o.Filter && r.filter.Load().Blocked(q.Name) {
-		// NXDOMAIN with an SOA so clients remember it briefly, and an
-		// Extended DNS Error so people and programs can tell it was blocked.
-		return f.done(Result{Resp: m.NegativeSOA(req, q, q.Name, BlockedTTL, m.RcodeNXDomain), Q: q, Source: stats.SourceBlocked, Status: "blocked"},
-			m.EDE(m.EDEBlocked, "blocked by this server's filter")), true
+		return f.blocked(), true
 	}
 
 	key := q.CacheKey()
@@ -189,6 +186,9 @@ func (r *Resolver) resolve(req []byte, o Opts, mayFetch bool) (Result, bool) {
 	if e != nil && now.Before(e.expire) {
 		if s.Prefetch && e.ttl >= 10 && e.expire.Sub(now) < time.Duration(e.ttl)*time.Second/10 {
 			r.refreshAsync(key, q, e, now)
+		}
+		if f.cnameBlocked(e) {
+			return f.blocked(), true
 		}
 		res := Result{Resp: r.build(e, req, q, now, false, s), Q: q, Source: stats.SourceCache, Status: "hit"}
 		if e.failure {
@@ -200,6 +200,9 @@ func (r *Resolver) resolve(req []byte, o Opts, mayFetch bool) (Result, bool) {
 	stale := e != nil && !e.failure && s.ServeStale > 0 && now.Before(e.expire.Add(s.ServeStale))
 	if stale {
 		r.refreshAsync(key, q, e, now)
+		if f.cnameBlocked(e) {
+			return f.blocked(), true
+		}
 		res := Result{Resp: r.build(e, req, q, now, true, s), Q: q, Source: stats.SourceStale, Status: "stale"}
 		r.stats.LatencyCache.Observe(r.now().Sub(start))
 		return f.done(res, append(slices.Clip(e.ede), m.EDE(m.EDEStaleAnswer, "")...)), true
@@ -219,6 +222,9 @@ func (r *Resolver) resolve(req []byte, o Opts, mayFetch bool) (Result, bool) {
 		return f.done(Result{Resp: m.ErrorResponse(req, q, m.RcodeServFail), Q: q, Source: stats.SourceUpstream, Status: "servfail"},
 			m.EDE(m.EDEOther, "server busy")), true
 	}
+	if f.cnameBlocked(fresh) {
+		return f.blocked(), true
+	}
 	res := Result{Resp: r.build(fresh, req, q, r.now(), false, s), Q: q, Source: stats.SourceUpstream, Status: "miss"}
 	if fresh.failure {
 		res.Status = "servfail"
@@ -234,6 +240,34 @@ type finisher struct {
 	q   *m.Query
 	o   Opts
 	s   *Settings
+}
+
+// blocked answers a name the filtered service blocks: NXDOMAIN with an SOA
+// so clients remember it briefly, and an Extended DNS Error so people and
+// programs can tell it was blocked.
+func (f finisher) blocked() Result {
+	return f.done(Result{Resp: m.NegativeSOA(f.req, f.q, f.q.Name, BlockedTTL, m.RcodeNXDomain), Q: f.q, Source: stats.SourceBlocked, Status: "blocked"},
+		m.EDE(m.EDEBlocked, "blocked by this server's filter"))
+}
+
+// cnameBlocked reports whether the filtered service must block an answer
+// because its CNAME chain leads to a blocked name: trackers disguised as a
+// site's own subdomain ("CNAME cloaking"). A name the operator allowed
+// explicitly is never blocked this way.
+func (f finisher) cnameBlocked(e *entry) bool {
+	if !f.o.Filter || len(e.cnames) == 0 {
+		return false
+	}
+	set := f.r.filter.Load()
+	if set == nil || set.Allowed(f.q.Name) {
+		return false
+	}
+	for _, c := range e.cnames {
+		if set.Blocked(c) {
+			return true
+		}
+	}
+	return false
 }
 
 // done adds Extended DNS Errors (for clients that use EDNS), keeps UDP

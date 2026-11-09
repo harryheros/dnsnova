@@ -259,6 +259,7 @@ func (a *Admin) status(w http.ResponseWriter, r *http.Request, c *call) {
 		"listeners":      a.b.Listeners(),
 		"certificate":    a.b.Certificate(),
 		"filter":         a.b.FilterStatus(),
+		"recursion":      a.b.RecursionStatus(),
 		"cache":          map[string]int{"positive": pos, "negative": neg, "capacity": cfg.Cache.Size},
 		"retention":      cfg.Stats.Retention,
 		"serves_dns":     cfg.ServesDNS(),
