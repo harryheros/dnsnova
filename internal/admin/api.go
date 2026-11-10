@@ -275,7 +275,8 @@ func (a *Admin) status(w http.ResponseWriter, r *http.Request, c *call) {
 		"privacy": map[string]any{
 			"query_log":            ql.On,
 			"query_log_full_ip":    ql.On && ql.FullIP,
-			"client_ip_upstream":   false, // DNSNova never forwards client addresses (no ECS)
+			"client_ip_upstream":   false,         // clients' addresses are never sent on
+			"client_subnet":        ecsShown(cfg), // the one fixed ecs.address sent instead, or ""
 			"telemetry":            false,
 			"zero_rtt":             false,
 			"private_ptr_answered": true,
@@ -805,4 +806,12 @@ func valueOf(x any, depth int) (config.Value, error) {
 		return config.Value{}, errors.New("null is not a value; use unset to remove a setting")
 	}
 	return config.Value{}, errors.New("objects are not supported")
+}
+
+// ecsShown is the network sent as EDNS Client Subnet, or "" when off.
+func ecsShown(c *config.Config) string {
+	if p, ok := c.ClientSubnet(); ok {
+		return p.String()
+	}
+	return ""
 }

@@ -4,6 +4,16 @@ All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
 **Security**.
 
+## 1.0.5 (2026-11-09)
+
+- A change of `ecs.address` now waits for lookups still asking for the old
+  network, then clears the cache. An answer for the old network that
+  arrived just after the change could be cached before.
+- `ecs.address` refuses ranges that are nobody's network on the internet:
+  carrier NAT (100.64.0.0/10), documentation, benchmarking, reserved and
+  NAT64 addresses.
+- `GET /status` reports `privacy.client_subnet`.
+
 ## 1.0.4 (2026-11-09)
 
 - New: `ecs.address` (Settings › DNS & upstreams › Resolution, "Answer as

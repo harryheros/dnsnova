@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -70,6 +71,9 @@ type Recursor struct {
 	delegs  *ttlMap[*delegation]
 	infra   *infra
 	fl      flights
+	// netMu orders a change of the client subnet against resolutions (see
+	// SetConfig): nothing learnt for the old network is cached after it.
+	netMu   sync.RWMutex
 	Stats   Stats
 	log     *slog.Logger
 	now     func() time.Time
@@ -175,9 +179,16 @@ func (r *Recursor) SetConfig(c Config) {
 	r.sets.setLimit(size / 2)
 	r.negs.setLimit(size / 4)
 	r.delegs.setLimit(size / 4)
-	old := r.cfg.Swap(&c)
+	old := r.cfg.Load()
 	if old != nil && !bytes.Equal(old.ECS, c.ECS) {
-		r.ClearCache() // answers for another network
+		// Wait for resolutions still asking for the old network, then
+		// forget what they learnt.
+		r.netMu.Lock()
+		r.cfg.Store(&c)
+		r.ClearCache()
+		r.netMu.Unlock()
+	} else {
+		r.cfg.Store(&c)
 	}
 	r.anchors.Store(ds)
 	if old != nil && (old.DNSSEC != c.DNSSEC || fmt.Sprint(old.TrustAnchors) != fmt.Sprint(c.TrustAnchors) ||
@@ -264,6 +275,8 @@ func (r *Recursor) Exchange(ctx context.Context, msg []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	r.netMu.RLock()
+	defer r.netMu.RUnlock()
 	cfg := r.cfg.Load()
 	flags := uint16(m.FlagQR|m.FlagRA) | q.Flags&(m.FlagRD|m.FlagCD)
 	if rcode != 0 || q.Class != m.ClassIN {
@@ -275,6 +288,10 @@ func (r *Recursor) Exchange(ctx context.Context, msg []byte) ([]byte, error) {
 	if resp := r.special(q, flags); resp != nil {
 		return resp, nil
 	}
+	// Always validated when DNSSEC is on, also with CD: what is cached is
+	// shared by every client, and must be checked. CD only decides whether
+	// data that fails is still given to this client (RFC 6840 5.9), in
+	// respond.
 	validate := cfg.DNSSEC && q.Flags&m.FlagCD == 0
 	t := newTask()
 	ans, err := r.resolve(ctx, t, q.Name, q.Type, cfg.DNSSEC)

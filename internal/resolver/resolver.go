@@ -66,10 +66,15 @@ type Resolver struct {
 	ups    atomic.Pointer[upHolder]
 	sem    atomic.Pointer[chan struct{}]
 	cache  *cache
-	sf     flightGroup
-	zones  zoneLimiter
-	stats  *stats.Stats
-	now    func() time.Time
+	// netMu orders a change of the client subnet against lookups: each
+	// lookup holds it for reading from start to cache write, and a change
+	// waits for them, so an answer for the old network cannot reach the
+	// cache after it has been cleared.
+	netMu sync.RWMutex
+	sf    flightGroup
+	zones zoneLimiter
+	stats *stats.Stats
+	now   func() time.Time
 }
 
 type upHolder struct{ x Exchanger }
@@ -85,11 +90,15 @@ func New(s Settings, ups Exchanger, st *stats.Stats) *Resolver {
 // SetSettings applies new settings; cached answers are kept.
 func (r *Resolver) SetSettings(s Settings) {
 	old := r.set.Load()
-	r.set.Store(&s)
-	r.cache.setSize(s.CacheSize)
 	if old != nil && !bytes.Equal(old.ECS, s.ECS) {
+		r.netMu.Lock() // waits for lookups under the old network
+		r.set.Store(&s)
 		r.cache.clear() // answers for another network
+		r.netMu.Unlock()
+	} else {
+		r.set.Store(&s)
 	}
+	r.cache.setSize(s.CacheSize)
 	if old == nil || old.UpstreamConcurrency != s.UpstreamConcurrency {
 		if s.UpstreamConcurrency > 0 {
 			ch := make(chan struct{}, s.UpstreamConcurrency)
@@ -319,7 +328,9 @@ func (r *Resolver) refreshAsync(key string, q *m.Query, e *entry, now time.Time)
 }
 
 func (r *Resolver) fetch(q *m.Query) (*entry, error) {
-	s := r.set.Load()
+	r.netMu.RLock()
+	defer r.netMu.RUnlock()
+	s := r.set.Load() // one snapshot for the whole lookup
 	if semp := r.sem.Load(); semp != nil {
 		sem := *semp
 		select {
@@ -338,7 +349,7 @@ func (r *Resolver) fetch(q *m.Query) (*entry, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.Timeout)
 	defer cancel()
 	var e *entry
-	resp, err := r.ups.Load().x.Exchange(ctx, m.BuildUpstreamQuery(q, r.set.Load().ECS))
+	resp, err := r.ups.Load().x.Exchange(ctx, m.BuildUpstreamQuery(q, s.ECS))
 	if err == nil {
 		e, err = analyze(resp, q)
 	}

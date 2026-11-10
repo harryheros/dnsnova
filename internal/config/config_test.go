@@ -342,3 +342,19 @@ func TestClientSubnet(t *testing.T) {
 		}
 	}
 }
+
+func TestClientSubnetNotOnInternet(t *testing.T) {
+	for _, in := range []string{"100.64.1.1", "100.127.0.0/16", "192.0.2.1", "198.51.100.0/24", "203.0.113.9",
+		"198.18.0.1", "240.0.0.1", "2001:db8::1", "64:ff9b::101.226.4.1", "fd00::1", "100.0.0.0/8"} {
+		c := Defaults()
+		c.ECS.Address = in
+		errs, _ := c.validate(nil)
+		bad := false
+		for _, e := range errs {
+			bad = bad || e.Key == "ecs.address"
+		}
+		if !bad {
+			t.Errorf("%s accepted", in)
+		}
+	}
+}
