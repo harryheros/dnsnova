@@ -139,15 +139,12 @@ records = [
 ]
 
 [ecs]
-# Answer as if from another network (EDNS Client Subnet, RFC 7871): this
-# address is sent with every query, and name servers that support it give
-# the answers they would give there (a content network's servers near that
-# network, for example), wherever this server is. An address stands for
-# its /24 (IPv4) or /56 (IPv6); a network such as "101.226.4.0/24" may be
-# given too. It is one address for everyone: your clients' addresses are
-# never sent. With upstreams instead of recursion, the upstream must
-# support it (Google does, Cloudflare does not). Changing it clears the
-# cache. Empty: off.
+# Answer as if from another network (EDNS Client Subnet): this public
+# address or network is sent with every query, and name servers that
+# support it answer as they would for it. An address stands for its /24
+# (IPv4) or /56 (IPv6). Your clients' addresses are never sent. With
+# upstreams, they must support it too. Changing it clears the cache.
+# Empty: off.
 address = ""
 
 [stats]
@@ -167,9 +164,11 @@ zone_concurrency = 50       # upstream queries in flight per domain
 # Phones keep a DoT or DoQ connection open while in use, so each one is
 # roughly one device online. An idle connection takes about 25 KB (TCP, DoT)
 # or 70 KB (DoQ): the defaults need at most about 250 and 210 MB.
-tcp_connections = 10000     # TCP and DoT
+tcp_connections = 10000     # TCP, DoT and DoH
 quic_connections = 3000     # DoQ and HTTP/3; above half of it, new clients
                             # must first prove their address (QUIC Retry)
+client_connections = 100    # open connections per address (IPv4, or IPv6 /56),
+                            # all protocols together; 0 = no limit
 tcp_pipeline = 16           # concurrent queries per TCP, DoT, DoQ or HTTP/3 connection
 tcp_idle_timeout = "10s"    # also the idle timeout of QUIC connections
 udp_max_size = 1232

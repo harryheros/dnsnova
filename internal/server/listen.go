@@ -281,14 +281,8 @@ func (s *Server) serveTCP(l *tcpListener) {
 			continue
 		}
 		ip := ap.Addr().Unmap()
-		if !st.guard.Permitted(ip) {
-			s.Stats.Rejected[stats.RejectACL].Add(1)
-			c.Close()
-			continue
-		}
-		if s.tcpConns.Add(1) > int64(st.cfg.Limits.TCPConnections) {
-			s.tcpConns.Add(-1)
-			s.Stats.Rejected[stats.RejectOverload].Add(1)
+		done, ok := s.admitTCP(ip, true, true)
+		if !ok {
 			c.Close()
 			continue
 		}
@@ -301,7 +295,7 @@ func (s *Server) serveTCP(l *tcpListener) {
 				l.mu.Lock()
 				delete(l.conns, c)
 				l.mu.Unlock()
-				s.tcpConns.Add(-1)
+				done()
 				l.wg.Done()
 			}()
 			s.serveTCPConn(c, ip, l.key, l.proto, st.cfg.Limits.TCPPipeline, st.cfg.Limits.TCPIdleTimeout)
@@ -407,6 +401,9 @@ func (s *Server) listenHTTP(addr, path string, h http.Handler, tlsConf *tls.Conf
 func (s *Server) serveHTTP(ln net.Listener, addr, path string, h http.Handler, tlsConf *tls.Config) *httpListener {
 	if path != "" {
 		h = s.dohMux(path, h)
+		// DoH connections count like TCP and DoT ones; directly from
+		// clients (HTTPS), the per-client limit applies too.
+		ln = admitListener{Listener: ln, s: s, direct: tlsConf != nil}
 	}
 	srv := &http.Server{
 		Handler:           h,

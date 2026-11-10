@@ -748,7 +748,7 @@ func TestClientSubnetSent(t *testing.T) {
 	n := world()
 	r := newTest(t, n, true)
 	cfg := *r.cfg.Load()
-	cfg.ECS = m.ClientSubnet(netip.MustParsePrefix("101.226.4.0/24"))
+	cfg.ECS = m.ClientSubnet(netip.MustParsePrefix("1.2.3.0/24"))
 	r.SetConfig(cfg)
 	if got := addrs(ask(t, r, "www.example.com.", 1)); len(got) == 0 {
 		t.Fatal("no answer")
@@ -790,7 +790,7 @@ func TestClientSubnetBrokenServer(t *testing.T) {
 	n.servers[exA].noECS, n.servers[ex2A].noECS = true, true
 	r := newTest(t, n, true)
 	cfg := *r.cfg.Load()
-	cfg.ECS = m.ClientSubnet(netip.MustParsePrefix("101.226.4.0/24"))
+	cfg.ECS = m.ClientSubnet(netip.MustParsePrefix("1.2.3.0/24"))
 	r.SetConfig(cfg)
 	if got := addrs(ask(t, r, "www.example.com.", 1)); len(got) == 0 {
 		t.Fatal("no answer from a server that rejects the client subnet")
@@ -803,7 +803,7 @@ func TestClientSubnetChangeDuringResolution(t *testing.T) {
 	n := world()
 	r := newTest(t, n, true)
 	cfg := *r.cfg.Load()
-	cfg.ECS = m.ClientSubnet(netip.MustParsePrefix("101.226.4.0/24"))
+	cfg.ECS = m.ClientSubnet(netip.MustParsePrefix("1.2.3.0/24"))
 	r.SetConfig(cfg)
 	asked, release := make(chan struct{}, 1), make(chan struct{})
 	inner := r.send

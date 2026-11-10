@@ -216,7 +216,7 @@ func TestClientSubnetToUpstream(t *testing.T) {
 	if ask(1); len(up.opts) != 1 || len(up.opts[0]) != 0 {
 		t.Fatalf("off: options %x", up.opts)
 	}
-	s.ECS = m.ClientSubnet(netip.MustParsePrefix("101.226.4.0/24"))
+	s.ECS = m.ClientSubnet(netip.MustParsePrefix("1.2.3.0/24"))
 	r.SetSettings(s)
 	if st := ask(2); st != "miss" || len(up.opts) != 2 || !bytes.Equal(up.opts[1], s.ECS) {
 		t.Fatalf("on: %s, options %x", st, up.opts)
@@ -255,7 +255,7 @@ func (u *slowUpstream) Exchange(_ context.Context, msg []byte) ([]byte, error) {
 func TestClientSubnetChangeDuringLookup(t *testing.T) {
 	up := &slowUpstream{auth: dnstest.NewAuth(), asked: make(chan struct{}, 4), release: make(chan struct{})}
 	s := settings()
-	s.ECS = m.ClientSubnet(netip.MustParsePrefix("101.226.4.0/24"))
+	s.ECS = m.ClientSubnet(netip.MustParsePrefix("1.2.3.0/24"))
 	r := New(s, up, stats.New())
 	done := make(chan string, 1)
 	go func() {
