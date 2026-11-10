@@ -73,7 +73,10 @@ func (f *fake) Addresses() []HostAddress {
 func (f *fake) Lookup(_ context.Context, name string, qt uint16, specs []string) []LookupResult {
 	return []LookupResult{{Upstream: strings.Join(specs, ","), Rcode: "NOERROR", Answers: []string{fmt.Sprintf("%q %d", name, qt)}}}
 }
-func (f *fake) FilterStatus() filter.Status  { return filter.Status{Enabled: true, Rules: 7} }
+func (f *fake) FilterStatus() filter.Status { return filter.Status{Enabled: true, Rules: 7} }
+func (f *fake) FilterWhy(name string) filter.Why {
+	return filter.Why{Enabled: true, Blocked: name == "\x03ads\x04test", BlockedBy: []string{"list"}}
+}
 func (f *fake) RecursionStatus() Recursion   { return Recursion{Cache: map[string]int{}} }
 func (f *fake) UpdateFilter(context.Context) { f.mu.Lock(); f.cleared += 100; f.mu.Unlock() }
 func (f *fake) Snapshot() *config.Snapshot   { f.mu.Lock(); defer f.mu.Unlock(); return f.snap }

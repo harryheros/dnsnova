@@ -19,10 +19,18 @@ import (
 // to poolSize sockets at random, and every socket is replaced after
 // sockUses queries or sockAge, so ports keep changing. A forged answer has
 // to match the port, the 16-bit ID, the server's address and the question.
+//
+// A port in use can be learnt (a query to a server the attacker runs shows
+// it), which leaves the ID to guess. Guessing sends many wrong answers in a
+// row, and those are seen: after spoofLimit packets from the server's
+// address that are not the answer, the query gives up on UDP (ErrSpoofed)
+// and is asked again over TCP, where an answer cannot be forged from off
+// the path.
 const (
-	poolSize = 1024
-	sockUses = 100
-	sockAge  = 30 * time.Second
+	spoofLimit = 5
+	poolSize   = 1024
+	sockUses   = 100
+	sockAge    = 30 * time.Second
 )
 
 type sockPool struct {
@@ -45,11 +53,16 @@ type waitKey struct {
 }
 
 type waiter struct {
-	q  []byte
-	ch chan []byte
+	q       []byte
+	ch      chan []byte
+	wrong   int           // packets from the server that were not the answer (under psock.mu)
+	spoofed chan struct{} // closed at spoofLimit wrong packets
 }
 
 var errBusy = errors.New("query id in use")
+
+// ErrSpoofed reports a UDP query that drew forged answers.
+var ErrSpoofed = errors.New("forged answers received")
 
 // get returns a socket for a query to addr, registered to receive the
 // answer to q.
@@ -60,7 +73,7 @@ func (p *sockPool) get(addr netip.AddrPort, q []byte) (*psock, *waiter, error) {
 	}
 	now := time.Now()
 	key := waitKey{id: be16(q), addr: addr}
-	w := &waiter{q: q, ch: make(chan []byte, 1)}
+	w := &waiter{q: q, ch: make(chan []byte, 1), spoofed: make(chan struct{})}
 	for attempt := 0; attempt < 4; attempt++ {
 		i := rand.IntN(poolSize)
 		p.mu.Lock()
@@ -134,7 +147,8 @@ func (s *psock) read() {
 		if n < m.HeaderLen {
 			continue
 		}
-		key := waitKey{id: be16(buf), addr: netip.AddrPortFrom(from.Addr().Unmap(), from.Port())}
+		src := netip.AddrPortFrom(from.Addr().Unmap(), from.Port())
+		key := waitKey{id: be16(buf), addr: src}
 		s.mu.Lock()
 		w := s.waiting[key]
 		s.mu.Unlock()
@@ -142,6 +156,22 @@ func (s *psock) read() {
 			select {
 			case w.ch <- append([]byte(nil), buf[:n]...):
 			default:
+			}
+			continue
+		}
+		s.wrongAnswer(src)
+	}
+}
+
+// wrongAnswer counts a packet from src that answers nothing asked against
+// every query waiting for src on this socket.
+func (s *psock) wrongAnswer(src netip.AddrPort) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k, w := range s.waiting {
+		if k.addr == src {
+			if w.wrong++; w.wrong == spoofLimit {
+				close(w.spoofed)
 			}
 		}
 	}
@@ -161,6 +191,8 @@ func (p *sockPool) exchangeUDP(ctx context.Context, addr netip.AddrPort, q []byt
 	select {
 	case resp := <-w.ch:
 		return resp, nil
+	case <-w.spoofed:
+		return nil, ErrSpoofed
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}

@@ -245,14 +245,100 @@ func TestRedirectToLocalName(t *testing.T) {
 	defer outer.Close()
 
 	m := NewManager(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), func(*Set) {})
-	if _, err := m.download(context.Background(), outer.URL+"/list.txt"); err == nil || !strings.Contains(err.Error(), "local address") {
+	if _, _, err := m.download(context.Background(), outer.URL+"/list.txt"); err == nil || !strings.Contains(err.Error(), "local address") {
 		t.Fatalf("redirect to localhost: err = %v", err)
 	}
 	if n := reached.Load(); n != 0 {
 		t.Fatalf("the local server was reached %d times", n)
 	}
 	// the address the administrator typed may be local
-	if _, err := m.download(context.Background(), inner.URL+"/list.txt"); err != nil {
+	if _, _, err := m.download(context.Background(), inner.URL+"/list.txt"); err != nil {
 		t.Fatalf("direct download from a local address: %v", err)
+	}
+}
+
+// TestConditionalDownload: with an ETag, a list that has not changed is
+// not sent again (304) and nothing is rebuilt; without one, an identical
+// download is not rebuilt either.
+func TestConditionalDownload(t *testing.T) {
+	var full, conditional atomic.Int32
+	body := rules(200, "ads")
+	etagged := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("If-None-Match") == `"v1"` {
+			conditional.Add(1)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		full.Add(1)
+		w.Header().Set("ETag", `"v1"`)
+		io.WriteString(w, body)
+	}))
+	defer etagged.Close()
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, body)
+	}))
+	defer plain.Close()
+
+	m := NewManager(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), func(*Set) {})
+	a, b := etagged.URL+"/a.txt", plain.URL+"/b.txt"
+	m.Configure(Settings{Enabled: true, Lists: []string{a, b}, Interval: time.Hour})
+	for _, src := range []string{a, b} {
+		if !m.fetch(context.Background(), src) {
+			t.Fatalf("%s: first download not stored", src)
+		}
+	}
+	for _, src := range []string{a, b} {
+		if m.fetch(context.Background(), src) {
+			t.Fatalf("%s: unchanged list reported as changed", src)
+		}
+		if st := m.Status(); st.Lists[0].Error != "" || st.Lists[1].Error != "" {
+			t.Fatalf("unchanged list marked as failed: %+v", st.Lists)
+		}
+	}
+	if full.Load() != 1 || conditional.Load() != 1 {
+		t.Fatalf("full downloads %d, conditional %d", full.Load(), conditional.Load())
+	}
+	// a removed copy is fetched in full, not answered from the ETag
+	os.Remove(m.path(a))
+	if !m.fetch(context.Background(), a) || full.Load() != 2 {
+		t.Fatalf("missing copy: full downloads %d", full.Load())
+	}
+}
+
+// TestWhy: each list is checked on its own, so the answer names the lists
+// that block a name and the rules that let it through.
+func TestWhy(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := dir + "/" + name
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	ads := write("ads.txt", "||ads.example^\n||tracker.example^\n")
+	hosts := write("hosts.txt", "0.0.0.0 ads.example\n0.0.0.0 other.example\n")
+	exempt := write("exempt.txt", "||ads.example^\n@@||cdn.ads.example^\n")
+	var inForce *Set
+	m := NewManager(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), func(s *Set) { inForce = s })
+	m.Configure(Settings{Enabled: true, Lists: []string{ads, hosts, exempt}, Block: []string{"mine.example"}, Allow: []string{"ok.tracker.example"}, Interval: time.Hour})
+	m.UpdateNow(context.Background())
+
+	for name, want := range map[string]Why{
+		"x.ads.example":      {Enabled: true, Blocked: true, BlockedBy: []string{ads, exempt}, AllowedBy: []string{}},
+		"ads.example":        {Enabled: true, Blocked: true, BlockedBy: []string{ads, hosts, exempt}, AllowedBy: []string{}},
+		"cdn.ads.example":    {Enabled: true, Blocked: false, BlockedBy: []string{ads}, AllowedBy: []string{exempt}},
+		"ok.tracker.example": {Enabled: true, Blocked: false, BlockedBy: []string{ads}, AllowedBy: []string{"filter.allow"}},
+		"a.mine.example":     {Enabled: true, Blocked: true, BlockedBy: []string{"filter.block"}, AllowedBy: []string{}},
+		"fine.example":       {Enabled: true, Blocked: false, BlockedBy: []string{}, AllowedBy: []string{}},
+	} {
+		got := m.Why(wireOf(t, name))
+		if fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Errorf("%s:\n got %+v\nwant %+v", name, got, want)
+		}
+		// the same verdict as the filter in force
+		if inForce.Blocked(wireOf(t, name)) != got.Blocked {
+			t.Errorf("%s: Why says blocked=%v, the filter in force %v", name, got.Blocked, !got.Blocked)
+		}
 	}
 }

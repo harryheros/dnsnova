@@ -64,6 +64,7 @@ type Manager struct {
 	log     *slog.Logger
 	publish func(*Set) // called with every new Set (nil when filtering is off)
 	HTTP    *http.Client
+	whyMu   sync.Mutex // one Why at a time: each parses every list
 	Now     func() time.Time
 
 	mu sync.Mutex
@@ -270,7 +271,20 @@ func (m *Manager) path(src string) string {
 // the stored copy changed.
 func (m *Manager) fetch(ctx context.Context, src string) bool {
 	now := m.Now()
-	data, err := m.download(ctx, src)
+	data, meta, err := m.download(ctx, src)
+	if err == errNotModified || (err == nil && m.sameAsStored(src, data)) {
+		// the copy in use is still current: nothing to parse or rebuild
+		os.Chtimes(m.path(src), now, now) // its age after a restart
+		if err == nil {
+			m.storeMeta(src, meta)
+		}
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if l := m.lists[src]; l != nil {
+			l.Checked, l.Updated, l.Error = now, now, ""
+		}
+		return false
+	}
 	var c Counts
 	if err == nil {
 		c, err = Parse(bytes.NewReader(data), NewBuilder())
@@ -285,7 +299,9 @@ func (m *Manager) fetch(ctx context.Context, src string) bool {
 		err = errors.New("no usable rules in the download")
 	}
 	if err == nil {
-		err = m.store(src, data)
+		if err = m.store(src, data); err == nil {
+			m.storeMeta(src, meta)
+		}
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -313,32 +329,81 @@ func (m *Manager) previousRules(src string) int {
 	return c.Block
 }
 
-func (m *Manager) download(ctx context.Context, src string) ([]byte, error) {
+// errNotModified: the server says the copy in use is current (HTTP 304).
+var errNotModified = errors.New("not modified")
+
+// listMeta is what the server said about the copy in use, to ask next
+// time only for a newer one (RFC 9110 13.1: If-None-Match and
+// If-Modified-Since).
+type listMeta struct{ etag, modified string }
+
+func (m *Manager) metaPath(src string) string {
+	return strings.TrimSuffix(m.path(src), ".txt") + ".meta"
+}
+
+func (m *Manager) readMeta(src string) listMeta {
+	if _, err := os.Stat(m.path(src)); err != nil {
+		return listMeta{} // no copy: ask for the whole list
+	}
+	b, err := os.ReadFile(m.metaPath(src))
+	if err != nil {
+		return listMeta{}
+	}
+	etag, modified, _ := strings.Cut(string(b), "\n")
+	return listMeta{etag: strings.TrimSpace(etag), modified: strings.TrimSpace(modified)}
+}
+
+func (m *Manager) storeMeta(src string, meta listMeta) {
+	if meta == (listMeta{}) {
+		os.Remove(m.metaPath(src))
+		return
+	}
+	os.WriteFile(m.metaPath(src), []byte(meta.etag+"\n"+meta.modified+"\n"), 0o640)
+}
+
+// sameAsStored reports whether data is the copy in use, byte for byte
+// (servers that do not support conditional requests).
+func (m *Manager) sameAsStored(src string, data []byte) bool {
+	old, err := os.ReadFile(m.path(src))
+	return err == nil && bytes.Equal(old, data)
+}
+
+func (m *Manager) download(ctx context.Context, src string) ([]byte, listMeta, error) {
 	if strings.HasPrefix(src, "/") {
 		f, err := os.Open(src)
 		if err != nil {
-			return nil, err
+			return nil, listMeta{}, err
 		}
 		defer f.Close()
-		return readLimited(f)
+		data, err := readLimited(f)
+		return data, listMeta{}, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	ctx = context.WithValue(ctx, redirectedKey{}, new(atomic.Bool))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, src, nil)
 	if err != nil {
-		return nil, err
+		return nil, listMeta{}, err
 	}
 	req.Header.Set("User-Agent", "dnsnova")
+	if old := m.readMeta(src); old.etag != "" {
+		req.Header.Set("If-None-Match", old.etag)
+	} else if old.modified != "" {
+		req.Header.Set("If-Modified-Since", old.modified)
+	}
 	resp, err := m.HTTP.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, listMeta{}, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP status %d", resp.StatusCode)
+	if resp.StatusCode == http.StatusNotModified {
+		return nil, listMeta{}, errNotModified
 	}
-	return readLimited(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, listMeta{}, fmt.Errorf("HTTP status %d", resp.StatusCode)
+	}
+	data, err := readLimited(resp.Body)
+	return data, listMeta{etag: resp.Header.Get("ETag"), modified: resp.Header.Get("Last-Modified")}, err
 }
 
 func readLimited(r io.Reader) ([]byte, error) {

@@ -262,3 +262,24 @@ func TestDoHDoesNotFollowRedirects(t *testing.T) {
 		t.Fatalf("the query followed the redirect %d times", n)
 	}
 }
+
+// TestUDPForgedAnswersGoToTCP: a run of wrong answers on UDP sends the
+// query to TCP, without waiting for the timeout.
+func TestUDPForgedAnswersGoToTCP(t *testing.T) {
+	srv := dnstest.Serve(t)
+	srv.ForgeUDP.Store(true)
+	s, err := ParseSpec("udp://" + srv.Addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, _ := New(s, NewDialer(nil), nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	resp, err := u.Exchange(ctx, m.BuildUpstreamQuery(&m.Query{Name: m.WireName("forged", "test"), Type: 1, Class: 1}, nil))
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if r := dnstest.Parse(t, resp); r.AN != 1 {
+		t.Fatalf("%d answers", r.AN)
+	}
+}

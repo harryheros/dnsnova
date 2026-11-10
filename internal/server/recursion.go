@@ -75,8 +75,8 @@ func (s *Server) RecursionStatus() admin.Recursion {
 		Fallback: c.Recursion.Fallback && len(c.Upstream.Primary) > 0, Healthy: r.Healthy(),
 		Queries: r.Stats.Queries.Load(), Timeouts: r.Stats.Timeouts.Load(), TCP: r.Stats.TCP.Load(),
 		Secure: r.Stats.Secure.Load(), Insecure: r.Stats.Insecure.Load(), Bogus: r.Stats.Bogus.Load(),
-		Fallbacks: s.recFallbacks.Load(),
-		Cache:     map[string]int{"rrsets": sets, "negative": negs, "zones": keys, "delegations": delegs, "servers": servers},
+		Fallbacks: s.recFallbacks.Load(), Spoofed: r.Stats.Spoofed.Load(),
+		Cache: map[string]int{"rrsets": sets, "negative": negs, "zones": keys, "delegations": delegs, "servers": servers},
 	}
 }
 
@@ -85,6 +85,7 @@ func (s *Server) writeRecursionMetrics(w io.Writer) {
 	fmt.Fprintf(w, "# TYPE dnsnova_recursion_queries_total counter\ndnsnova_recursion_queries_total %d\n", r.Stats.Queries.Load())
 	fmt.Fprintf(w, "# TYPE dnsnova_recursion_timeouts_total counter\ndnsnova_recursion_timeouts_total %d\n", r.Stats.Timeouts.Load())
 	fmt.Fprintf(w, "# TYPE dnsnova_recursion_fallbacks_total counter\ndnsnova_recursion_fallbacks_total %d\n", s.recFallbacks.Load())
+	fmt.Fprintf(w, "# TYPE dnsnova_recursion_spoofed_total counter\ndnsnova_recursion_spoofed_total %d\n", r.Stats.Spoofed.Load())
 	fmt.Fprintf(w, "# TYPE dnsnova_dnssec_answers_total counter\n")
 	fmt.Fprintf(w, "dnsnova_dnssec_answers_total{result=\"secure\"} %d\n", r.Stats.Secure.Load())
 	fmt.Fprintf(w, "dnsnova_dnssec_answers_total{result=\"insecure\"} %d\n", r.Stats.Insecure.Load())
