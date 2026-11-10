@@ -530,10 +530,34 @@ func parseClientSubnet(s string) (netip.Prefix, error) {
 		p = netip.PrefixFrom(a, bits)
 	}
 	p = netip.PrefixFrom(p.Addr().Unmap(), p.Bits())
-	if a := p.Addr(); p.Bits() < 8 || a.IsPrivate() || a.IsLoopback() || a.IsLinkLocalUnicast() || a.IsMulticast() || a.IsUnspecified() {
+	if a := p.Addr(); p.Bits() < 8 || a.IsPrivate() || a.IsLoopback() || a.IsLinkLocalUnicast() || a.IsMulticast() || a.IsUnspecified() || specialNet(p) {
 		return netip.Prefix{}, errors.New("must be a public address or network (/8 or smaller): name servers answer by where it is on the internet")
 	}
 	return p.Masked(), nil
+}
+
+// notOnInternet are special-purpose ranges (RFC 6890 and its updates)
+// that are not anybody's network on the internet: shared address space
+// behind carrier NAT, documentation, benchmarking, reserved and NAT64.
+var notOnInternet = func() []netip.Prefix {
+	var ps []netip.Prefix
+	for _, s := range []string{
+		"0.0.0.0/8", "100.64.0.0/10", "192.0.0.0/24", "192.0.2.0/24", "198.18.0.0/15",
+		"198.51.100.0/24", "203.0.113.0/24", "240.0.0.0/4",
+		"64:ff9b::/96", "64:ff9b:1::/48", "100::/64", "2001::/23", "2001:db8::/32", "3fff::/20", "fc00::/7",
+	} {
+		ps = append(ps, netip.MustParsePrefix(s))
+	}
+	return ps
+}()
+
+func specialNet(p netip.Prefix) bool {
+	for _, s := range notOnInternet {
+		if s.Overlaps(p) {
+			return true
+		}
+	}
+	return false
 }
 
 // RecursionRootHints returns recursion.root_hints parsed.

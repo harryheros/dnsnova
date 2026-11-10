@@ -234,3 +234,42 @@ func TestClientSubnetToUpstream(t *testing.T) {
 		t.Fatalf("off again: %s, options %x", st, up.opts)
 	}
 }
+
+// slowUpstream answers only when released, so a lookup can still be
+// asking when the client subnet changes.
+type slowUpstream struct {
+	auth    *dnstest.Auth
+	asked   chan struct{}
+	release chan struct{}
+}
+
+func (u *slowUpstream) Exchange(_ context.Context, msg []byte) ([]byte, error) {
+	u.asked <- struct{}{}
+	<-u.release
+	return u.auth.Answer(msg, false), nil
+}
+
+// TestClientSubnetChangeDuringLookup: a lookup asked for the old network
+// and answered after the change does not put its answer in the cache, and
+// the next query asks again for the new network.
+func TestClientSubnetChangeDuringLookup(t *testing.T) {
+	up := &slowUpstream{auth: dnstest.NewAuth(), asked: make(chan struct{}, 4), release: make(chan struct{})}
+	s := settings()
+	s.ECS = m.ClientSubnet(netip.MustParsePrefix("101.226.4.0/24"))
+	r := New(s, up, stats.New())
+	done := make(chan string, 1)
+	go func() {
+		done <- r.ResolveOpts(dnstest.Query(1, "late.test", 1, true, false), Opts{UDP: true}).Status
+	}()
+	<-up.asked // the old lookup is with the upstream
+	s.ECS = m.ClientSubnet(netip.MustParsePrefix("198.51.100.0/24"))
+	changed := make(chan struct{})
+	go func() { r.SetSettings(s); close(changed) }()
+	time.Sleep(50 * time.Millisecond)
+	close(up.release) // the old answer arrives after the change was asked for
+	<-done
+	<-changed
+	if st := r.ResolveOpts(dnstest.Query(2, "late.test", 1, true, false), Opts{UDP: true}).Status; st == "hit" {
+		t.Fatal("an answer for the old network was served from the cache after the change")
+	}
+}

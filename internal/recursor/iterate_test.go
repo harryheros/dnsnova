@@ -795,3 +795,35 @@ func TestClientSubnetBrokenServer(t *testing.T) {
 		t.Fatal("no answer from a server that rejects the client subnet")
 	}
 }
+
+// TestClientSubnetChangeDuringResolution: what a resolution still asking
+// for the old network learns is not in the cache after the change.
+func TestClientSubnetChangeDuringResolution(t *testing.T) {
+	n := world()
+	r := newTest(t, n, true)
+	cfg := *r.cfg.Load()
+	cfg.ECS = m.ClientSubnet(netip.MustParsePrefix("101.226.4.0/24"))
+	r.SetConfig(cfg)
+	asked, release := make(chan struct{}, 1), make(chan struct{})
+	inner := r.send
+	var once sync.Once
+	r.send = func(ctx context.Context, a netip.AddrPort, q []byte, tcp bool) ([]byte, error) {
+		if a.Addr() == exA || a.Addr() == ex2A {
+			once.Do(func() { asked <- struct{}{}; <-release })
+		}
+		return inner(ctx, a, q, tcp)
+	}
+	done := make(chan struct{})
+	go func() { ask(t, r, "www.example.com.", 1); close(done) }()
+	<-asked
+	cfg.ECS = m.ClientSubnet(netip.MustParsePrefix("198.51.100.0/24"))
+	changed := make(chan struct{})
+	go func() { r.SetConfig(cfg); close(changed) }()
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	<-done
+	<-changed
+	if sets, negs, _, _, _ := r.CacheSizes(); sets != 0 || negs != 0 {
+		t.Fatalf("%d RRsets and %d negative answers learnt for the old network are cached after the change", sets, negs)
+	}
+}
