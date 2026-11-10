@@ -4,6 +4,21 @@ All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
 **Security**.
 
+## 1.1.0 (2026-11-09)
+
+- **Security**: forged answers are noticed. When a question sent over UDP
+  draws a run of wrong answers from the address of the server asked (an
+  attacker guessing the query ID to poison the cache), it is asked again
+  over TCP, which cannot be forged from outside the path. This works for
+  the resolver and for plain DNS upstreams; the overview and `/metrics`
+  (`dnsnova_recursion_spoofed_total`) count it.
+- New: *Check a domain* (Settings › Filtering) tells which lists block a
+  name and which rules let it through, with a button to never block it.
+  API: `POST /api/v1/filter/why`.
+- Filter lists are downloaded only when they have changed: DNSNova asks
+  with the list's ETag or date (HTTP 304 when unchanged), and a download
+  identical to the copy in use is not processed again.
+
 ## 1.0.5 (2026-11-09)
 
 - A change of `ecs.address` now waits for lookups still asking for the old

@@ -107,7 +107,7 @@ func (u *udpUpstream) Exchange(ctx context.Context, msg []byte) ([]byte, error) 
 	bp := udpBufs.Get().(*[]byte)
 	defer udpBufs.Put(bp)
 	buf := *bp
-	for {
+	for wrong := 0; ; {
 		n, err := conn.Read(buf)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -117,7 +117,12 @@ func (u *udpUpstream) Exchange(ctx context.Context, msg []byte) ([]byte, error) 
 		}
 		resp := buf[:n]
 		if !dnsmsg.MatchResponse(q, resp) {
-			continue // not ours (spoofed or late); keep waiting
+			// not ours: late, or forged. A run of them is someone
+			// guessing the ID; TCP cannot be forged from off the path.
+			if wrong++; wrong == spoofLimit {
+				return u.tcp.Exchange(ctx, msg)
+			}
+			continue
 		}
 		if dnsmsg.U16(resp, 2)&dnsmsg.FlagTC != 0 {
 			return u.tcp.Exchange(ctx, msg)
@@ -125,6 +130,10 @@ func (u *udpUpstream) Exchange(ctx context.Context, msg []byte) ([]byte, error) 
 		return append([]byte(nil), resp...), nil
 	}
 }
+
+// spoofLimit is how many packets that are not the answer a UDP query
+// takes before it is asked again over TCP.
+const spoofLimit = 5
 
 // ---- TCP ----
 
