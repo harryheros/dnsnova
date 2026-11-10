@@ -122,17 +122,38 @@ func (s *Server) quicAdmit(ctx context.Context, info *quic.ClientInfo) (context.
 		s.Stats.Rejected[stats.RejectOverload].Add(1)
 		return nil, errQUICRefused
 	}
-	context.AfterFunc(ctx, func() { s.quicConns.Add(-1) })
+	limit := st.cfg.Limits.ClientConnections
+	if !s.clientConns.acquire(ip, limit) {
+		s.quicConns.Add(-1)
+		s.Stats.Rejected[stats.RejectClientLimit].Add(1)
+		return nil, errQUICRefused
+	}
+	context.AfterFunc(ctx, func() {
+		s.clientConns.release(ip, limit)
+		s.quicConns.Add(-1)
+	})
 	return ctx, nil
 }
 
 // quicVerifySource asks for a Retry (address validation) when the server is
-// busy, so spoofed sources cannot fill the connection table.
-// Clients outside the access list get no Retry: quicAdmit refuses them.
+// busy, so spoofed sources cannot fill the connection table, and from an
+// address with half its connections open, so that forged packets cannot use
+// up a real client's share (the address on a QUIC packet can be forged
+// until it is verified). Clients outside the access list get no Retry:
+// quicAdmit refuses them.
 func (s *Server) quicVerifySource(a net.Addr) bool {
 	st := s.state.Load()
-	return st != nil && st.guard.Permitted(addrIP(a)) &&
-		s.quicConns.Load() >= int64(st.cfg.Limits.QUICConnections)/2
+	if st == nil {
+		return false
+	}
+	ip := addrIP(a)
+	if !st.guard.Permitted(ip) {
+		return false
+	}
+	if lim := st.cfg.Limits.ClientConnections; lim > 0 && !ip.IsLoopback() && s.clientConns.count(ip) >= (lim+1)/2 {
+		return true
+	}
+	return s.quicConns.Load() >= int64(st.cfg.Limits.QUICConnections)/2
 }
 
 func addrIP(a net.Addr) netip.Addr {
