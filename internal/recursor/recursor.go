@@ -1,6 +1,7 @@
 package recursor
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/hex"
@@ -37,6 +38,11 @@ type Config struct {
 	TrustAnchors []string
 	// CacheSize is the number of RRsets kept.
 	CacheSize int
+	// ECS is an EDNS Client Subnet option (dnsmsg.ClientSubnet) sent with
+	// every question for a name's records, so that name servers answer for
+	// that network. It is one fixed network for everyone: the cache holds
+	// that one view, and is cleared when it changes.
+	ECS []byte
 }
 
 // Stats are counters for monitoring.
@@ -170,6 +176,9 @@ func (r *Recursor) SetConfig(c Config) {
 	r.negs.setLimit(size / 4)
 	r.delegs.setLimit(size / 4)
 	old := r.cfg.Swap(&c)
+	if old != nil && !bytes.Equal(old.ECS, c.ECS) {
+		r.ClearCache() // answers for another network
+	}
 	r.anchors.Store(ds)
 	if old != nil && (old.DNSSEC != c.DNSSEC || fmt.Sprint(old.TrustAnchors) != fmt.Sprint(c.TrustAnchors) ||
 		fmt.Sprint(old.RootHints) != fmt.Sprint(c.RootHints)) {
@@ -440,8 +449,8 @@ func (r *Recursor) allowed(cfg *Config, a netip.Addr) bool {
 }
 
 // buildQuery writes a query to an authoritative server.
-func buildQuery(id uint16, name string, qtype uint16, edns bool) []byte {
-	b := make([]byte, 0, m.HeaderLen+len(name)+5+11)
+func buildQuery(id uint16, name string, qtype uint16, edns bool, options []byte) []byte {
+	b := make([]byte, 0, m.HeaderLen+len(name)+5+11+len(options))
 	arc := byte(0)
 	if edns {
 		arc = 1
@@ -450,7 +459,7 @@ func buildQuery(id uint16, name string, qtype uint16, edns bool) []byte {
 	b = append(b, name...)
 	b = append(b, 0, byte(qtype>>8), byte(qtype), 0, m.ClassIN)
 	if edns {
-		b = m.AppendOPT(b, m.EDNSSize, true)
+		b = m.AppendOPT(b, m.EDNSSize, true, options)
 	}
 	return b
 }

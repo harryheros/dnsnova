@@ -2,7 +2,7 @@
 
 > A secure, lightweight DNS server for your home, office or a public resolver.
 
-[![Version](https://img.shields.io/badge/version-v1.0.3-blue)](https://github.com/harryheros/dnsnova/releases)
+[![Version](https://img.shields.io/badge/version-v1.0.4-blue)](https://github.com/harryheros/dnsnova/releases)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](./LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux%20amd64%20%7C%20arm64-lightgrey.svg)](#)
 [![CI](https://github.com/harryheros/dnsnova/actions/workflows/ci.yml/badge.svg)](https://github.com/harryheros/dnsnova/actions/workflows/ci.yml)
@@ -52,6 +52,7 @@ Forgot the administrator password? Run `dnsnova -reset-admin` on the server; the
 - **Its own resolver, or forwarding**: resolve names itself from the root servers, with DNSSEC validation and minimal names (no third party sees the queries), or forward to upstreams such as Cloudflare or Google over DNS over HTTPS, TLS or QUIC. With both, the upstreams step in when a domain's own servers cannot be reached.
 - **Web interface**: response times, traffic, upstream health, most queried domains, every setting with a preview before it is applied, a setup guide for each kind of device, and light and dark appearance.
 - **Optional filtering, without forcing it on anyone**: one server, two doors. The usual addresses answer everything; a second address, name or DoH path blocks ads, trackers and malware (the [ShieldNova](https://github.com/harryheros/shieldnova) list by default, or any AdGuard-style, hosts or domain list). Lists update by themselves, a broken update never replaces a good list, and a wrongly blocked domain is allowed again with one click in the query log. Trackers disguised as a site's own subdomain (CNAME cloaking) are blocked too.
+- **Answers for another network** (EDNS Client Subnet): give it an address, and name servers answer as they would for that network, wherever the server is. Off by default, and never your clients' addresses.
 - **Local names** such as `nas.home`, and a list of blocked clients.
 - **Public or private**: open to everyone with rate limits that stop abuse, or only to the networks you list.
 - **Fast**: on a single CPU core, about 200,000 answers per second from the cache, 94,000 over DNS over TLS, and 23,000 for names it has to look up; a 225,000-rule blocklist costs about 14%. [How this was measured](./docs/benchmark.md).

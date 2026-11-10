@@ -244,7 +244,16 @@ func settingsFrom(c *config.Config) resolver.Settings {
 		Timeout:             timeout(c),
 		UpstreamConcurrency: c.Limits.UpstreamConcurrency,
 		ZoneConcurrency:     c.Limits.ZoneConcurrency,
+		ECS:                 ecsOption(c),
 	}
+}
+
+// ecsOption is the EDNS Client Subnet option for ecs.address, or nil.
+func ecsOption(c *config.Config) []byte {
+	if p, ok := c.ClientSubnet(); ok {
+		return m.ClientSubnet(p)
+	}
+	return nil
 }
 
 // timeout is how long a query may take: resolving from the root needs

@@ -504,8 +504,14 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, name string, qtype uin
 	now := r.now()
 	edns := r.infra.useEDNS(a, now)
 	ap := netip.AddrPortFrom(a, r.port)
-	for attempt := 0; attempt < 2; attempt++ {
-		q := buildQuery(uint16(rand.Uint32()), name, qtype, edns)
+	// The client subnet goes with questions for a name's records, not
+	// with those that only find the way there (NS, DS, DNSKEY, SOA).
+	var ecs []byte
+	if edns && qtype != m.TypeNS && qtype != typeDS && qtype != typeDNSKEY && qtype != m.TypeSOA {
+		ecs = r.cfg.Load().ECS
+	}
+	for attempt := 0; attempt < 3; attempt++ {
+		q := buildQuery(uint16(rand.Uint32()), name, qtype, edns, ecs)
 		start := time.Now()
 		c, cancel := context.WithTimeout(ctx, r.infra.timeout(a))
 		resp, err := r.send(c, ap, q, false)
@@ -541,6 +547,10 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, name string, qtype uin
 			if msg, err = parseMessage(resp); err != nil {
 				return nil, err
 			}
+		}
+		if ecs != nil && (msg.rcode == m.RcodeFormErr || msg.rcode == m.RcodeNotImp) {
+			ecs = nil // a server that trips over the option: ask without it
+			continue
 		}
 		if edns && !msg.edns && (msg.rcode == m.RcodeFormErr || msg.rcode == m.RcodeNotImp) {
 			r.infra.setNoEDNS(a, now)

@@ -452,7 +452,7 @@ func buildMessage(id, flags uint16, qname string, qtype uint16, an, ns, ar []rr,
 		}
 	}
 	if edns {
-		w.b = m.AppendOPT(w.b, m.EDNSSize, do)
+		w.b = m.AppendOPT(w.b, m.EDNSSize, do, nil)
 		if len(ede) > 0 {
 			l := len(w.b)
 			binary.BigEndian.PutUint16(w.b[l-2:], uint16(len(ede)))

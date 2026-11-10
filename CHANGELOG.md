@@ -4,6 +4,19 @@ All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
 **Security**.
 
+## 1.0.4 (2026-11-09)
+
+- New: `ecs.address` (Settings › DNS & upstreams › Resolution, "Answer as
+  if from"). The address or network given is sent with every query as its
+  EDNS Client Subnet (RFC 7871), so name servers that support it answer as
+  they would for that network, wherever the server is. It works with
+  recursion (sent to each domain's own name servers, not with the NS, DS
+  and DNSKEY questions on the way there) and with upstreams that support
+  it. It is one address for everyone, so the cache keeps a single view and
+  clients' addresses are never sent; changing it clears the cache. A name
+  server that rejects the option is asked again without it. Off by
+  default.
+
 ## 1.0.3 (2026-11-09)
 
 - **Security**: a reply from an upstream or a name server is matched to

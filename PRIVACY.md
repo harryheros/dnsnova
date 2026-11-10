@@ -10,7 +10,9 @@ responsible for telling them how you run it.
   queries is held in memory and is gone after a restart.
 - It sends no telemetry, usage statistics or crash reports, to anyone.
 - It does not forward client IP addresses to upstream resolvers. Upstreams
-  see your server's address only. (EDNS Client Subnet is not sent.)
+  see your server's address only. EDNS Client Subnet is off by default; if
+  you set `ecs.address`, that one address of your choosing is sent with
+  every query, never a client's.
 - It does not forward the EDNS options that clients send, such as cookies
   or padding.
 - It does not send reverse lookups of private addresses (10.0.0.0/8,

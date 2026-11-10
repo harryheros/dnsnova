@@ -1269,6 +1269,7 @@ const SETTINGS = {
         { key: "recursion.fallback", label: "Fall back to upstreams", type: "bool", help: "When no name server of a domain can be reached, ask the upstreams below. Never after a failed DNSSEC check.", show: (v) => v["recursion.enabled"] },
         { key: "recursion.ipv6", label: "Use IPv6", type: "bool", help: "Also reach name servers over IPv6, when this server has it.", show: (v) => v["recursion.enabled"] },
         { key: "recursion.allow_networks", label: "Private networks to query", type: "list", help: "Networks with your own name servers, such as 10.0.0.0/8. A public server otherwise never sends queries into private networks.", show: (v) => v["recursion.enabled"] },
+        { key: "ecs.address", label: "Answer as if from (client subnet)", type: "text", placeholder: "off", help: "A public IP address or network, such as 101.226.4.0/24, sent with every query (EDNS Client Subnet): name servers that support it answer as they would for that network. One address for everyone; your clients\u2019 addresses are never sent. Upstreams must support it too (Google does, Cloudflare does not). Empty: off." },
       ] },
       { title: "Upstreams", fields: [
         { key: "upstream.primary", label: "Primary upstreams", type: "list", help: "Asked first, in parallel; the fastest answer wins. https://…/dns-query, tls://host, quic://host, udp://IP or an IP address. With recursion, only used as a fallback.", show: upShown },
@@ -1583,7 +1584,7 @@ function fieldRow(f, form, onchange) {
       break;
     }
     default: {
-      ctl = h("input", { type: "text", id, value: v, class: /listen|file|path|domains/.test(f.key) ? "mono" : null, spellcheck: "false" });
+      ctl = h("input", { type: "text", id, value: v, class: /listen|file|path|domains|address/.test(f.key) ? "mono" : null, spellcheck: "false", placeholder: f.placeholder || null });
       ctl.addEventListener("input", () => set(ctl.value));
       reset = () => { ctl.value = form.val[f.key]; };
     }

@@ -57,7 +57,7 @@ func (s *Server) Lookup(ctx context.Context, name string, qtype uint16, specs []
 		boot, _ = upstream.NewBootstrap(cfg.Upstream.Bootstrap)
 	}
 	dialer := upstream.NewDialer(boot)
-	q := m.BuildUpstreamQuery(&m.Query{ID: 0, Name: name, Type: qtype, Class: 1})
+	q := m.BuildUpstreamQuery(&m.Query{ID: 0, Name: name, Type: qtype, Class: 1}, ecsOption(cfg))
 	out := make([]admin.LookupResult, len(specs))
 	var wg sync.WaitGroup
 	for i, raw := range specs {

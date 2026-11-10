@@ -138,6 +138,18 @@ records = [
   # "*.lab.home 192.168.1.9",
 ]
 
+[ecs]
+# Answer as if from another network (EDNS Client Subnet, RFC 7871): this
+# address is sent with every query, and name servers that support it give
+# the answers they would give there (a content network's servers near that
+# network, for example), wherever this server is. An address stands for
+# its /24 (IPv4) or /56 (IPv6); a network such as "101.226.4.0/24" may be
+# given too. It is one address for everyone: your clients' addresses are
+# never sent. With upstreams instead of recursion, the upstream must
+# support it (Google does, Cloudflare does not). Changing it clears the
+# cache. Empty: off.
+address = ""
+
 [stats]
 # How far back the overview goes: "24h", "7d" or "30d". In memory only.
 retention = "7d"

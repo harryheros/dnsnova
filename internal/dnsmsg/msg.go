@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"net/netip"
 	"strconv"
 	"strings"
 )
@@ -452,24 +453,40 @@ func Pad(msg []byte, block int) []byte {
 
 // BuildUpstreamQuery builds the query sent upstream: RD set, CD copied from
 // the client and dnsnova's own OPT record. Client EDNS options (cookies,
-// padding, ECS) are not forwarded. The message ID is set by each upstream.
-func BuildUpstreamQuery(q *Query) []byte {
-	b := make([]byte, 0, HeaderLen+len(q.Name)+5+11)
+// padding, ECS) are not forwarded; options are dnsnova's own (see
+// ClientSubnet), or nil. The message ID is set by each upstream.
+func BuildUpstreamQuery(q *Query, options []byte) []byte {
+	b := make([]byte, 0, HeaderLen+len(q.Name)+5+11+len(options))
 	flags := uint16(FlagRD) | q.Flags&FlagCD
 	b = append(b, 0, 0, byte(flags>>8), byte(flags), 0, 1, 0, 0, 0, 0, 0, 1)
 	b = append(b, q.Name...)
 	b = append(b, 0, byte(q.Type>>8), byte(q.Type), byte(q.Class>>8), byte(q.Class))
-	return AppendOPT(b, EDNSSize, q.DO)
+	return AppendOPT(b, EDNSSize, q.DO, options)
 }
 
-// AppendOPT appends an OPT record with no options.
-func AppendOPT(b []byte, size uint16, do bool) []byte {
+// AppendOPT appends an OPT record with the given options (or none).
+func AppendOPT(b []byte, size uint16, do bool, options []byte) []byte {
 	var doBit byte
 	if do {
 		doBit = 0x80
 	}
-	return append(b, 0, 0, TypeOPT, byte(size>>8), byte(size), 0, 0, doBit, 0, 0, 0)
+	b = append(b, 0, 0, TypeOPT, byte(size>>8), byte(size), 0, 0, doBit, 0, byte(len(options)>>8), byte(len(options)))
+	return append(b, options...)
 }
+
+// ClientSubnet returns the EDNS Client Subnet option (RFC 7871) that asks
+// for answers meant for network p.
+func ClientSubnet(p netip.Prefix) []byte {
+	p = netip.PrefixFrom(p.Addr().Unmap(), p.Bits()).Masked()
+	family, addr := byte(1), p.Addr().AsSlice()
+	if p.Addr().Is6() {
+		family = 2
+	}
+	addr = addr[:(p.Bits()+7)/8]
+	return append([]byte{0, optClientSubnet, 0, byte(4 + len(addr)), 0, family, byte(p.Bits()), 0}, addr...)
+}
+
+const optClientSubnet = 8
 
 // WithID returns a copy of msg with a new message ID.
 func WithID(msg []byte, id uint16) []byte {
@@ -545,7 +562,7 @@ func ErrorResponse(req []byte, q *Query, rcode int) []byte {
 		b = append(b, req[HeaderLen:q.QEnd]...)
 	}
 	if ar == 1 {
-		b = AppendOPT(b, EDNSSize, q.DO)
+		b = AppendOPT(b, EDNSSize, q.DO, nil)
 		if rcode > 0xF {
 			b[len(b)-6] = byte(rcode >> 4) // upper bits of the extended rcode
 		}
@@ -587,7 +604,7 @@ func NegativeSOA(req []byte, q *Query, zone string, ttl uint32, rcode int) []byt
 	b = binary.BigEndian.AppendUint16(b, uint16(len(rd)))
 	b = append(b, rd...)
 	if q.EDNS {
-		b = AppendOPT(b, EDNSSize, q.DO)
+		b = AppendOPT(b, EDNSSize, q.DO, nil)
 	}
 	return b
 }
@@ -615,7 +632,7 @@ func AnswerMulti(req []byte, q *Query, ttl uint32, rdatas [][]byte) []byte {
 		b = append(b, rd...)
 	}
 	if q.EDNS {
-		b = AppendOPT(b, EDNSSize, q.DO)
+		b = AppendOPT(b, EDNSSize, q.DO, nil)
 	}
 	return b
 }

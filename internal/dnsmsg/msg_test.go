@@ -2,6 +2,8 @@ package dnsmsg_test
 
 import (
 	"bytes"
+	"encoding/hex"
+	"net/netip"
 	"testing"
 
 	m "github.com/harryheros/dnsnova/internal/dnsmsg"
@@ -37,7 +39,7 @@ func TestParseQuery(t *testing.T) {
 	}
 	dupOPT := dnstest.Query(1, "a.test", 1, true, false)
 	dupOPT[11] = 2
-	dupOPT = m.AppendOPT(dupOPT, 512, false)
+	dupOPT = m.AppendOPT(dupOPT, 512, false, nil)
 	if _, rc, _ := m.ParseQuery(dupOPT); rc != m.RcodeFormErr {
 		t.Fatalf("two OPT records: want FORMERR, got %d", rc)
 	}
@@ -133,7 +135,7 @@ func FuzzParseQuery(f *testing.F) {
 			t.Fatal("short error response")
 		}
 		if rc == 0 {
-			up := m.BuildUpstreamQuery(q)
+			up := m.BuildUpstreamQuery(q, nil)
 			if _, _, err := m.ParseQuery(up); err != nil {
 				t.Fatalf("upstream query does not parse: %v", err)
 			}
@@ -213,5 +215,31 @@ func TestStripOPTExtendedRcode(t *testing.T) {
 	r[len(r)-6] = 1 // the first byte of the OPT record's TTL field
 	if _, _, err := m.StripOPT(r); err != m.ErrExtendedRcode {
 		t.Fatalf("extended RCODE: err = %v", err)
+	}
+}
+
+func TestClientSubnet(t *testing.T) {
+	for in, want := range map[string]string{
+		"101.226.4.0/24":          "0008000700011800" + "65e204",
+		"101.226.4.77/24":         "0008000700011800" + "65e204", // host bits are not sent
+		"101.226.0.0/20":          "0008000700011400" + "65e200",
+		"2001:db8:1234:5600::/56": "0008000b00023800" + "20010db8123456",
+		"::ffff:101.226.4.0/120":  "",
+	} {
+		p, err := netip.ParsePrefix(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want == "" {
+			continue
+		}
+		if got := hex.EncodeToString(m.ClientSubnet(p)); got != want {
+			t.Errorf("%s: %s, want %s", in, got, want)
+		}
+	}
+	q := m.BuildUpstreamQuery(&m.Query{Name: m.WireName("a", "test"), Type: 1, Class: 1}, m.ClientSubnet(netip.MustParsePrefix("101.226.4.0/24")))
+	pq, _, err := m.ParseQuery(q)
+	if err != nil || !pq.EDNS || len(q) != m.HeaderLen+len(pq.Name)+5+11+11 {
+		t.Fatalf("query with a client subnet: %v, %d bytes", err, len(q))
 	}
 }

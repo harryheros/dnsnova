@@ -1,9 +1,12 @@
 package resolver
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"net/netip"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -182,5 +185,52 @@ func TestExtendedRcodeIsFailure(t *testing.T) {
 	res := r.ResolveOpts(dnstest.Query(1, "ext.test", 1, true, false), Opts{UDP: true})
 	if p := dnstest.Parse(t, res.Resp); p.Rcode != m.RcodeServFail {
 		t.Fatalf("BADVERS from upstream answered as RCODE %d (%s)", p.Rcode, res.Status)
+	}
+}
+
+// ecsUpstream records the EDNS options of the queries it gets.
+type ecsUpstream struct {
+	auth *dnstest.Auth
+	mu   sync.Mutex
+	opts [][]byte
+}
+
+func (u *ecsUpstream) Exchange(_ context.Context, msg []byte) ([]byte, error) {
+	q, _, _ := m.ParseQuery(msg)
+	u.mu.Lock()
+	u.opts = append(u.opts, append([]byte(nil), msg[q.QEnd+11:]...))
+	u.mu.Unlock()
+	return u.auth.Answer(msg, false), nil
+}
+
+// TestClientSubnetToUpstream: ecs.address goes out with every upstream
+// query, a client's own option does not, and changing the network clears
+// the cache, which holds answers for the old one.
+func TestClientSubnetToUpstream(t *testing.T) {
+	up := &ecsUpstream{auth: dnstest.NewAuth()}
+	s := settings()
+	r := New(s, up, stats.New())
+	ask := func(id uint16) string {
+		return r.ResolveOpts(dnstest.Query(id, "geo.test", 1, true, false), Opts{UDP: true}).Status
+	}
+	if ask(1); len(up.opts) != 1 || len(up.opts[0]) != 0 {
+		t.Fatalf("off: options %x", up.opts)
+	}
+	s.ECS = m.ClientSubnet(netip.MustParsePrefix("101.226.4.0/24"))
+	r.SetSettings(s)
+	if st := ask(2); st != "miss" || len(up.opts) != 2 || !bytes.Equal(up.opts[1], s.ECS) {
+		t.Fatalf("on: %s, options %x", st, up.opts)
+	}
+	if st := ask(3); st != "hit" {
+		t.Fatalf("second ask: %s", st)
+	}
+	r.SetSettings(s) // unchanged: the cache stays
+	if st := ask(4); st != "hit" {
+		t.Fatalf("after an unrelated reload: %s", st)
+	}
+	s.ECS = nil
+	r.SetSettings(s)
+	if st := ask(5); st != "miss" || len(up.opts[len(up.opts)-1]) != 0 {
+		t.Fatalf("off again: %s, options %x", st, up.opts)
 	}
 }
