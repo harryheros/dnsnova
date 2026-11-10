@@ -91,7 +91,8 @@ early or late, and each code works only once.
 
 Starting and stopping are written to the service log with the user, the
 length and `full_ip`. `GET /status` reports `privacy.query_log` and
-`privacy.query_log_full_ip`.
+`privacy.query_log_full_ip`, and `privacy.client_subnet`: the network sent
+as EDNS Client Subnet (`ecs.address`), or `""` when off.
 
 ## Tools
 
