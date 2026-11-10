@@ -3,6 +3,7 @@ package recursor
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -825,5 +826,96 @@ func TestClientSubnetChangeDuringResolution(t *testing.T) {
 	<-changed
 	if sets, negs, _, _, _ := r.CacheSizes(); sets != 0 || negs != 0 {
 		t.Fatalf("%d RRsets and %d negative answers learnt for the old network are cached after the change", sets, negs)
+	}
+}
+
+// TestForgedAnswersDetected: a flood of wrong answers from the server's
+// address (an attacker guessing the ID) ends the UDP query with
+// ErrSpoofed instead of leaving it open to the guessing.
+func TestForgedAnswersDetected(t *testing.T) {
+	srv, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	go func() {
+		buf := make([]byte, 2048)
+		for {
+			n, from, err := srv.ReadFromUDPAddrPort(buf)
+			if err != nil {
+				return
+			}
+			for i := range 50 { // wrong IDs, then never the answer
+				fake := append([]byte(nil), buf[:n]...)
+				fake[0], fake[1] = fake[0]^byte(i+1), fake[1]^0x5a
+				fake[2] |= 0x80
+				srv.WriteToUDPAddrPort(fake, from)
+			}
+		}
+	}()
+	var p sockPool
+	addr := srv.LocalAddr().(*net.UDPAddr).AddrPort()
+	q := buildQuery(0x1234, m.WireName("victim", "test"), 1, true, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	start := time.Now()
+	if _, err := p.exchangeUDP(ctx, addr, q); !errors.Is(err, ErrSpoofed) {
+		t.Fatalf("err = %v", err)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("detected after %v", d)
+	}
+}
+
+// TestForgedAnswersAskedOverTCP: the resolver asks again over TCP and
+// gets the real answer.
+func TestForgedAnswersAskedOverTCP(t *testing.T) {
+	n := world()
+	r := newTest(t, n, true)
+	inner := r.send
+	r.send = func(ctx context.Context, a netip.AddrPort, q []byte, tcp bool) ([]byte, error) {
+		if !tcp && (a.Addr() == exA || a.Addr() == ex2A) {
+			return nil, ErrSpoofed
+		}
+		return inner(ctx, a, q, tcp)
+	}
+	if got := addrs(ask(t, r, "www.example.com.", 1)); len(got) == 0 {
+		t.Fatal("no answer")
+	}
+	if r.Stats.Spoofed.Load() == 0 || n.servers[exA].tcp.Load()+n.servers[ex2A].tcp.Load() == 0 {
+		t.Fatalf("spoofed %d, tcp %d", r.Stats.Spoofed.Load(), n.servers[exA].tcp.Load()+n.servers[ex2A].tcp.Load())
+	}
+}
+
+// TestStrayAnswerTolerated: a late answer to an earlier query (one wrong
+// packet) does not count as an attack.
+func TestStrayAnswerTolerated(t *testing.T) {
+	srv, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	go func() {
+		buf := make([]byte, 2048)
+		for {
+			n, from, err := srv.ReadFromUDPAddrPort(buf)
+			if err != nil {
+				return
+			}
+			stray := append([]byte(nil), buf[:n]...)
+			stray[0] ^= 0xff
+			stray[2] |= 0x80
+			srv.WriteToUDPAddrPort(stray, from)
+			real := append([]byte(nil), buf[:n]...)
+			real[2] |= 0x80
+			srv.WriteToUDPAddrPort(real, from)
+		}
+	}()
+	var p sockPool
+	q := buildQuery(0x4321, m.WireName("ok", "test"), 1, true, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if _, err := p.exchangeUDP(ctx, srv.LocalAddr().(*net.UDPAddr).AddrPort(), q); err != nil {
+		t.Fatalf("err = %v", err)
 	}
 }

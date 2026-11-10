@@ -953,6 +953,7 @@ function drawOverview(st, stats, ups, events, range) {
       ["", "Queries to name servers", fmt.short(rec.queries), rec.queries ? `${fmt.pct(rec.timeouts / rec.queries)} timed out` : "since start"],
     ];
     if (rec.fallback) rows.push(["", "Answered by upstreams", fmt.short(rec.fallbacks), "when no name server answered"]);
+    if (rec.spoofed) rows.push(["warn", "Forged answers stopped", fmt.short(rec.spoofed), "someone sent fake answers; asked again over TCP"]);
     return card("s4", "Resolution", "upstreams", h("a", { href: "#/settings/dns", class: "small" }, "Settings"),
       h("ul", { class: "slots" }, rows.map(([cls, name, value, note]) => h("li", { class: "slot tall" },
         h("span", { class: "dot " + (cls || "muted") }),
@@ -1411,7 +1412,7 @@ async function settingsPage(main, id) {
   const form = { hash: cfg.hash, cur, val: { ...cur }, rows: {}, problems: {} };
   const parts = [];
   if (page.certificate) parts.push(await certificateCard());
-  if (page.filterStatus) parts.push(await filterCard());
+  if (page.filterStatus) parts.push(await filterCard(), whyCard());
   const sectionCards = [];
   for (const sec of page.sections) {
     const card = h("section", { class: "card pad0", "aria-label": sec.title },
@@ -1651,6 +1652,38 @@ async function filterCard() {
         l.updated ? " · updated " + fmt.time(l.updated, "full") : "",
         l.error ? " · " + l.error : "")))) : null,
     st.enabled ? null : h("p", { class: "small muted", style: { margin: 0 } }, "Turn it on below. Nothing changes for the usual addresses."));
+}
+
+// whyCard answers "which list blocks this?" for one domain.
+function whyCard() {
+  const name = h("input", { type: "text", class: "mono", placeholder: "ads.example.com", "aria-label": "Domain to check", spellcheck: "false", autocapitalize: "off" });
+  name.style.maxWidth = "none";
+  const out = h("div", { "aria-live": "polite" });
+  const btn = h("button", { type: "submit", class: "btn" }, "Check");
+  const short = (src) => src === "filter.block" ? "Your rules › Also block" : src === "filter.allow" ? "Your rules › Never block" : src.replace(/^https?:\/\//, "").replace(/^raw\.githubusercontent\.com\//, "");
+  const items = (srcs) => h("ul", { class: "small", style: { margin: "4px 0 0", paddingLeft: "18px" } }, srcs.map((s) => h("li", { class: "mono ellipsis", title: s }, short(s))));
+  return h("section", { class: "card", "aria-label": "Check a domain" },
+    h("h2", null, "Check a domain"),
+    h("p", { class: "small muted", style: { marginTop: 0 } }, "Which lists block it, and which rules let it through."),
+    h("form", {
+      class: "row", style: { alignItems: "center" }, onsubmit: async (ev) => {
+        ev.preventDefault();
+        if (!name.value.trim()) return;
+        btn.disabled = true;
+        fill(out, h("p", { class: "small muted" }, "Checking…"));
+        try {
+          const r = await api("POST", "/filter/why", { name: name.value });
+          const d = name.value.trim().toLowerCase().replace(/\.$/, "");
+          if (!r.enabled) fill(out, h("p", { class: "small muted" }, "Filtering is off."));
+          else fill(out,
+            h("p", { style: { margin: "8px 0 0" } }, h("strong", { class: r.blocked ? "warn" : "ok" }, r.blocked ? "Blocked" : "Not blocked"), " on the filtered service"),
+            r.blocked_by.length ? h("div", { class: "small", style: { marginTop: "8px" } }, r.blocked ? "Blocked by" : "In the block rules of", items(r.blocked_by)) : null,
+            r.allowed_by.length ? h("div", { class: "small", style: { marginTop: "8px" } }, "Let through by", items(r.allowed_by)) : null,
+            r.blocked ? h("p", { style: { margin: "10px 0 0" } }, h("button", { type: "button", class: "btn small", onclick: async () => { try { await allowDomain(d); } catch (e) { toast(e.message, "err"); } } }, "Never block " + d)) : null);
+        } catch (e) { fill(out, errorBox(e)); }
+        btn.disabled = false;
+      },
+    }, h("div", { style: { flex: "1 1 220px" } }, name), btn), out);
 }
 
 // allowDomain adds a name to filter.allow (from the query log).

@@ -74,6 +74,8 @@ type Backend interface {
 	// downloads them now.
 	FilterStatus() filter.Status
 	UpdateFilter(ctx context.Context)
+	// FilterWhy says which lists block or allow name (wire format).
+	FilterWhy(name string) filter.Why
 	// RecursionStatus describes resolving from the root servers.
 	RecursionStatus() Recursion
 }
@@ -92,6 +94,7 @@ type Recursion struct {
 	Insecure          int64          `json:"insecure"`
 	Bogus             int64          `json:"bogus"`
 	Fallbacks         int64          `json:"fallbacks"`
+	Spoofed           int64          `json:"spoofed"` // queries that drew forged answers and were asked again over TCP
 	Cache             map[string]int `json:"cache"`
 }
 
@@ -197,6 +200,20 @@ func (a *Admin) routes() {
 	m.Handle("DELETE /api/v1/querylog", auth(a.stopQueryLog))
 	m.Handle("GET /api/v1/system/addresses", auth(a.addresses))
 	m.Handle("POST /api/v1/tools/lookup", auth(a.lookup))
+	m.Handle("POST /api/v1/filter/why", auth(func(w http.ResponseWriter, r *http.Request, c *call) {
+		var req struct {
+			Name string `json:"name"`
+		}
+		if !decode(w, r, 4<<10, &req) {
+			return
+		}
+		wire, err := wireName(req.Name)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, a.b.FilterWhy(wire))
+	}))
 	m.Handle("POST /api/v1/filter/update", auth(func(w http.ResponseWriter, r *http.Request, c *call) {
 		a.b.UpdateFilter(r.Context())
 		a.log.Info("admin: filter lists updated by hand", "from", c.ip.String())

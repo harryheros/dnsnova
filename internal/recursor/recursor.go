@@ -58,6 +58,7 @@ type Stats struct {
 	CacheMisses   atomic.Int64
 	BudgetReached atomic.Int64
 	Aggressive    atomic.Int64 // answered from validated NSEC records (RFC 8198)
+	Spoofed       atomic.Int64 // UDP queries that drew forged answers and went to TCP
 }
 
 // Recursor is safe for concurrent use.

@@ -207,8 +207,11 @@ func (a *Auth) Answer(req []byte, udp bool) []byte {
 type Server struct {
 	*Auth
 	Addr string
-	uc   *net.UDPConn
-	tl   net.Listener
+	// ForgeUDP makes the UDP side answer every query with wrong IDs only,
+	// as an attacker guessing would; TCP still answers.
+	ForgeUDP atomic.Bool
+	uc       *net.UDPConn
+	tl       net.Listener
 }
 
 // Serve starts a fake server; it stops when the test ends.
@@ -243,6 +246,15 @@ func (s *Server) serveUDP() {
 		}
 		pkt := append([]byte(nil), buf[:n]...)
 		go func() {
+			if s.ForgeUDP.Load() {
+				for i := range 20 {
+					f := append([]byte(nil), pkt...)
+					f[0], f[1] = f[0]^byte(i+1), f[1]^0xa5
+					f[2] |= 0x80
+					s.uc.WriteToUDPAddrPort(f, a)
+				}
+				return
+			}
 			if r := s.Answer(pkt, true); r != nil {
 				s.uc.WriteToUDPAddrPort(r, a)
 			}

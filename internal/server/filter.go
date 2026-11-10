@@ -110,6 +110,9 @@ func (s *Server) FilterStatus() filter.Status { return s.Filter.Status() }
 // UpdateFilter implements admin.Backend: download every list now.
 func (s *Server) UpdateFilter(ctx context.Context) { s.Filter.UpdateNow(ctx) }
 
+// FilterWhy implements admin.Backend.
+func (s *Server) FilterWhy(name string) filter.Why { return s.Filter.Why(name) }
+
 // filteredInfo lists the filtered service's addresses for the setup guide
 // and the status page: nil while filtering is off. With filter.all every
 // address filters, so there is nothing separate to list.

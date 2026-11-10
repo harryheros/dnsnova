@@ -66,6 +66,20 @@ func (s *Set) Blocked(name string) bool {
 	return false
 }
 
+// blocks reports whether a block rule covers name, whatever the allow
+// rules say.
+func (s *Set) blocks(name string) bool {
+	if _, ok := s.blockExact[name]; ok {
+		return true
+	}
+	for i := 0; i < len(name); i += 1 + int(name[i]) {
+		if _, ok := s.block[name[i:]]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 // Builder collects rules from several sources into one Set.
 type Builder struct {
 	s Set

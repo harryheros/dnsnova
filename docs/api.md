@@ -78,6 +78,7 @@ early or late, and each code works only once.
 | `GET /upstreams` | Each upstream: `address`, `role` (`primary` or `fallback`), `healthy`, `latency_ms` (smoothed), `queries`, `errors`, `last_ok`, `last_error`. |
 | `GET /events?limit=50` | Recent log records, newest first (up to 200): start-up, errors, setting changes with the user and keys, certificates. Queries are never among them. |
 | `POST /cache/clear` | `204` |
+| `POST /filter/why` | Body `{"name"}`: which filter lists block the name and which rules let it through: `{"enabled", "blocked", "blocked_by": [sources], "allowed_by": [sources]}`; your own rules are `filter.block` and `filter.allow`. |
 | `POST /filter/update` | `204`: downloads every filter list now, whatever its age, and applies them. |
 | `POST /stats/clear` | `204`: forgets the statistics and domain lists (Prometheus counters keep counting). |
 | `GET /guide` | The setup guide's data: the status page fields, `plain` with every address DNS listens on, and `profile`, where the Apple profile can be downloaded (null when the status page is off). |

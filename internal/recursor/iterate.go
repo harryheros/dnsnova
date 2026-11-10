@@ -517,6 +517,14 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, name string, qtype uin
 		resp, err := r.send(c, ap, q, false)
 		cancel()
 		r.Stats.Queries.Add(1)
+		if errors.Is(err, ErrSpoofed) {
+			// Someone is guessing answers to this query: ask over TCP.
+			r.Stats.Spoofed.Add(1)
+			c, cancel := context.WithTimeout(ctx, 2*r.infra.timeout(a)+time.Second)
+			resp, err = r.send(c, ap, q, true)
+			cancel()
+			r.Stats.TCP.Add(1)
+		}
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) || isTimeout(err) {
 				r.Stats.Timeouts.Add(1)
