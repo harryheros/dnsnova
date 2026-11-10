@@ -306,3 +306,39 @@ listen = ["127.0.0.1:53", "nonsense"]
 		t.Fatalf("warnings: %v", warns)
 	}
 }
+
+func TestClientSubnet(t *testing.T) {
+	for in, want := range map[string]string{
+		"":                       "off",
+		"101.226.4.1":            "101.226.4.0/24",
+		" 101.226.4.0/24 ":       "101.226.4.0/24",
+		"101.226.0.0/16":         "101.226.0.0/16",
+		"2408:8000:1234:5678::1": "2408:8000:1234:5600::/56",
+		"::ffff:101.226.4.1":     "101.226.4.0/24",
+		"192.168.1.1":            "error",
+		"10.0.0.0/8":             "error",
+		"127.0.0.1":              "error",
+		"0.0.0.0/0":              "error",
+		"101.0.0.0/4":            "error",
+		"example.com":            "error",
+		"101.226.4":              "error",
+	} {
+		c := Defaults()
+		c.Server.Mode = ModePublic
+		c.ECS.Address = in
+		errs, _ := c.validate(nil)
+		p, ok := c.ClientSubnet()
+		got := "off"
+		if ok {
+			got = p.String()
+		}
+		for _, e := range errs {
+			if e.Key == "ecs.address" {
+				got = "error"
+			}
+		}
+		if got != want {
+			t.Errorf("%q: %s, want %s", in, got, want)
+		}
+	}
+}

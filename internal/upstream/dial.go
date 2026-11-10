@@ -148,7 +148,7 @@ func (b *Bootstrap) resolve(ctx context.Context, host string) ([]netip.Addr, tim
 	for _, t := range []uint16{dnsmsg.TypeA, dnsmsg.TypeAAAA} {
 		go func(t uint16) {
 			q := &dnsmsg.Query{Name: name, Type: t, Class: dnsmsg.ClassIN}
-			msg := dnsmsg.BuildUpstreamQuery(q)
+			msg := dnsmsg.BuildUpstreamQuery(q, nil)
 			var lastErr error = errNoAddrs
 			for _, u := range b.ups {
 				resp, err := u.Exchange(ctx, msg)

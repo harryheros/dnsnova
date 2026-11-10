@@ -95,7 +95,7 @@ func TestDoQUpstream(t *testing.T) {
 		t.Helper()
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		q := m.BuildUpstreamQuery(&m.Query{Name: m.WireName(name, "test"), Type: 1, Class: 1})
+		q := m.BuildUpstreamQuery(&m.Query{Name: m.WireName(name, "test"), Type: 1, Class: 1}, nil)
 		resp, err := u.Exchange(ctx, q)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -127,7 +127,7 @@ func TestDoQUpstream(t *testing.T) {
 	defer bad.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if _, err := bad.Exchange(ctx, m.BuildUpstreamQuery(&m.Query{Name: m.WireName("x", "test"), Type: 1, Class: 1})); err == nil {
+	if _, err := bad.Exchange(ctx, m.BuildUpstreamQuery(&m.Query{Name: m.WireName("x", "test"), Type: 1, Class: 1}, nil)); err == nil {
 		t.Fatal("untrusted certificate accepted")
 	}
 }

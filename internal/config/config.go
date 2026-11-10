@@ -108,6 +108,11 @@ type Config struct {
 	Local struct {
 		Records []string // "name address", answered by DNSNova itself
 	}
+	ECS struct {
+		// Address is a network ("101.226.4.0/24") or an address in it,
+		// sent as the EDNS Client Subnet of every query. Empty: off.
+		Address string
+	}
 	Stats struct {
 		Retention string // how far back statistics go: 24h, 7d or 30d (memory only)
 	}
@@ -375,6 +380,9 @@ func (c *Config) validate(lines map[string]int) (Errors, []string) {
 			warns = append(warns, "access.allow is ignored in public mode")
 		}
 	}
+	if _, err := parseClientSubnet(c.ECS.Address); err != nil {
+		bad("ecs.address", err.Error())
+	}
 	if _, ok := RetentionHours[c.Stats.Retention]; !ok {
 		bad("stats.retention", `must be "24h", "7d" or "30d"`)
 	}
@@ -492,6 +500,40 @@ func (c *Config) RecursionNetworks() []netip.Prefix {
 		}
 	}
 	return out
+}
+
+// ClientSubnet returns the network of ecs.address; false when it is off.
+func (c *Config) ClientSubnet() (netip.Prefix, bool) {
+	p, err := parseClientSubnet(c.ECS.Address)
+	return p, err == nil && p.IsValid()
+}
+
+// parseClientSubnet reads ecs.address: a network, or an address, which
+// stands for its /24 (IPv4) or /56 (IPv6), the sizes RFC 7871 recommends.
+// Empty is the zero Prefix.
+func parseClientSubnet(s string) (netip.Prefix, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return netip.Prefix{}, nil
+	}
+	p, err := netip.ParsePrefix(s)
+	if err != nil {
+		a, err := netip.ParseAddr(s)
+		if err != nil || a.Zone() != "" {
+			return netip.Prefix{}, errors.New(`must be an IP address or a network, such as "101.226.4.0/24"`)
+		}
+		a = a.Unmap()
+		bits := 24
+		if a.Is6() {
+			bits = 56
+		}
+		p = netip.PrefixFrom(a, bits)
+	}
+	p = netip.PrefixFrom(p.Addr().Unmap(), p.Bits())
+	if a := p.Addr(); p.Bits() < 8 || a.IsPrivate() || a.IsLoopback() || a.IsLinkLocalUnicast() || a.IsMulticast() || a.IsUnspecified() {
+		return netip.Prefix{}, errors.New("must be a public address or network (/8 or smaller): name servers answer by where it is on the internet")
+	}
+	return p.Masked(), nil
 }
 
 // RecursionRootHints returns recursion.root_hints parsed.
@@ -745,6 +787,7 @@ var fields = map[string]field{
 	"access.allow":    prefixes(func(c *Config) *[]netip.Prefix { return &c.Access.Allow }),
 	"access.deny":     prefixes(func(c *Config) *[]netip.Prefix { return &c.Access.Deny }),
 	"local.records":   strList(func(c *Config) *[]string { return &c.Local.Records }),
+	"ecs.address":     str(func(c *Config) *string { return &c.ECS.Address }),
 	"stats.retention": str(func(c *Config) *string { return &c.Stats.Retention }),
 
 	"limits.client_qps":           number(func(c *Config) *float64 { return &c.Limits.ClientQPS }),
@@ -790,7 +833,7 @@ var fields = map[string]field{
 
 var knownTables = map[string]bool{
 	"server": true, "doh": true, "dot": true, "doq": true, "tls": true, "ddr": true, "upstream": true, "cache": true,
-	"access": true, "limits": true, "metrics": true, "log": true, "admin": true, "status": true, "local": true, "stats": true, "filter": true,
+	"access": true, "limits": true, "metrics": true, "log": true, "admin": true, "status": true, "local": true, "stats": true, "ecs": true, "filter": true,
 	"recursion": true,
 }
 

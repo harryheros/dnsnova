@@ -49,6 +49,7 @@ func recConfig(c *config.Config) recursor.Config {
 		RootHints:         c.RecursionRootHints(),
 		TrustAnchors:      r.TrustAnchors,
 		CacheSize:         c.Cache.Size,
+		ECS:               ecsOption(c),
 	}
 }
 

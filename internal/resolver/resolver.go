@@ -3,6 +3,7 @@
 package resolver
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -47,6 +48,10 @@ type Settings struct {
 	CheckZone string
 	// Local answers names from local.records (see NewLocalNames).
 	Local *LocalNames
+	// ECS is an EDNS Client Subnet option (dnsmsg.ClientSubnet) added to
+	// every upstream query: one fixed network, the same for all clients,
+	// so the cache holds one view. Changing it clears the cache.
+	ECS []byte
 }
 
 var (
@@ -82,6 +87,9 @@ func (r *Resolver) SetSettings(s Settings) {
 	old := r.set.Load()
 	r.set.Store(&s)
 	r.cache.setSize(s.CacheSize)
+	if old != nil && !bytes.Equal(old.ECS, s.ECS) {
+		r.cache.clear() // answers for another network
+	}
 	if old == nil || old.UpstreamConcurrency != s.UpstreamConcurrency {
 		if s.UpstreamConcurrency > 0 {
 			ch := make(chan struct{}, s.UpstreamConcurrency)
@@ -330,7 +338,7 @@ func (r *Resolver) fetch(q *m.Query) (*entry, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.Timeout)
 	defer cancel()
 	var e *entry
-	resp, err := r.ups.Load().x.Exchange(ctx, m.BuildUpstreamQuery(q))
+	resp, err := r.ups.Load().x.Exchange(ctx, m.BuildUpstreamQuery(q, r.set.Load().ECS))
 	if err == nil {
 		e, err = analyze(resp, q)
 	}
@@ -428,7 +436,7 @@ func (r *Resolver) build(e *entry, req []byte, q *m.Query, now time.Time, stale 
 	}
 
 	if q.EDNS { // the client's own OPT record; the upstream's was removed
-		out = m.AppendOPT(out, uint16(s.UDPMaxSize), q.DO)
+		out = m.AppendOPT(out, uint16(s.UDPMaxSize), q.DO, nil)
 		binary.BigEndian.PutUint16(out[10:], m.U16(out, 10)+1)
 	}
 	return out

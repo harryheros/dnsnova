@@ -94,7 +94,7 @@ func ask(t *testing.T, g *Group, timeout time.Duration) ([]byte, error, time.Dur
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	start := time.Now()
-	resp, err := g.Exchange(ctx, m.BuildUpstreamQuery(&m.Query{Name: m.WireName("a", "test"), Type: 1, Class: 1}))
+	resp, err := g.Exchange(ctx, m.BuildUpstreamQuery(&m.Query{Name: m.WireName("a", "test"), Type: 1, Class: 1}, nil))
 	return resp, err, time.Since(start)
 }
 
@@ -161,7 +161,7 @@ func TestGroupPicksFastest(t *testing.T) {
 func TestRealTransports(t *testing.T) {
 	srv := dnstest.Serve(t)
 	d := NewDialer(nil)
-	q := m.BuildUpstreamQuery(&m.Query{Name: m.WireName("huge", "test"), Type: 16, Class: 1})
+	q := m.BuildUpstreamQuery(&m.Query{Name: m.WireName("huge", "test"), Type: 16, Class: 1}, nil)
 	for _, raw := range []string{"udp://" + srv.Addr, "tcp://" + srv.Addr} {
 		s, err := ParseSpec(raw)
 		if err != nil {
@@ -202,7 +202,7 @@ func TestDoHAndBootstrap(t *testing.T) {
 	u, _ := New(s, NewDialer(nil), conf)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	resp, err := u.Exchange(ctx, m.BuildUpstreamQuery(&m.Query{Name: m.WireName("doh", "test"), Type: 1, Class: 1}))
+	resp, err := u.Exchange(ctx, m.BuildUpstreamQuery(&m.Query{Name: m.WireName("doh", "test"), Type: 1, Class: 1}, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +254,7 @@ func TestDoHDoesNotFollowRedirects(t *testing.T) {
 	u, _ := New(s, NewDialer(nil), conf)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	_, err = u.Exchange(ctx, m.BuildUpstreamQuery(&m.Query{Name: m.WireName("doh", "test"), Type: 1, Class: 1}))
+	_, err = u.Exchange(ctx, m.BuildUpstreamQuery(&m.Query{Name: m.WireName("doh", "test"), Type: 1, Class: 1}, nil))
 	if err == nil || !strings.Contains(err.Error(), "307") {
 		t.Fatalf("redirect: err = %v", err)
 	}

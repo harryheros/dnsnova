@@ -1,6 +1,7 @@
 package recursor
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -36,6 +37,18 @@ type fakeServer struct {
 	queries atomic.Int64
 	tcp     atomic.Int64
 	seen    sync.Map // qname -> true
+	ecs     sync.Map // "qname qtype" -> the client subnet option received
+	noECS   bool     // FORMERR for a query with a client subnet (a broken server)
+}
+
+// ecsOf returns the client subnet option of a query, or nil.
+func ecsOf(q []byte) []byte {
+	if i := bytes.Index(q, []byte{0, 0, 41}); i >= 0 && len(q) > i+11 {
+		if opts := q[i+11:]; len(opts) >= 4 && opts[0] == 0 && opts[1] == 8 {
+			return opts
+		}
+	}
+	return nil
 }
 
 type fakeNet struct {
@@ -158,6 +171,12 @@ func (n *fakeNet) send(ctx context.Context, addr netip.AddrPort, q []byte, tcp b
 		return nil, err
 	}
 	s.seen.Store(m.NameString(msg.qname), true)
+	if ecs := ecsOf(q); ecs != nil {
+		s.ecs.Store(fmt.Sprintf("%s %d", m.NameString(msg.qname), msg.qtype), string(ecs))
+		if s.noECS {
+			return buildMessage(msg.id, m.FlagQR|m.RcodeFormErr, msg.qname, msg.qtype, nil, nil, nil, true, false, nil), nil
+		}
+	}
 	resp := s.answer(msg)
 	if s.tc && !tcp {
 		resp = resp[:m.HeaderLen]
@@ -233,7 +252,7 @@ func ask(t *testing.T, r *Recursor, name string, qtype uint16) *message {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	q := buildQuery(77, dotted(name), qtype, true)
+	q := buildQuery(77, dotted(name), qtype, true, nil)
 	q[2] |= 1 // RD
 	resp, err := r.Exchange(ctx, q)
 	if err != nil {
@@ -344,7 +363,7 @@ func TestLameAndDeadServers(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	start := time.Now()
-	q := buildQuery(1, dotted("www.example.com."), 1, true)
+	q := buildQuery(1, dotted("www.example.com."), 1, true, nil)
 	if _, err := r.Exchange(ctx, q); err == nil || time.Since(start) > 4*time.Second {
 		t.Fatalf("all dead: %v after %v", err, time.Since(start))
 	}
@@ -386,7 +405,7 @@ func TestNameServerLoopEnds(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	start := time.Now()
-	_, err := r.Exchange(ctx, buildQuery(1, dotted("www.loopa.com."), 1, true))
+	_, err := r.Exchange(ctx, buildQuery(1, dotted("www.loopa.com."), 1, true, nil))
 	if err == nil || time.Since(start) > 2*time.Second {
 		t.Fatalf("NS loop: %v after %v", err, time.Since(start))
 	}
@@ -407,7 +426,7 @@ func TestManyGluelessNameServers(t *testing.T) {
 	r := newTest(t, n, true)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	r.Exchange(ctx, buildQuery(1, dotted("www.attack.com."), 1, true))
+	r.Exchange(ctx, buildQuery(1, dotted("www.attack.com."), 1, true, nil))
 	if q := n.servers[orgA].queries.Load(); q > 12 {
 		t.Fatalf("%d queries about the victim's names", q)
 	}
@@ -719,5 +738,60 @@ func TestNSECIndexSwept(t *testing.T) {
 	x.sweep(f.now.Add(10 * time.Minute))
 	if len(x.zones) != 0 {
 		t.Fatalf("%d zones left after expiry", len(x.zones))
+	}
+}
+
+// TestClientSubnetSent: with ecs.address, questions for a name's records
+// carry that network; those that only find the way (NS, DS, DNSKEY) do not.
+func TestClientSubnetSent(t *testing.T) {
+	n := world()
+	r := newTest(t, n, true)
+	cfg := *r.cfg.Load()
+	cfg.ECS = m.ClientSubnet(netip.MustParsePrefix("101.226.4.0/24"))
+	r.SetConfig(cfg)
+	if got := addrs(ask(t, r, "www.example.com.", 1)); len(got) == 0 {
+		t.Fatal("no answer")
+	}
+	got, ok := n.servers[exA].ecs.Load("www.example.com. 1")
+	if !ok {
+		got, ok = n.servers[ex2A].ecs.Load("www.example.com. 1")
+	}
+	if !ok || got != string(cfg.ECS) {
+		t.Fatalf("the name's own servers got client subnet %x, want %x", got, cfg.ECS)
+	}
+	for _, s := range n.servers {
+		s.ecs.Range(func(k, _ any) bool {
+			var name string
+			var qtype uint16
+			fmt.Sscanf(k.(string), "%s %d", &name, &qtype)
+			if qtype == m.TypeNS || qtype == typeDS || qtype == typeDNSKEY || qtype == m.TypeSOA {
+				t.Errorf("client subnet sent with %s", k)
+			}
+			return true
+		})
+	}
+
+	// changing it forgets the answers for the other network
+	if sets, _, _, _, _ := r.CacheSizes(); sets == 0 {
+		t.Fatal("nothing cached")
+	}
+	cfg.ECS = m.ClientSubnet(netip.MustParsePrefix("198.51.100.0/24"))
+	r.SetConfig(cfg)
+	if sets, _, _, _, _ := r.CacheSizes(); sets != 0 {
+		t.Fatalf("%d RRsets kept after the client subnet changed", sets)
+	}
+}
+
+// TestClientSubnetBrokenServer: a server that answers FORMERR to the
+// option is asked again without it.
+func TestClientSubnetBrokenServer(t *testing.T) {
+	n := world()
+	n.servers[exA].noECS, n.servers[ex2A].noECS = true, true
+	r := newTest(t, n, true)
+	cfg := *r.cfg.Load()
+	cfg.ECS = m.ClientSubnet(netip.MustParsePrefix("101.226.4.0/24"))
+	r.SetConfig(cfg)
+	if got := addrs(ask(t, r, "www.example.com.", 1)); len(got) == 0 {
+		t.Fatal("no answer from a server that rejects the client subnet")
 	}
 }
