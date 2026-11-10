@@ -4,6 +4,20 @@ All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
 **Security**.
 
+## 1.1.1 (2026-11-10)
+
+- **Security**: DNS over HTTPS connections were not counted toward
+  `limits.tcp_connections`. A client could open them until the server ran
+  out of file descriptors, which stops every service, the resolver's own
+  queries included. They now count like TCP and DoT connections.
+- **Security**: new `limits.client_connections` (default 100): open
+  connections from one address (IPv4, or IPv6 /56) over TCP, DoT, DoH and
+  DoQ together, so that one address cannot take every connection. The
+  machine itself and trusted proxies are not limited. An address with
+  half of them open must prove it is real (QUIC Retry) before opening
+  more over QUIC, so forged packets cannot use up a real client's share.
+- The ECS setting's help is shorter.
+
 ## 1.1.0 (2026-11-09)
 
 - **Security**: forged answers are noticed. When a question sent over UDP

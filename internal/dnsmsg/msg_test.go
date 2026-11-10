@@ -220,11 +220,11 @@ func TestStripOPTExtendedRcode(t *testing.T) {
 
 func TestClientSubnet(t *testing.T) {
 	for in, want := range map[string]string{
-		"101.226.4.0/24":          "0008000700011800" + "65e204",
-		"101.226.4.77/24":         "0008000700011800" + "65e204", // host bits are not sent
-		"101.226.0.0/20":          "0008000700011400" + "65e200",
+		"1.2.3.0/24":              "0008000700011800" + "010203",
+		"1.2.3.77/24":             "0008000700011800" + "010203", // host bits are not sent
+		"1.2.0.0/20":              "0008000700011400" + "010200",
 		"2001:db8:1234:5600::/56": "0008000b00023800" + "20010db8123456",
-		"::ffff:101.226.4.0/120":  "",
+		"::ffff:1.2.3.0/120":      "",
 	} {
 		p, err := netip.ParsePrefix(in)
 		if err != nil {
@@ -237,7 +237,7 @@ func TestClientSubnet(t *testing.T) {
 			t.Errorf("%s: %s, want %s", in, got, want)
 		}
 	}
-	q := m.BuildUpstreamQuery(&m.Query{Name: m.WireName("a", "test"), Type: 1, Class: 1}, m.ClientSubnet(netip.MustParsePrefix("101.226.4.0/24")))
+	q := m.BuildUpstreamQuery(&m.Query{Name: m.WireName("a", "test"), Type: 1, Class: 1}, m.ClientSubnet(netip.MustParsePrefix("1.2.3.0/24")))
 	pq, _, err := m.ParseQuery(q)
 	if err != nil || !pq.EDNS || len(q) != m.HeaderLen+len(pq.Name)+5+11+11 {
 		t.Fatalf("query with a client subnet: %v, %d bytes", err, len(q))

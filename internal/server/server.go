@@ -96,8 +96,9 @@ type Server struct {
 	tlsH3   *tls.Config
 
 	udpInflight chan struct{}
-	jobs        chan func() // to idle workers (see dispatch)
-	tcpConns    atomic.Int64
+	jobs        chan func()  // to idle workers (see dispatch)
+	tcpConns    atomic.Int64 // TCP, DoT and DoH connections open
+	clientConns clientConns
 	quicConns   atomic.Int64
 
 	ctx    context.Context

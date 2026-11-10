@@ -89,6 +89,7 @@ type Config struct {
 		ZoneConcurrency     int
 		TCPConnections      int
 		QUICConnections     int
+		ClientConnections   int // open connections per client address (TCP, DoT, DoH, DoQ); 0 = no limit
 		TCPPipeline         int
 		TCPIdleTimeout      time.Duration
 		UDPMaxSize          int
@@ -109,7 +110,7 @@ type Config struct {
 		Records []string // "name address", answered by DNSNova itself
 	}
 	ECS struct {
-		// Address is a network ("101.226.4.0/24") or an address in it,
+		// Address is a network ("1.2.3.0/24") or an address in it,
 		// sent as the EDNS Client Subnet of every query. Empty: off.
 		Address string
 	}
@@ -180,6 +181,7 @@ func Defaults() *Config {
 	c.Limits.ZoneConcurrency = 50
 	c.Limits.TCPConnections = 10000
 	c.Limits.QUICConnections = 3000
+	c.Limits.ClientConnections = 100
 	c.Limits.TCPPipeline = 16
 	c.Limits.TCPIdleTimeout = 10 * time.Second
 	c.Limits.UDPMaxSize = 1232
@@ -417,6 +419,7 @@ func (c *Config) validate(lines map[string]int) (Errors, []string) {
 		"limits.upstream_concurrency": l.UpstreamConcurrency, "limits.zone_concurrency": l.ZoneConcurrency,
 		"limits.tcp_connections": l.TCPConnections, "limits.quic_connections": l.QUICConnections,
 		"limits.tcp_pipeline": l.TCPPipeline, "limits.rrl_slip": l.RRLSlip,
+		"limits.client_connections": l.ClientConnections,
 	} {
 		if v < 0 {
 			bad(key, "must be 0 or more")
@@ -520,7 +523,7 @@ func parseClientSubnet(s string) (netip.Prefix, error) {
 	if err != nil {
 		a, err := netip.ParseAddr(s)
 		if err != nil || a.Zone() != "" {
-			return netip.Prefix{}, errors.New(`must be an IP address or a network, such as "101.226.4.0/24"`)
+			return netip.Prefix{}, errors.New("must be an IP address or a network")
 		}
 		a = a.Unmap()
 		bits := 24
@@ -822,6 +825,7 @@ var fields = map[string]field{
 	"limits.upstream_concurrency": integer(func(c *Config) *int { return &c.Limits.UpstreamConcurrency }),
 	"limits.zone_concurrency":     integer(func(c *Config) *int { return &c.Limits.ZoneConcurrency }),
 	"limits.tcp_connections":      integer(func(c *Config) *int { return &c.Limits.TCPConnections }),
+	"limits.client_connections":   integer(func(c *Config) *int { return &c.Limits.ClientConnections }),
 	"limits.quic_connections":     integer(func(c *Config) *int { return &c.Limits.QUICConnections }),
 	"limits.tcp_pipeline":         integer(func(c *Config) *int { return &c.Limits.TCPPipeline }),
 	"limits.tcp_idle_timeout":     duration(func(c *Config) *time.Duration { return &c.Limits.TCPIdleTimeout }),
