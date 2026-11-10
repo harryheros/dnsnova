@@ -145,7 +145,7 @@ func analyze(resp []byte, q *m.Query) (*entry, error) {
 // failureEntry is a SERVFAIL made by dnsnova when no upstream answered,
 // cached like an upstream's SERVFAIL and marked "Network Error" (RFC 8914).
 func failureEntry(q *m.Query) *entry {
-	up := m.BuildUpstreamQuery(q)
+	up := m.BuildUpstreamQuery(q, nil)
 	pq := *q
 	pq.QEnd, pq.EDNS = m.HeaderLen+len(q.Name)+1+4, false
 	e, err := analyze(m.ErrorResponse(up, &pq, m.RcodeServFail), q)

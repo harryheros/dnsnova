@@ -16,7 +16,7 @@ func BenchmarkResolveNew(b *testing.B) {
 			r := newTest(&testing.T{}, n, min)
 			ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 			defer cancel()
-			warm := buildQuery(1, dotted("www.example.com"), 1, true)
+			warm := buildQuery(1, dotted("www.example.com"), 1, true, nil)
 			warm[2] |= 1
 			if _, err := r.Exchange(ctx, warm); err != nil {
 				b.Fatal(err)
@@ -25,7 +25,7 @@ func BenchmarkResolveNew(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := range b.N {
-				q := buildQuery(uint16(i), dotted(fmt.Sprintf("u%d.example.com", i)), 1, true)
+				q := buildQuery(uint16(i), dotted(fmt.Sprintf("u%d.example.com", i)), 1, true, nil)
 				q[2] |= 1
 				if _, err := r.Exchange(ctx, q); err != nil {
 					b.Fatal(err)

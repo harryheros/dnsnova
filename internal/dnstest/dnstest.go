@@ -37,7 +37,7 @@ func Query(id uint16, name string, qtype uint16, edns, do bool) []byte {
 	b = append(b, byte(qtype>>8), byte(qtype), 0, 1)
 	if edns {
 		b[11] = 1
-		b = m.AppendOPT(b, 1232, do)
+		b = m.AppendOPT(b, 1232, do, nil)
 	}
 	return b
 }
@@ -193,7 +193,7 @@ func (a *Auth) Answer(req []byte, udp bool) []byte {
 	binary.BigEndian.PutUint16(b[8:], ns)
 	if q.EDNS {
 		b[11] = 1
-		b = m.AppendOPT(b, 1232, q.DO)
+		b = m.AppendOPT(b, 1232, q.DO, nil)
 	}
 	if udp && len(b) > 1232 {
 		t := []byte{req[0], req[1], 0, 0, 0, 1, 0, 0, 0, 0, 0, 0}
