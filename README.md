@@ -2,12 +2,14 @@
 
 > A secure, lightweight DNS server for your home, office or a public resolver.
 
-[![Version](https://img.shields.io/badge/version-v1.1.1-blue)](https://github.com/harryheros/dnsnova/releases)
+[![Version](https://img.shields.io/badge/version-v1.2.0-blue)](https://github.com/harryheros/dnsnova/releases)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](./LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux%20amd64%20%7C%20arm64-lightgrey.svg)](#)
 [![CI](https://github.com/harryheros/dnsnova/actions/workflows/ci.yml/badge.svg)](https://github.com/harryheros/dnsnova/actions/workflows/ci.yml)
 
 DNSNova answers your devices' DNS queries from its cache, by resolving them itself from the root servers with DNSSEC, or through upstream resolvers you choose (Cloudflare, Quad9, Google or your own), over plain or encrypted DNS. It is set up and managed in the browser, keeps no logs of your queries, and is safe to put on the internet.
+
+![The DNSNova web interface: key figures, DNS traffic, how queries flow through the server, top domains, upstreams and recent activity](./docs/images/overview.webp)
 
 ## Install
 
@@ -50,7 +52,7 @@ Forgot the administrator password? Run `dnsnova -reset-admin` on the server; the
 
 - **Plain and encrypted DNS**: UDP and TCP on port 53, DNS over TLS, DNS over QUIC and DNS over HTTPS (HTTP/2 and HTTP/3), with an automatic Let's Encrypt certificate.
 - **Its own resolver, or forwarding**: resolve names itself from the root servers, with DNSSEC validation and minimal names (no third party sees the queries), or forward to upstreams such as Cloudflare or Google over DNS over HTTPS, TLS or QUIC. With both, the upstreams step in when a domain's own servers cannot be reached.
-- **Web interface**: response times, traffic, upstream health, most queried domains, every setting with a preview before it is applied, a setup guide for each kind of device, and light and dark appearance.
+- **Web interface**: queries per second, response times, cache hit rate and traffic over time, how queries flow from each protocol through the server to its upstreams, upstream health, most queried domains, every setting with a preview before it is applied, a setup guide for each kind of device, and dark and light appearance.
 - **Optional filtering, without forcing it on anyone**: one server, two doors. The usual addresses answer everything; a second address, name or DoH path blocks ads, trackers and malware (the [ShieldNova](https://github.com/harryheros/shieldnova) list by default, or any AdGuard-style, hosts or domain list). Lists update by themselves (only when they have changed), a broken update never replaces a good list, *Check a domain* shows which list blocks a name, and a wrongly blocked domain is allowed again with one click. Trackers disguised as a site's own subdomain (CNAME cloaking) are blocked too.
 - **Answers for another network** (EDNS Client Subnet): give it an address, and name servers answer as they would for that network, wherever the server is. Off by default, and never your clients' addresses.
 - **Local names** such as `nas.home`, and a list of blocked clients.

@@ -43,8 +43,10 @@ the client address. It does not record queries.
 
 The web interface is served from the binary itself. It loads no fonts,
 scripts or images from other sites, and its Content Security Policy forbids
-it to. It keeps the appearance (light, dark or auto) in the browser's local
-storage, and the chart range for as long as the tab is open.
+it to. It keeps the appearance (dark, light or auto) in the browser's local
+storage. For as long as the tab is open it also keeps the chart's range and
+view, and the upstreams' response times it has seen, to draw their trend;
+nothing about clients or queries.
 
 ## Domain lists
 

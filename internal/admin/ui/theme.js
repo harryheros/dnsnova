@@ -1,8 +1,8 @@
 // Applies the saved appearance before the page is drawn, so it never flashes
-// the wrong colors. Light is the default; "auto" follows the system.
+// the wrong colors. Dark is the default; "auto" follows the system.
 (function () {
-  var pref = "light";
-  try { pref = localStorage.getItem("dnsnova-theme") || "light"; } catch (e) {}
+  var pref = "dark";
+  try { pref = localStorage.getItem("dnsnova-theme") || "dark"; } catch (e) {}
   var mq = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
   function apply() {
     var dark = pref === "dark" || (pref === "auto" && mq && mq.matches);

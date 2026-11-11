@@ -68,7 +68,53 @@ const LINE = {
   alert: [["path", { d: "m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3M12 9v4M12 17h.01" }]],
   info: [["circle", { cx: 12, cy: 12, r: 10 }], ["path", { d: "M12 16v-4M12 8h.01" }]],
   phone: [["rect", { x: 5, y: 2, width: 14, height: 20, rx: 2 }], ["path", { d: "M12 18h.01" }]],
+  home: [["path", { d: "M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z" }]],
+  bolt: [["path", { d: "M13 2 4 14h7l-1 8 9-12h-7z" }]],
+  shieldcheck: [["path", { d: "M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" }], ["path", { d: "m9 12 2 2 4-4" }]],
+  layers: [["path", { d: "m12 2 10 5-10 5L2 7z" }], ["path", { d: "m2 12 10 5 10-5M2 17l10 5 10-5" }]],
+  bars: [["path", { d: "M5 21V14M10 21V9M15 21V12M20 21V4" }]],
+  trophy: [["path", { d: "M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0z" }], ["path", { d: "M7 6H4a3 3 0 0 0 3 4M17 6h3a3 3 0 0 1-3 4" }]],
+  file: [["path", { d: "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" }], ["path", { d: "M14 2v6h6M8 13h8M8 17h6" }]],
+  network: [["circle", { cx: 12, cy: 5, r: 2.5 }], ["circle", { cx: 5, cy: 19, r: 2.5 }], ["circle", { cx: 19, cy: 19, r: 2.5 }], ["path", { d: "M12 7.5v4M12 11.5 6.5 17M12 11.5l5.5 5.5" }]],
+  chevron: [["path", { d: "m6 9 6 6 6-6" }]],
+  arrow: [["path", { d: "M5 12h14M13 6l6 6-6 6" }]],
+  logout: [["path", { d: "M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" }]],
+  book: [["path", { d: "M4 19.5V5a2 2 0 0 1 2-2h14v16H6.5A2.5 2.5 0 0 0 4 21.5zM4 19.5A2.5 2.5 0 0 1 6.5 17H20" }]],
 };
+
+// The DNSNova mark: a trident on a 100-unit grid, chrome at the tips
+// and deep blue at the grip. Colors come from CSS (--mk*), so the mark
+// follows the appearance; a light edge on the left and a shaded right side
+// give the blade its ridge.
+const MARK_PATH = "M50 -1L66 24L56.5 19.5V51H43.5V19.5L34 24Z" +
+  "M14 1L29 26L20.5 22V29C20.5 41.5 32 49.5 43.5 50.5H56.5C68 49.5 79.5 41.5 79.5 29V22L71 26L86 1L101 26L92.5 22V29C92.5 51.5 75.5 62.5 56.5 63.5V64H43.5V63.5C24.5 62.5 7.5 51.5 7.5 29V22L-1 26Z" +
+  "M43.5 64H56.5V86H43.5ZM33 66H67L61.5 74H38.5ZM50 81L58.5 90.5L50 101L41.5 90.5Z";
+let markSeq = 0;
+function stops(prefix, offsets) {
+  return offsets.map((o, i) => s("stop", { offset: o, class: prefix + i }));
+}
+function brandMark(size = 28, glow = false) {
+  const id = "dnm" + ++markSeq;
+  const bevel = s("linearGradient", { id: id + "b", x1: 0, y1: 0, x2: 100, y2: 0, gradientUnits: "userSpaceOnUse" },
+    s("stop", { offset: 0, "stop-color": "#fff", "stop-opacity": 0.3 }), s("stop", { offset: 0.5, "stop-color": "#fff", "stop-opacity": 0 }),
+    s("stop", { offset: 0.5, "stop-color": "#001", "stop-opacity": 0.1 }), s("stop", { offset: 1, "stop-color": "#001", "stop-opacity": 0.2 }));
+  return s("svg", { width: size, height: size, viewBox: "-5 -3 110 106", "aria-hidden": "true", class: "mark" + (glow ? " glow" : "") },
+    s("defs", null, s("linearGradient", { id, x1: 0, y1: 0, x2: 0, y2: 100, gradientUnits: "userSpaceOnUse" }, stops("k", [0, 0.22, 0.45, 0.5, 0.8, 1])), bevel),
+    s("path", { d: MARK_PATH, fill: `url(#${id})` }), s("path", { d: MARK_PATH, fill: `url(#${id}b)` }));
+}
+
+// The wordmark: "DNSN" and small capitals "OVA" set in Exo 2 ExtraBold
+// (SIL Open Font License 1.1, github.com/google/fonts) with its own kerning,
+// stored as outlines so no font is loaded. Cap height 100, baseline 100.
+const WORDMARK_PATH = "M49.9 -1.4Q62.2 -1.4 70.8 1Q79.4 3.5 84.7 9.3Q90 15.1 92.4 25Q94.8 34.9 94.8 50Q94.8 65.1 92.4 75Q90 84.9 84.7 90.7Q79.4 96.5 70.8 99Q62.2 101.4 49.9 101.4Q37.8 101.4 27.8 101Q17.7 100.6 8.7 100L19.9 80.4Q25.1 80.9 32.8 81.1Q40.4 81.3 49.9 81.3Q56.1 81.3 59.6 78.7Q63.2 76.1 64.6 69.3Q66.1 62.5 66.1 50Q66.1 37.5 64.6 30.7Q63.2 23.9 59.6 21.3Q56.1 18.7 49.9 18.7Q41 18.7 34.1 18.7Q27.2 18.7 20.9 18.7L8.7 0Q17.8 -0.6 27.8 -1Q37.7 -1.4 49.9 -1.4ZM35.9 0V100H8.7V0Z M203.7 0V90.4Q203.7 100 194.3 100H182.1Q177.7 100 175.6 98Q173.5 95.9 171.4 92L146.9 49.4Q145.1 45.8 143.4 41.6Q141.7 37.4 140.5 33.2H139.2Q139.8 37.4 140.1 41.8Q140.5 46.2 140.5 50.3V100H115.1V9.6Q115.1 0 124.7 0H136.7Q141.1 0 143.1 2Q145.1 4.1 147.4 8L170.9 49Q173 52.5 174.8 56.7Q176.7 60.9 178.5 65.5H179.8Q179.3 61 179 56.7Q178.8 52.3 178.8 48L178.6 0Z M262.7 -2Q270.4 -1.9 279.7 -1Q289 -0.1 297.7 2.6L295.9 20.3Q289.5 20.1 280.3 20Q271.1 19.9 262.3 19.9Q259 19.9 256.7 20.1Q254.5 20.3 253.1 20.9Q251.7 21.6 251.1 22.8Q250.6 24.1 250.6 26.2Q250.6 29.7 252.7 31.5Q254.8 33.3 260.1 35.2L278.8 42.2Q291 47 295.8 54Q300.7 61 300.7 72.2Q300.7 80.6 298.7 86.4Q296.6 92.2 292.1 95.5Q287.5 98.8 280 100.4Q272.6 102 261.6 102Q256.5 102 246.7 101.3Q236.9 100.6 224.6 97.5L226.2 78.4Q234.9 78.6 241.6 78.8Q248.4 79 253.4 79.1Q258.4 79.1 261.3 79.1Q266.2 79.1 268.8 78.6Q271.4 78.1 272.4 76.7Q273.4 75.4 273.4 72.8Q273.4 70.3 272.7 68.8Q272 67.4 270.2 66.4Q268.4 65.4 265.3 64.3L245.3 56.4Q233.4 51.4 228.5 44.6Q223.6 37.8 223.6 26.8Q223.6 18.1 225.8 12.6Q227.9 7.1 232.5 3.9Q237.1 0.7 244.6 -0.7Q252.1 -2 262.7 -2Z M408.4 0V90.4Q408.4 100 399 100H386.8Q382.5 100 380.4 98Q378.3 95.9 376.1 92L351.6 49.4Q349.9 45.8 348.1 41.6Q346.4 37.4 345.2 33.2H343.9Q344.5 37.4 344.9 41.8Q345.2 46.2 345.2 50.3V100H319.9V9.6Q319.9 0 329.4 0H341.5Q345.8 0 347.9 2Q349.9 4.1 352.2 8L375.7 49Q377.7 52.5 379.6 56.7Q381.5 60.9 383.2 65.5H384.5Q384.1 61 383.8 56.7Q383.5 52.3 383.5 48L383.4 0Z M462 22.5Q471.8 22.5 478.6 24.3Q485.4 26.1 489.5 30.5Q493.7 34.9 495.6 42.6Q497.5 50.2 497.5 62Q497.5 73.7 495.6 81.4Q493.7 89.1 489.5 93.5Q485.4 97.9 478.6 99.7Q471.8 101.5 462 101.5Q452.3 101.5 445.5 99.7Q438.8 97.9 434.6 93.5Q430.4 89.1 428.5 81.4Q426.7 73.7 426.7 62Q426.7 50.2 428.5 42.6Q430.4 34.9 434.6 30.5Q438.8 26.1 445.5 24.3Q452.3 22.5 462 22.5ZM462 40.2Q457.9 40.2 455.7 42Q453.5 43.7 452.6 48.5Q451.8 53.2 451.8 62Q451.8 70.8 452.6 75.5Q453.5 80.3 455.7 82Q457.9 83.8 462 83.8Q466.1 83.8 468.3 82Q470.5 80.3 471.4 75.5Q472.3 70.8 472.3 62Q472.3 53.2 471.4 48.5Q470.5 43.7 468.3 42Q466.1 40.2 462 40.2Z M578.5 24 560 93.6Q559.3 96.5 557.1 98.2Q554.9 100 551.8 100H530.9Q527.8 100 525.6 98.2Q523.4 96.5 522.7 93.6L504.2 24H528.8L538.6 73.5Q539 75.5 539.4 77.8Q539.7 80.1 540 82.2H542.7Q542.9 80.1 543.3 77.8Q543.7 75.5 544.1 73.5L553.9 24Z M627.1 24Q630 24 632.2 25.7Q634.4 27.3 635.1 30.2L654.9 100H630.5L619.1 50.5Q618.6 48.5 618.3 46.2Q618 43.9 617.7 41.8H614.8Q614.5 43.9 614.2 46.2Q613.9 48.5 613.4 50.5L602 100H577.6L597.4 30.2Q598.1 27.3 600.3 25.7Q602.5 24 605.4 24ZM636.5 66.8V83.6H596V66.8Z";
+const WORDMARK_WIDTH = 653.9;
+function wordmark(cls = "") {
+  const id = "dnw" + ++markSeq;
+  return s("svg", { class: "wordmark " + cls, viewBox: `-4 -4 ${WORDMARK_WIDTH + 8} 108`, role: "img", "aria-label": "DNSNova" },
+    s("defs", null, s("linearGradient", { id, x1: 0, y1: 0, x2: 0, y2: 100, gradientUnits: "userSpaceOnUse" }, stops("w", [0, 0.44, 0.5, 0.56, 1]))),
+    s("path", { d: WORDMARK_PATH, fill: `url(#${id})`, class: "wm-edge" }));
+}
+const TAGLINE = "Rule the Domain Ocean";
 
 function line(name, size = 16) {
   return s("svg", { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true", class: "ic" },
@@ -76,10 +122,7 @@ function line(name, size = 16) {
 }
 
 const icon = {
-  logo: (size = 24) => s("svg", { width: size, height: size, viewBox: "0 0 24 24", "aria-hidden": "true" },
-    s("circle", { cx: 12, cy: 12, r: 3.4, fill: "var(--accent)" }),
-    s("circle", { cx: 12, cy: 12, r: 7.4, fill: "none", stroke: "var(--accent)", "stroke-width": 1.6, opacity: 0.6 }),
-    s("circle", { cx: 12, cy: 12, r: 11, fill: "none", stroke: "var(--accent)", "stroke-width": 1.2, opacity: 0.28 })),
+  logo: (size = 24) => brandMark(size),
   sun: () => s("svg", { width: 14, height: 14, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": 2, "stroke-linecap": "round", "aria-hidden": "true" },
     s("circle", { cx: 12, cy: 12, r: 4 }), s("path", { d: "M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" })),
   moon: () => s("svg", { width: 14, height: 14, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": 2, "stroke-linejoin": "round", "aria-hidden": "true" },
@@ -104,6 +147,13 @@ const fmt = {
     if (v < 0.1) return "<0.1";
     if (v < 10) return v.toFixed(1);
     return Math.round(v).toString();
+  },
+  rate(n) {
+    n = n ?? 0;
+    if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + "M";
+    if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + "K";
+    if (n >= 10) return Math.round(n).toString();
+    return n ? n.toFixed(1) : "0";
   },
   pct: (r) => (r * 100).toFixed(r >= 0.995 || r === 0 ? 0 : 1) + "%",
   ago(t) {
@@ -206,7 +256,7 @@ async function boot() {
     }
     showApp();
   } catch (e) {
-    mount(h("div", { class: "center" }, h("div", { class: "signin" }, brandBig(), h("p", { class: "notice err" }, e.message))));
+    mount(h("div", { class: "signpage" }, h("div", { class: "center" }, h("div", { class: "signin plain" }, brandBig(), h("p", { class: "notice err" }, e.message)))));
   }
 }
 
@@ -217,7 +267,7 @@ function setupCodeFromURL() {
 }
 
 function brandBig() {
-  return h("div", { class: "brand" }, icon.logo(28), h("span", null, "DNSNova"));
+  return h("div", { class: "signhero" }, brandMark(104, true), wordmark(), h("div", { class: "tagline" }, TAGLINE));
 }
 
 function appearance() {
@@ -317,7 +367,7 @@ async function showWizard(code, codeRequired) {
       h("li", { class: i < w.step ? "done" : "", "aria-current": i === w.step ? "step" : null },
         h("span", { class: "n" }, i < w.step ? "✓" : String(i + 1)), h("span", { class: "t" }, t))));
     mount(h("main", { class: "wizard" }, h("div", { class: "inner" },
-      h("div", { class: "wizhead" }, h("div", { class: "brand" }, icon.logo(28), h("span", null, "DNSNova setup")), themeIcons()),
+      h("div", { class: "wizhead" }, h("div", { class: "brand" }, brandMark(34, true), wordmark(), h("span", { class: "sub" }, "Setup")), themeIcons()),
       h("div", { class: "row" }, steps, body))));
     WIZ_VIEWS[w.step](w, body, render);
   };
@@ -628,7 +678,7 @@ function wizDone(w) {
   }, "Open the dashboard");
   const ssh = local && !hereLocal ? `ssh -L ${port}:127.0.0.1:${port} user@${location.hostname}` : "";
   mount(h("main", { class: "wizard" }, h("div", { class: "inner" },
-    h("div", { class: "wizhead" }, h("div", { class: "brand" }, icon.logo(28), h("span", null, "DNSNova"))),
+    h("div", { class: "wizhead" }, h("div", { class: "brand" }, brandMark(34, true), wordmark())),
     h("section", { class: "card wizbody done" },
       h("div", { class: "result ok" }, h("span", { class: "badge" }, s("svg", { width: 22, height: 22, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" }, s("path", { d: "M20 6 9 17l-5-5" }))),
         h("div", null, h("h1", { style: { margin: 0 } }, "DNSNova is running"), h("div", { class: "muted" }, "Now point your devices at it."))),
@@ -669,7 +719,7 @@ function changedValues(before, after) {
 // ---------- the app shell ----------
 
 const NAV = [
-  ["Status", [["Overview", "overview", "overview"], ["Upstreams", "upstreams", "upstreams"], ["Query log", "querylog", "querylog"]]],
+  ["Status", [["Overview", "overview", "home"], ["Upstreams", "upstreams", "upstreams"], ["Query log", "querylog", "querylog"]]],
   ["Settings", [["DNS & upstreams", "settings/dns", "dns"], ["Filtering", "settings/filter", "filter"], ["Encrypted DNS", "settings/encryption", "lock"], ["Access & limits", "settings/access", "shield"], ["Admin", "settings/admin", "user"]]],
   ["Tools", [["Setup guide", "tools/guide", "phone"], ["Compare upstreams", "tools/lookup", "compare"]]],
 ];
@@ -678,42 +728,109 @@ function route() {
   return (location.hash.replace(/^#\/?/, "") || "overview").split("?")[0];
 }
 
+// health sums up the server in one line, for the top bar and the overview:
+// resolution from the root servers, or the state of the upstreams.
+function health(st, ups) {
+  const rec = st && st.recursion && st.recursion.enabled ? st.recursion : null;
+  if (st && st.serves_dns === false) return ["warn", "Not serving DNS"];
+  if (rec) return rec.healthy ? ["ok", "System Online"] : ["err", "Name servers unreachable"];
+  const states = ups.map((u) => upState(u, ups).cls);
+  const failing = states.filter((x) => x === "err").length, slow = states.filter((x) => x === "warn").length;
+  if (ups.length && failing === ups.length) return ["err", "All upstreams failing"];
+  if (failing) return ["warn", `${failing} of ${ups.length} upstreams failing`];
+  if (slow) return ["warn", `${slow} upstream${slow === 1 ? "" : "s"} slow`];
+  return ["ok", "System Online"];
+}
+
 async function showApp() {
   const main = h("main", { class: "main", id: "main", tabindex: "-1" });
   const nav = h("nav", { class: "nav", "aria-label": "Main" });
-  const server = h("div", { class: "server" });
+  const ver = h("div", { class: "ver" }, "DNSNova");
   const menu = h("button", { type: "button", class: "btn small menu", "aria-expanded": "false", "aria-controls": "sidebody" }, "Menu");
   const side = h("aside", { class: "side" },
-    h("div", { class: "brand" }, icon.logo(24), h("span", null, "DNSNova"), menu),
-    h("div", { class: "sidebody", id: "sidebody" }, searchBox(), nav,
-      h("div", { class: "sidefoot" }, appearance(), server)));
+    h("a", { class: "railbrand", href: "#/overview", "aria-label": "DNSNova overview", style: { textDecoration: "none" } }, brandMark(96, true), wordmark("rail"), h("div", { class: "tagline" }, TAGLINE)),
+    h("div", { class: "railtop" }, brandMark(28, true), wordmark("rail"), menu),
+    h("div", { class: "sidebody", id: "sidebody" }, nav, h("div", { class: "sidefoot" }, ver)));
   const setMenu = (open) => { side.classList.toggle("open", open); menu.setAttribute("aria-expanded", String(open)); menu.textContent = open ? "Close" : "Menu"; };
   menu.addEventListener("click", () => setMenu(!side.classList.contains("open")));
+  const top = topBar();
   mount(h("div", { class: "shell" }, side, main));
   const drawNav = () => fill(nav, ...NAV.map(([title, items]) => h("div", { class: "navgroup" },
     h("div", { class: "navtitle" }, title),
-    items.map(([label, r, ic]) => h("a", { href: "#/" + r, "aria-current": route() === r ? "page" : null }, line(ic), h("span", null, label))))));
+    items.map(([label, r, ic]) => h("a", { href: "#/" + r, "aria-current": route() === r ? "page" : null }, line(ic, 19), h("span", null, label))))));
   const go = () => {
     setMenu(false);
+    top.closeMenu();
     drawNav();
     stopTimer();
     main.classList.remove("narrow"); // only settings and the guide use the narrow layout
-    fill(main);
+    fill(main, top.el);
     const page = PAGES_BY_ROUTE[route()] || PAGES_BY_ROUTE.overview;
     page(main);
     main.focus({ preventScroll: true });
   };
   window.onhashchange = go;
   go();
-  try {
-    state.status = await api("GET", "/status");
-    fill(server, h("div", null, h("div", { class: "ellipsis" }, state.status.domains[0] || location.hostname),
-      h("div", { class: "mono" }, `${state.status.version} · up ${fmt.uptime(state.status.uptime_seconds)}`)),
-      h("button", { type: "button", class: "btn link small", onclick: logout }, "Sign out"));
-  } catch (e) { /* the page shows the error */ }
+  // the top bar and the rail keep their own, slower refresh
+  const refresh = async () => {
+    try {
+      const [st, ups] = await Promise.all([api("GET", "/status"), api("GET", "/upstreams")]);
+      state.status = st;
+      top.update(st, ups.upstreams);
+      ver.textContent = `DNSNova ${st.version}`;
+    } catch (e) { /* the page shows the error */ }
+  };
+  refresh();
+  if (state.shellTimer) clearInterval(state.shellTimer);
+  state.shellTimer = setInterval(() => { if (document.visibilityState === "visible" && state.session) refresh(); }, 30000);
+}
+
+// topBar: search, the system state and the account menu.
+function topBar() {
+  const stDot = h("span", { class: "dot idle" });
+  const stTxt = h("span", { class: "txt" }, "Checking…");
+  const sys = h("a", { class: "sysstate", href: "#/upstreams", title: "Server state", style: { color: "inherit", textDecoration: "none" } }, stDot, stTxt);
+  const pop = h("div", { class: "menu-pop", role: "menu", hidden: true });
+  const name = (state.session && state.session.username) || "admin";
+  const btn = h("button", { type: "button", class: "userbtn", "aria-haspopup": "menu", "aria-expanded": "false" },
+    h("span", { class: "avatar" }, line("user", 18)), h("span", null, name), line("chevron", 15));
+  const who = h("div", { class: "who" }, h("strong", null, name), h("span", null, "Administrator"));
+  const draw = () => fill(pop, who,
+    h("div", { class: "lab" }, "Appearance"), appearance(),
+    h("a", { class: "item", href: "#/settings/admin", role: "menuitem" }, line("user", 16), "Account & security"),
+    h("a", { class: "item", href: PROJECT + "/blob/main/docs/api.md", target: "_blank", rel: "noopener noreferrer", role: "menuitem" }, line("book", 16), "API documentation"),
+    h("button", { type: "button", class: "item", role: "menuitem", onclick: logout }, line("logout", 16), "Sign out"));
+  const setOpen = (open) => {
+    if (open) draw();
+    pop.hidden = !open;
+    btn.setAttribute("aria-expanded", String(open));
+  };
+  btn.addEventListener("click", (ev) => { ev.stopPropagation(); setOpen(pop.hidden); });
+  pop.addEventListener("click", (ev) => ev.stopPropagation());
+  // one pair of document listeners, however often the shell is drawn
+  if (state.topOff) state.topOff();
+  const onDoc = () => setOpen(false);
+  const onKey = (ev) => { if (ev.key === "Escape" && !pop.hidden) { setOpen(false); btn.focus(); } };
+  document.addEventListener("click", onDoc);
+  document.addEventListener("keydown", onKey);
+  state.topOff = () => { document.removeEventListener("click", onDoc); document.removeEventListener("keydown", onKey); };
+  const el = h("header", { class: "topbar" }, searchBox(), h("span", { class: "grow" }), sys, h("span", { class: "vsep", "aria-hidden": "true" }),
+    h("div", { class: "usermenu" }, btn, pop));
+  return {
+    el,
+    closeMenu: () => setOpen(false),
+    update(st, ups) {
+      const [cls, text] = health(st, ups);
+      stDot.className = "dot lit " + cls;
+      stTxt.textContent = text;
+      fill(who, h("strong", null, name), h("span", null, (st.domains[0] || location.hostname)), h("span", { class: "mono" }, `${st.version} · up ${fmt.uptime(st.uptime_seconds)}`));
+    },
+  };
 }
 
 async function logout() {
+  if (state.shellTimer) clearInterval(state.shellTimer);
+  state.shellTimer = null;
   try { await api("POST", "/logout"); } catch (e) { /* ignore */ }
   state.session = null;
   showLogin("You are signed out.");
@@ -798,30 +915,87 @@ const REJECT_NAMES = {
   upstream_busy: "Upstreams busy", zone_busy: "One domain too busy", malformed: "Malformed",
 };
 
+// The overview follows the reference layout: brand head, four key figures,
+// traffic with the flow of queries through this node, then the three lists
+// people look at most, then the details.
+const RANGE_LABEL = { "1h": "last hour", "24h": "last 24 hours", "7d": "last 7 days", "30d": "last 30 days" };
+const RANGE_SECONDS = { "1h": 3600, "24h": 86400, "7d": 604800, "30d": 2592000 };
+// the previous period of a range is read from the next longer range
+const LONGER = { "1h": "24h", "24h": "7d", "7d": "30d" };
+
 function overview(main) {
   let range = sessionStorage.getItem("dnsnova-range") || "24h";
+  let metric = sessionStorage.getItem("dnsnova-metric") || "traffic";
+  const ident = h("div", { class: "ident" });
+  const head = h("header", { class: "hero-head" }, h("h1", { class: "sr-only" }, "Overview"), wordmark(), h("span", { class: "divider", "aria-hidden": "true" }), h("span", { class: "tagline" }, TAGLINE), ident);
   const body = h("div", null, h("p", { class: "muted" }, "Loading…"));
   const seg = h("div", { class: "seg", role: "group", "aria-label": "Time range" });
+  const mseg = h("div", { class: "seg", role: "group", "aria-label": "Chart" });
   const ranges = () => ({ "24h": ["1h", "24h"], "30d": ["1h", "24h", "7d", "30d"] })[state.status?.retention] || ["1h", "24h", "7d"];
   const drawSeg = () => fill(seg, ...ranges().map((r) => h("button", {
     type: "button", "aria-pressed": String(r === range),
     onclick: () => { range = r; sessionStorage.setItem("dnsnova-range", r); drawSeg(); load(); },
   }, r)));
+  const drawMseg = () => fill(mseg, ...[["traffic", "Traffic"], ["latency", "Latency"]].map(([m, t]) => h("button", {
+    type: "button", "aria-pressed": String(m === metric),
+    onclick: () => { metric = m; sessionStorage.setItem("dnsnova-metric", m); drawMseg(); if (last) draw(); },
+  }, t)));
   drawSeg();
-  main.append(pageHead("Overview", null, seg), body);
+  drawMseg();
+  main.append(head, body);
+  let last = null;
+  const draw = () => fill(body, ...drawOverview(last, { range, metric, seg, mseg }));
   const load = async () => {
     try {
-      const [st, stats, ups, ev] = await Promise.all([api("GET", "/status"), api("GET", "/stats?range=" + range), api("GET", "/upstreams"), api("GET", "/events?limit=40")]);
-      const had = ranges().join();
+      const st = await api("GET", "/status");
       state.status = st;
-      if (ranges().join() !== had) drawSeg();
-      fill(body, ...drawOverview(st, stats, ups.upstreams, ev.events, range));
+      const [stats, ups, ev, prev] = await Promise.all([api("GET", "/stats?range=" + range), api("GET", "/upstreams"), api("GET", "/events?limit=40"), previous(range)]);
+      drawSeg();
+      noteLatency(ups.upstreams);
+      fill(ident,
+        h("span", { class: "idchip" }, h("span", { class: "dot lit " + health(st, ups.upstreams)[0] }), h("strong", { class: "mono" }, st.domains[0] || location.hostname)),
+        h("span", { class: "idchip" }, st.mode === "private" ? "Private resolver" : "Public resolver"),
+        h("span", { class: "idchip mono" }, `${st.version} · up ${fmt.uptime(st.uptime_seconds)}`));
+      last = { st, stats, ups: ups.upstreams, events: ev.events, prev };
+      draw();
     } catch (e) {
       if (e.status !== 401) fill(body, errorBox(e));
     }
   };
   load();
   state.timer = setInterval(() => { if (document.visibilityState === "visible") load(); }, 15000);
+}
+
+// previous loads the longer range once every five minutes, to compare the
+// chosen range with the one before it. Statistics live in memory, so there
+// is nothing to compare until the server has run for two ranges.
+async function previous(range) {
+  const longer = LONGER[range];
+  const ret = state.status?.retention || "7d";
+  if (!longer || RANGE_SECONDS[longer] > RANGE_SECONDS[ret]) return null;
+  if ((state.status?.uptime_seconds || 0) < RANGE_SECONDS[range] * 1.8) return null;
+  const c = state.prev;
+  if (c && c.range === range && Date.now() - c.at < 300e3) return c.data;
+  try {
+    const data = await api("GET", "/stats?range=" + longer);
+    state.prev = { range, at: Date.now(), data };
+    return data;
+  } catch (e) { return null; }
+}
+
+// Upstream latency samples taken while the overview is open, for the small
+// trend lines. Kept for this browser tab only.
+function noteLatency(ups) {
+  if (!state.upHist) {
+    try { state.upHist = JSON.parse(sessionStorage.getItem("dnsnova-uphist") || "{}"); } catch (e) { state.upHist = {}; }
+  }
+  for (const u of ups) {
+    if (!u.latency_ms) continue;
+    const l = (state.upHist[u.address] ||= []);
+    l.push(Math.round(u.latency_ms * 10) / 10);
+    if (l.length > 40) l.splice(0, l.length - 40);
+  }
+  try { sessionStorage.setItem("dnsnova-uphist", JSON.stringify(state.upHist)); } catch (e) { /* private window */ }
 }
 
 // upState describes an upstream: healthy, slow (three times slower than
@@ -864,25 +1038,29 @@ function eventIcon(e) {
   return "info";
 }
 
-// The overview is a fixed grid: every card in a row has the same height and
-// every list has a fixed number of rows, so the page looks the same with
-// little data as with a lot. Missing rows are drawn as faint placeholders.
-const SLOTS = 6;
+// Every card in a row has the same height and every list a fixed number of
+// rows, so the page looks the same with little data as with a lot. Missing
+// rows are drawn as faint placeholders.
+const SLOTS = 5;
 
-function slots(items, n, row) {
+function slots(items, n, row, cls) {
   const out = items.slice(0, n).map(row);
   while (out.length < n) {
     const sk = h("span", { class: "skel" });
     sk.style.width = [46, 62, 38, 54, 70, 42][out.length % 6] + "%";
     out.push(h("li", { class: "slot ph", "aria-hidden": "true" }, sk));
   }
-  return h("ul", { class: "slots" }, out);
+  return h("ul", { class: "slots" + (cls ? " " + cls : "") }, out);
 }
 
 function card(span, title, ic, right, ...body) {
   return h("section", { class: "card dcard " + span, "aria-label": title },
-    h("header", { class: "dhead" }, line(ic, 15), h("h2", null, title), right ? h("div", { class: "dright" }, right) : null),
+    h("header", { class: "dhead" }, line(ic, 20), h("h2", null, title), right ? h("div", { class: "dright" }, right) : null),
     ...body);
+}
+
+function more(href, text = "More") {
+  return h("a", { class: "more", href }, text, line("arrow", 15));
 }
 
 function meter(frac) {
@@ -891,99 +1069,178 @@ function meter(frac) {
   return h("div", { class: "meter" }, bar);
 }
 
-function drawOverview(st, stats, ups, events, range) {
-  const label = { "1h": "last hour", "24h": "last 24 hours", "7d": "last 7 days", "30d": "last 30 days" }[range];
-  const total = Object.values(stats.queries).reduce((a, b) => a + b, 0);
-  const rejected = Object.values(stats.rejected).reduce((a, b) => a + b, 0);
-  const answered = Object.values(stats.answers).reduce((a, b) => a + b, 0);
-  const blocked = stats.answers.blocked || 0;
-  const states = ups.map((u) => upState(u, ups).cls);
-  const failing = states.filter((x) => x === "err").length, slow = states.filter((x) => x === "warn").length;
+// series helpers
+const stepSeconds = (ser) => (ser.length > 1 ? (new Date(ser[1].t) - new Date(ser[0].t)) / 1000 : 60);
+const sum = (a) => a.reduce((x, y) => x + y, 0);
+function weightedP50(ser) {
+  const q = sum(ser.map((p) => p.queries));
+  return q ? sum(ser.map((p) => p.latency.p50_ms * p.queries)) / q : 0;
+}
+// windowBefore: the points of a longer series in the period just before the
+// current one, when they cover at least 80% of it.
+function windowBefore(prev, ser, range) {
+  if (!prev || !prev.series || !prev.series.length || !ser.length) return null;
+  const from = new Date(ser[0].t).getTime(), span = RANGE_SECONDS[range] * 1000;
+  const pts = prev.series.filter((p) => { const t = new Date(p.t).getTime(); return t >= from - span && t < from; });
+  if (pts.length < 2 || pts.length * stepSeconds(prev.series) < 0.8 * span / 1000 || !sum(pts.map((p) => p.queries))) return null;
+  return pts;
+}
+// bucket merges points so a line has at most max of them
+function bucket(ser, max) {
+  if (ser.length <= max) return ser;
+  const k = Math.ceil(ser.length / max), out = [];
+  for (let i = 0; i < ser.length; i += k) {
+    const g = ser.slice(i, i + k), q = sum(g.map((p) => p.queries));
+    out.push({ t: g[0].t, n: g.length, queries: q, latency: {
+      p50_ms: q ? sum(g.map((p) => p.latency.p50_ms * p.queries)) / q : sum(g.map((p) => p.latency.p50_ms)) / g.length,
+      p95_ms: Math.max(...g.map((p) => p.latency.p95_ms)),
+    } });
+  }
+  return out;
+}
+// smooth draws a line through points as gentle curves (Catmull-Rom), never
+// overshooting below the baseline.
+function smooth(pts, base) {
+  if (pts.length < 3) return "M" + pts.map((p) => p.join(",")).join("L");
+  let d = `M${pts[0][0].toFixed(1)},${pts[0][1].toFixed(1)}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i - 1] || pts[i], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2] || p2;
+    const c1 = [p1[0] + (p2[0] - p0[0]) / 6, Math.min(base, p1[1] + (p2[1] - p0[1]) / 6)];
+    const c2 = [p2[0] - (p3[0] - p1[0]) / 6, Math.min(base, p2[1] - (p3[1] - p1[1]) / 6)];
+    d += `C${c1[0].toFixed(1)},${c1[1].toFixed(1)} ${c2[0].toFixed(1)},${c2[1].toFixed(1)} ${p2[0].toFixed(1)},${p2[1].toFixed(1)}`;
+  }
+  return d;
+}
+let gradSeq = 0;
+function vgrad(top, bottom) {
+  const id = "vg" + ++gradSeq;
+  const a = s("stop", { offset: 0 }), b = s("stop", { offset: 1 });
+  a.style.stopColor = top;
+  b.style.stopColor = bottom;
+  return [id, s("linearGradient", { id, x1: 0, y1: 0, x2: 0, y2: 1 }, a, b)];
+}
+
+// sparkline: a small area under a line, filling the bottom of a key figure.
+function sparkline(values) {
+  const W = 300, H = 52, top = 6;
+  if (values.length < 2 || !values.some((v) => v > 0)) return s("svg", { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: "none", "aria-hidden": "true", class: "spark" });
+  const max = Math.max(...values) * 1.08 || 1, min = Math.min(...values) * 0.85;
+  const pts = values.map((v, i) => [(i * W) / (values.length - 1), H - ((v - min) / (max - min || 1)) * (H - top)]);
+  const [id, grad] = vgrad("color-mix(in srgb, var(--kc, var(--accent)) 45%, transparent)", "color-mix(in srgb, var(--kc, var(--accent)) 0%, transparent)");
+  const d = smooth(pts, H);
+  return s("svg", { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: "none", "aria-hidden": "true", class: "spark" },
+    s("defs", null, grad), s("path", { class: "a", d: `${d}L${W},${H}L0,${H}Z`, fill: `url(#${id})` }),
+    s("path", { class: "l", d, "vector-effect": "non-scaling-stroke" }));
+}
+
+// delta: the change against the previous period. good says which way is
+// good: "up", "down", or "" when the direction is neither (traffic).
+function delta(cur, prev, good, range) {
+  if (!prev || !cur) return null;
+  const d = ((cur - prev) / prev) * 100;
+  const flat = Math.abs(d) < 0.05;
+  const cls = flat ? "flat" : !good ? "neutral" : (d > 0) === (good === "up") ? "good" : "bad";
+  return h("span", { class: "delta " + cls, title: `Compared with the ${RANGE_LABEL[range].replace("last", "previous")}` },
+    flat ? "±" : d > 0 ? "↑" : "↓", " ", Math.abs(d) >= 100 ? Math.round(Math.abs(d)) + "%" : Math.abs(d).toFixed(1) + "%");
+}
+
+function kpiCard(color, ic, label, value, unit, dl, note, vis, visPad) {
+  const c = h("section", { class: "card kcard s3", "aria-label": label },
+    h("div", { class: "ktop" }, h("span", { class: "kicon" }, line(ic, 46)),
+      h("div", { style: { minWidth: 0 } }, h("div", { class: "klabel" }, label),
+        h("div", { class: "kval" }, h("span", { class: "big" }, value, unit ? h("span", { class: "unit" }, unit) : null), dl),
+        h("div", { class: "knote" }, note))),
+    h("div", { class: "kvis" + (visPad ? " pad" : "") }, vis));
+  c.style.setProperty("--kc", color);
+  return c;
+}
+
+function drawOverview(d, { range, metric, seg, mseg }) {
+  const { st, stats, ups, events, prev } = d;
+  const label = RANGE_LABEL[range];
+  const total = sum(Object.values(stats.queries));
+  const rejected = sum(Object.values(stats.rejected));
+  const answered = sum(Object.values(stats.answers));
+  const ser = stats.series || [];
+  const step = stepSeconds(ser);
+  const rates = ser.map((p) => p.queries / step);
+  const before = windowBefore(prev, ser, range);
   const rec = st.recursion && st.recursion.enabled ? st.recursion : null;
-  const health = rec ? (rec.healthy ? ["ok", "Resolving from the root servers"] : ["err", "Name servers cannot be reached"])
-    : failing ? ["err", `${failing} of ${ups.length} upstreams failing`]
-      : slow ? ["warn", `${slow} upstream${slow === 1 ? " is" : "s are"} slow`]
-        : ["ok", `All ${ups.length} upstream${ups.length === 1 ? "" : "s"} healthy`];
   const open = PROTOS.map(([k]) => k).filter((k) => (st.listeners || {})[k] || (k === "doh" && (st.listeners || {}).doh_proxy));
 
-  // ---- summary ----
-  const kpi = (lab, value, unit, note) => h("div", { class: "kpi" }, h("dt", null, lab),
-    h("dd", null, value, unit ? h("span", { class: "unit" }, unit) : null), h("div", { class: "note" }, note));
-  const summary = h("section", { class: "card summary s12", "aria-label": "Summary" },
-    h("div", { class: "statusbar" },
-      h("span", { class: "pill " + health[0] }, h("span", { class: "dot " + health[0] }), health[1]),
-      h("span", { class: "mono" }, open.length ? open.map((p) => PROTOS.find(([k]) => k === p)[1] + (p === "doh3" ? "/3" : "")).join(" · ") : "no listeners"),
-      h("span", { class: "mono grow r" }, `${st.version} · up ${fmt.uptime(st.uptime_seconds)}`)),
-    h("div", { class: "summarybody" },
-      h("div", { class: "hero" },
-        h("div", { class: "label" }, "Median response · " + label),
-        h("div", { class: "heroval" }, h("span", { class: "big" }, total ? fmt.ms(stats.latency.all.p50_ms) : "–"), h("span", { class: "unit big-unit" }, "ms")),
-        h("div", { class: "line" }, total ? `${answered ? fmt.pct(stats.cache_ratio) : "0%"} answered from cache` +
-          (blocked ? ` · ${fmt.pct(blocked / answered)} blocked` : "") : "Waiting for the first queries")),
-      h("dl", { class: "kpis" },
-        kpi("Queries", fmt.short(total), null, label),
-        kpi("95th percentile", total && stats.latency.all.p95_ms ? fmt.ms(stats.latency.all.p95_ms) : "–", "ms", "of response times"),
-        kpi("Rejected", fmt.short(rejected), null, rejected && total ? fmt.pct(rejected / total) + " of queries" : "by limits and access list"))));
+  // ---- key figures ----
+  // the newest point is still filling, so "now" is the one before it
+  const nowRate = rates.length > 1 ? rates[rates.length - 2] : rates[0] || 0;
+  const avgRate = ser.length ? total / (ser.length * step) : 0;
+  const prevRate = before ? sum(before.map((p) => p.queries)) / (before.length * stepSeconds(prev.series)) : 0;
+  const peak = Math.max(0, ...rates);
+  const sparkRates = bucket(ser, 48).map((p) => p.queries / (step * (p.n || 1)));
+  const k1 = kpiCard("var(--c1)", "bolt", "Queries / sec", total ? fmt.rate(nowRate) : "–", null, delta(avgRate, prevRate, "", range),
+    total ? `avg ${fmt.rate(avgRate)} · peak ${fmt.rate(peak)}` : "Waiting for the first queries", sparkline(sparkRates));
 
-  // ---- chart and upstreams ----
-  const chart = card("s8", "Response time", "overview",
-    h("div", { class: "legend" }, h("span", null, h("span", { class: "swatch" }), "median"), h("span", null, h("span", { class: "swatch dash" }), "95th percentile")),
-    responseChart(stats.series || [], total, range, label));
-  const primaries = ups.filter((u) => u.role === "primary"), lats = primaries.filter((u) => u.healthy && u.latency_ms).map((u) => u.latency_ms);
-  const upCard = card("s4", "Upstreams", "upstreams", h("a", { href: "#/upstreams", class: "small" }, "Details"),
-    h("ul", { class: "slots" }, ups.map((u) => {
-      const us = upState(u, ups);
-      return h("li", { class: "slot tall" }, h("span", { class: "dot " + us.cls, title: us.label }),
-        h("div", { class: "grow" }, h("div", { class: "mono small ellipsis", title: u.address }, u.address),
-          h("div", { class: "small muted" }, h("span", { class: "state " + us.cls }, us.label), ` · ${u.role}` + (u.queries ? ` · ${successRate(u)}` : ""))),
-        h("span", { class: "num strong" }, u.latency_ms ? fmt.ms(u.latency_ms) + " ms" : "–"));
-    })),
-    h("footer", { class: "dfoot" },
-      h("span", null, `${primaries.length} primary · ${ups.length - primaries.length} fallback`),
-      h("span", { class: "num" }, lats.length ? "avg " + fmt.ms(lats.reduce((a, b) => a + b, 0) / lats.length) + " ms" : "")));
+  const p50 = stats.latency.all.p50_ms;
+  const k2 = kpiCard("var(--c3)", "shieldcheck", "Response time", total ? fmt.ms(p50) : "–", total ? "ms" : null,
+    before ? delta(weightedP50(ser), weightedP50(before), "down", range) : null,
+    total ? `median · 95th percentile ${fmt.ms(stats.latency.all.p95_ms)} ms` : "median, all answers", sparkline(bucket(ser, 48).map((p) => p.latency.p50_ms)));
 
-  // with recursion, the card shows resolution instead of upstreams
-  const recCard = rec ? (() => {
-    const checked = rec.secure + rec.insecure + rec.bogus;
-    const share = (n) => (checked ? fmt.pct(n / checked) : "–");
-    const rows = [
-      ["ok", "Signed and verified", rec.dnssec ? share(rec.secure) : "off", "DNSSEC"],
-      ["", "Not signed", rec.dnssec ? share(rec.insecure) : "–", "the domain does not use DNSSEC"],
-      [rec.bogus ? "warn" : "", "Failed the check", fmt.short(rec.bogus), "refused (SERVFAIL)"],
-      ["", "Queries to name servers", fmt.short(rec.queries), rec.queries ? `${fmt.pct(rec.timeouts / rec.queries)} timed out` : "since start"],
-    ];
-    if (rec.fallback) rows.push(["", "Answered by upstreams", fmt.short(rec.fallbacks), "when no name server answered"]);
-    if (rec.spoofed) rows.push(["warn", "Forged answers stopped", fmt.short(rec.spoofed), "someone sent fake answers; asked again over TCP"]);
-    return card("s4", "Resolution", "upstreams", h("a", { href: "#/settings/dns", class: "small" }, "Settings"),
-      h("ul", { class: "slots" }, rows.map(([cls, name, value, note]) => h("li", { class: "slot tall" },
-        h("span", { class: "dot " + (cls || "muted") }),
-        h("div", { class: "grow" }, h("div", { class: "small" }, name), h("div", { class: "small muted" }, note)),
-        h("span", { class: "num strong" }, value)))),
-      h("footer", { class: "dfoot" }, h("span", null, "From the root servers"),
-        h("span", { class: "num" }, `${fmt.short(rec.cache.zones)} zones · ${fmt.short(rec.cache.servers)} servers`)));
-  })() : null;
+  const parts = [["cache", (stats.answers.cache || 0) + (stats.answers.stale || 0), "var(--c1)", "cache"], ["upstream", stats.answers.upstream || 0, "var(--c2)", rec ? "resolved" : "upstream"],
+    ["local", stats.answers.local || 0, "var(--c4)", "local"], ["blocked", stats.answers.blocked || 0, "var(--warn)", "blocked"]].filter(([, v]) => v > 0);
+  const mix = h("div", null,
+    h("div", { class: "mixbar", role: "img", "aria-label": parts.map(([, v, , n]) => `${n} ${fmt.pct(v / answered)}`).join(", ") },
+      parts.map(([, v, c]) => { const e = h("span"); e.style.flex = String(v); e.style.background = c; return e; })),
+    h("div", { class: "mixleg" }, parts.map(([, v, c, n]) => { const i = h("i"); i.style.background = c; return h("span", null, i, n, " ", fmt.pct(v / answered)); })));
+  const k3 = kpiCard("var(--c2)", "layers", "Cache hit rate", answered ? fmt.pct(stats.cache_ratio).replace("%", "") : "–", answered ? "%" : null, null,
+    answered ? `${fmt.short(answered)} answers · ${label}` : "share answered from memory", answered ? mix : h("div", { class: "mixbar" }), true);
 
-  // ---- four lists ----
-  const protoMax = Math.max(1, ...PROTOS.map(([k]) => stats.queries[k] || 0));
-  const protos = card("s3", "Protocols", "dns", null,
-    slots(PROTOS, SLOTS, ([k, n, d]) => {
-      const c = stats.queries[k] || 0;
-      const on = open.includes(k);
-      // the ports it really listens on, not the standard ones
-      const ports = [...new Set([...(st.listeners || {})[k] || [], ...(k === "doh" ? (st.listeners || {}).doh_proxy || [] : [])].map((a) => a.slice(a.lastIndexOf(":") + 1)))].join(", ");
-      const kind = k === "doh" ? "h2 " : k === "doh3" ? "h3 " : "";
-      return h("li", { class: "slot" + (on ? "" : " off"), title: on ? `${n} ${kind}on port ${ports}` : `${n}: off` }, h("span", { class: "nm ellipsis" }, h("strong", null, k === "doh3" ? "DoH3" : n), " ", h("span", { class: "muted small" }, on ? kind + ports : "off")),
-        meter(c / protoMax), h("span", { class: "num" }, fmt.short(c)));
-    }),
-    h("footer", { class: "dfoot" }, h("span", null, "Total"), h("span", { class: "num strong" }, fmt.int(total))));
+  const since = new Date(st.started);
+  const k4 = kpiCard("var(--c1)", "bars", "Uptime", fmt.uptime(st.uptime_seconds), null, null,
+    `since ${since.toLocaleDateString([], { month: "short", day: "numeric" })} · ${st.version}`,
+    h("div", { class: "protos", "aria-label": "Protocols" }, PROTOS.map(([k, n]) => h("span", { class: open.includes(k) ? "on" : "", title: open.includes(k) ? "listening" : "off" }, k === "doh3" ? "H3" : n))), true);
+
+  // ---- traffic ----
+  const chart = card("s8", "DNS Traffic", "bars", [mseg, seg],
+    h("div", { class: "sub", style: { marginTop: "-8px" } }, total ? `${fmt.int(total)} queries · ${label}` + (rejected ? ` · ${fmt.short(rejected)} rejected` : "") : label),
+    trafficChart(ser, total, range, label, metric));
+
+  // ---- flow through this node ----
+  const flow = flowCard(st, stats, ups, total, open, rec, nowRate);
+
+  // ---- the three lists ----
+  const most = Math.max(1, ...(stats.top_domains || []).map((x) => x.count));
   const privacyNote = "Only names asked from at least 5 different networks are listed, so no one person's browsing shows up.";
+  const top = (stats.top_domains || []).length
+    ? card("s4", "Top Domains", "trophy", h("span", { class: "small muted", title: privacyNote }, "asked from 5+ networks"),
+      slots(stats.top_domains, SLOTS, (x, i) => h("li", { class: "slot" }, h("span", { class: "rank" }, i + 1), h("span", { class: "nm mono ellipsis", title: x.name }, x.name),
+        meter(x.count / most), h("span", { class: "num" }, fmt.short(x.count)), h("span", { class: "share" }, total ? fmt.pct(x.count / total) : "")), "toprows"))
+    : card("s4", "Top Domains", "trophy", null, h("p", { class: "empty small muted" }, "No domains to show yet. ", privacyNote));
+
+  const upCard = rec ? recCard(rec) : card("s4", "Upstream Servers", "shield", more("#/upstreams"),
+    slots(ups, SLOTS, (u) => {
+      const us = upState(u, ups);
+      return h("li", { class: "slot", title: `${u.address} · ${us.label}` }, h("span", { class: "dot lit " + us.cls }),
+        h("span", { class: "nm" }, h("span", { class: "ellipsis", style: { display: "block" } }, upName(u.address)), h("span", { class: "role" }, `${us.label} · ${u.role}`)),
+        h("span", { class: "rate" }, successRate(u)), miniTrend((state.upHist || {})[u.address] || []),
+        h("span", { class: "lat" }, u.latency_ms ? fmt.ms(u.latency_ms) + " ms" : "–"));
+    }, "uprows"));
+
+  const merged = mergeEvents(events);
+  const evCard = card("s4 last", "Recent Activity", "file", null,
+    slots(merged, SLOTS, (e) => h("li", { class: "slot" },
+      h("span", { class: "dot lit " + (e.level === "error" ? "err" : e.level === "warn" ? "warn" : eventIcon(e) === "sliders" || eventIcon(e) === "user" ? "cyan" : "ok") }),
+      h("span", { class: "nm ellipsis" + (e.level === "error" ? " err" : ""), title: e.message }, e.message),
+      e.count > 1 ? h("span", { class: "count", title: `${e.count} times in a row` }, "×" + e.count) : h("span"),
+      h("span", { class: "when", title: new Date(e.time).toString() }, fmt.ago(e.time)))
+    , "actrows"),
+    h("footer", { class: "dfoot" }, h("span", null, "Starts, errors, sign-ins and setting changes; never queries")));
+
+  // ---- details ----
   const topCard = (title, ic, list, emptyNote) => {
-    const most = Math.max(1, ...list.map((x) => x.count));
+    const m = Math.max(1, ...list.map((x) => x.count));
     if (!list.length) return card("s3", title, ic, null, h("p", { class: "empty small muted" }, emptyNote, " ", privacyNote));
     return card("s3", title, ic, null,
       slots(list, SLOTS, (x, i) => h("li", { class: "slot" }, h("span", { class: "rank" }, i + 1), h("span", { class: "nm mono ellipsis", title: x.name }, x.name),
-        meter(x.count / most), h("span", { class: "num" }, fmt.short(x.count)))),
-      h("footer", { class: "dfoot" }, h("span", null, `Top ${Math.min(list.length, SLOTS)} of ${list.length}`), h("span", { class: "muted", title: privacyNote }, "asked from 5+ networks")));
+        meter(x.count / m), h("span", { class: "num" }, fmt.short(x.count)))),
+      h("footer", { class: "dfoot" }, h("span", null, `Top ${Math.min(list.length, SLOTS)} of ${list.length}`), h("span", { class: "muted", title: privacyNote }, "5+ networks")));
   };
   const rej = Object.entries(stats.rejected).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
   const rejMax = Math.max(1, ...rej.map(([, v]) => v));
@@ -993,16 +1250,6 @@ function drawOverview(st, stats, ups, events, range) {
     h("footer", { class: "dfoot" }, limited.length
       ? [h("span", null, "Busiest network"), h("span", { class: "mono" }, limited[0].name)]
       : [h("span", null, "No network over the limits"), h("span")]));
-
-  // ---- events, certificate, privacy ----
-  const merged = mergeEvents(events);
-  const evCard = card("s6", "Events", "info", null,
-    slots(merged, SLOTS, (e) => h("li", { class: "slot" },
-      h("span", { class: "evicon " + (e.level === "error" ? "err" : e.level === "warn" ? "warn" : "") }, line(eventIcon(e), 14)),
-      h("span", { class: "nm ellipsis" + (e.level === "error" ? " err" : ""), title: e.message }, e.message),
-      e.count > 1 ? h("span", { class: "count", title: `${e.count} times in a row` }, "×" + e.count) : h("span"),
-      h("span", { class: "small muted mono", title: new Date(e.time).toString() }, fmt.time(e.time, Date.now() - new Date(e.time) > 86400e3)))),
-    h("footer", { class: "dfoot" }, h("span", null, "Starts, errors, logins and setting changes, never queries"), h("span", null, "last 200, in memory")));
 
   const c = st.certificate;
   const days = c.not_after ? Math.floor((new Date(c.not_after) - Date.now()) / 86400e3) : null;
@@ -1025,44 +1272,159 @@ function drawOverview(st, stats, ups, events, range) {
     ["Client addresses sent on", "Never", "ok"],
     ["Telemetry", "None", "ok"],
   ];
-  const privCard = card("s3", "Privacy", "shield", null,
+  const privCard = card("s3", "Privacy", "shieldcheck", null,
     h("dl", { class: "kvs" }, privRows.map(([k, v, cls]) => h("div", null, h("dt", null, k), h("dd", { class: cls }, v)))),
     h("footer", { class: "dfoot" }, h("span", null, "In memory only"), h("a", { href: "#/querylog" }, "Query log")));
 
   const notServing = st.serves_dns === false ? h("p", { class: "notice warn s12" }, "DNS is not served yet: no address is set. Choose addresses in ", h("a", { href: "#/settings/encryption" }, "Encrypted DNS › Protocols"), " and where answers come from in ", h("a", { href: "#/settings/dns" }, "DNS & upstreams"), ".") : null;
-  return [h("div", { class: "dash" }, notServing, summary, chart, recCard || upCard, protos,
-    topCard("Top domains", "dns", stats.top_domains || [], "No domains to show yet."),
-    topCard("Not found", "alert", stats.top_nxdomains || [], "Names that do not exist will appear here."),
-    rejCard, evCard, certCard, privCard)];
+  return [h("div", { class: "dash" }, notServing, k1, k2, k3, k4, chart, flow, top, upCard, evCard,
+    topCard("Not Found", "alert", stats.top_nxdomains || [], "Names that do not exist will appear here."),
+    rejCard, certCard, privCard)];
 }
 
-// responseChart draws the median as a line over a light area and the 95th
-// percentile as a dashed line, with a readout under the pointer.
-function responseChart(ser, total, range, label) {
-  if (ser.length < 2 || !total) {
+// with recursion, the upstream card shows resolution instead
+function recCard(rec) {
+  const checked = rec.secure + rec.insecure + rec.bogus;
+  const share = (n) => (checked ? fmt.pct(n / checked) : "–");
+  const rows = [
+    ["ok", "Signed and verified", rec.dnssec ? share(rec.secure) : "off", "DNSSEC"],
+    ["idle", "Not signed", rec.dnssec ? share(rec.insecure) : "–", "the domain does not use DNSSEC"],
+    [rec.bogus ? "warn" : "idle", "Failed the check", fmt.short(rec.bogus), "refused (SERVFAIL)"],
+    ["cyan", "Queries to name servers", fmt.short(rec.queries), rec.queries ? `${fmt.pct(rec.timeouts / rec.queries)} timed out` : "since start"],
+  ];
+  if (rec.fallback) rows.push(["idle", "Answered by upstreams", fmt.short(rec.fallbacks), "when no name server answered"]);
+  if (rec.spoofed) rows.push(["warn", "Forged answers stopped", fmt.short(rec.spoofed), "someone sent fake answers; asked again over TCP"]);
+  return card("s4", "Resolution", "network", more("#/settings/dns", "Settings"),
+    h("ul", { class: "slots" }, rows.slice(0, SLOTS).map(([cls, name, value, note]) => h("li", { class: "slot tall", style: { minHeight: "44px" } },
+      h("span", { class: "dot lit " + cls }),
+      h("div", { class: "grow" }, h("div", null, name), h("div", { class: "small muted" }, note)),
+      h("span", { class: "num strong" }, value)))),
+    h("footer", { class: "dfoot" }, h("span", null, "From the root servers"),
+      h("span", { class: "num" }, `${fmt.short(rec.cache.zones)} zones · ${fmt.short(rec.cache.servers)} servers`)));
+}
+
+// upName: an upstream address as people say it.
+function upName(a) {
+  try { if (/^\w+:\/\//.test(a)) return new URL(a.replace(/^(tls|quic|udp|tcp):/, "https:")).hostname; } catch (e) { /* fall through */ }
+  return a;
+}
+
+function miniTrend(vals) {
+  const W = 78, H = 24;
+  // samples are taken while the overview is open; a dashed line until there are a few
+  if (vals.length < 3) return s("svg", { class: "mini", viewBox: `0 0 ${W} ${H}`, "aria-hidden": "true" }, s("line", { class: "base", x1: 2, x2: W - 2, y1: H / 2, y2: H / 2 }));
+  const max = Math.max(...vals), min = Math.min(...vals), r = max - min || 1;
+  const pts = vals.map((v, i) => [2 + (i * (W - 4)) / (vals.length - 1), H - 3 - ((v - min) / r) * (H - 6)]);
+  return s("svg", { class: "mini", viewBox: `0 0 ${W} ${H}`, "aria-hidden": "true" }, s("path", { class: "l", d: smooth(pts, H) }));
+}
+
+// flowCard draws how queries move through this node: protocols in, the node,
+// and where answers come from. The middle column is where more nodes go when
+// DNSNova manages a cluster.
+function flowCard(st, stats, ups, total, open, rec, nowRate) {
+  const W = 400, H = 262, cx = 196, cy = 120;
+  const ins = PROTOS.filter(([k]) => open.includes(k) || stats.queries[k]);
+  const inList = ins.length ? ins : PROTOS.slice(0, 2);
+  const outs = rec
+    ? [{ name: "Root & authoritative", sub: `${fmt.short(rec.cache.servers)} servers`, cls: rec.healthy ? "ok" : "err", w: Math.max(1, rec.queries - (rec.fallbacks || 0)) },
+      ...(rec.fallback ? ups.slice(0, 3).map((u) => ({ name: upName(u.address), sub: "fallback", cls: "idle", w: rec.fallbacks || 0 })) : [])]
+    : ups.slice(0, 6).map((u) => { const us = upState(u, ups); return { name: upName(u.address), sub: `${u.latency_ms ? fmt.ms(u.latency_ms) + " ms" : "–"} · ${u.role}`, cls: us.cls, w: u.queries }; });
+  const outTotal = Math.max(1, sum(outs.map((o) => o.w)));
+  const ys = (n) => Array.from({ length: n }, (_, i) => (n === 1 ? cy : 42 + (i * (H - 62)) / (n - 1)));
+  const iy = ys(inList.length), oy = ys(Math.max(1, outs.length));
+  const links = [], marks = [];
+  const trunc = (t, n) => (t.length > n ? t.slice(0, n - 1) + "…" : t);
+  inList.forEach(([k, n, d], i) => {
+    const c = stats.queries[k] || 0, share = total ? c / total : 0, y = iy[i], on = open.includes(k);
+    const path = `M74,${y} C126,${y} 136,${cy} ${cx - 34},${cy}`;
+    links.push(s("path", { class: "link cyan", d: path, "stroke-width": (1 + share * 10).toFixed(2) }));
+    marks.push(s("circle", { class: "port" + (on ? " on" : ""), cx: 70, cy: y, r: 4 }),
+      s("text", { class: "lab", x: 60, y: y - 2, "text-anchor": "end" }, k === "doh3" ? "DoH3" : n),
+      s("text", { class: "sub", x: 60, y: y + 11, "text-anchor": "end" }, total ? fmt.pct(share) : on ? d : "off"));
+  });
+  outs.forEach((o, i) => {
+    const y = oy[i], share = o.w / outTotal;
+    const path = `M${cx + 34},${cy} C${cx + 58},${cy} ${cx + 66},${y} 290,${y}`;
+    links.push(s("path", { class: "link " + (o.cls === "ok" ? "" : o.cls), d: path, "stroke-width": (1 + share * 8).toFixed(2) }));
+    marks.push(s("circle", { class: "up " + o.cls, cx: 296, cy: y, r: 6 }),
+      s("text", { class: "lab", x: 308, y: y - 2 }, trunc(o.name, 15)),
+      s("text", { class: "sub", x: 308, y: y + 11 }, o.sub));
+  });
+  const [gid, grad] = vgrad("#3b82f6", "#1d4ed8");
+  const node = s("g", null,
+    s("circle", { class: "node-ring dash", cx, cy, r: 50 }), s("circle", { class: "node-ring", cx, cy, r: 41 }),
+    s("circle", { class: "node", cx, cy, r: 32, fill: `url(#${gid})` }),
+    // the trident, small, inside the node
+    s("g", { transform: `translate(${cx - 16},${cy - 17}) scale(0.5)` },
+      s("path", { class: "glyph", d: "M32 13v46M18 17v9c0 7 6 10 14 10s14-3 14-10v-9M25 49h14" }),
+      s("path", { class: "glyphf", d: "M32 3l5.5 10h-11zM18 7l4.5 9h-9zM46 7l4.5 9h-9z" })),
+    s("text", { class: "lab", x: cx, y: cy + 68, "text-anchor": "middle" }, trunc(st.domains[0] || location.hostname, 26)),
+    s("text", { class: "sub", x: cx, y: cy + 81, "text-anchor": "middle" }, `${total ? fmt.rate(nowRate) + " q/s · " : ""}${st.mode}`));
+  const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `Queries arrive over ${inList.map(([, n]) => n).join(", ")}; answers come from ${outs.map((o) => o.name).join(", ") || "nowhere yet"}` },
+    s("defs", null, grad),
+    s("text", { class: "colh", x: 44, y: 14, "text-anchor": "middle" }, "CLIENTS"),
+    s("text", { class: "colh", x: cx, y: 14, "text-anchor": "middle" }, "NODE"),
+    s("text", { class: "colh", x: 340, y: 14, "text-anchor": "middle" }, rec ? "RESOLUTION" : "UPSTREAMS"),
+    links, node, marks);
+  const counts = { ok: 0, warn: 0, err: 0, idle: 0 };
+  outs.forEach((o) => counts[o.cls]++);
+  const rowsL = [["ok", "Healthy", counts.ok], ["warn", "Slow", counts.warn], ["err", "Failing", counts.err]];
+  if (counts.idle) rowsL.splice(1, 0, ["idle", rec ? "Fallback" : "Standby", counts.idle]);
+  return card("s4 flowcard", "Traffic Flow", "network", h("span", { class: "nodechip", title: "DNSNova runs as one node today" }, h("span", { class: "dot lit ok" }), "1 node"),
+    h("div", { class: "flow" }, svg),
+    h("div", { class: "legend3" }, rowsL.map(([cls, t, n]) => h("div", null, h("span", { class: "dot lit " + cls }), t, h("span", { class: "num" }, n)))));
+}
+
+// trafficChart draws queries per second (or response times) as an area with
+// a glowing line, with readable axes and a readout under the pointer.
+function trafficChart(ser0, total, range, label, metric) {
+  if (ser0.length < 2 || !total) {
     return h("div", { class: "chartempty" },
       s("svg", { viewBox: "0 0 600 120", preserveAspectRatio: "none", "aria-hidden": "true" },
         s("path", { d: "M0 92 C 80 88, 120 60, 200 66 S 330 96, 400 70 S 520 40, 600 52", class: "ghost", "vector-effect": "non-scaling-stroke" })),
       h("div", null, h("strong", null, "Not enough data yet"),
         h("div", { class: "small muted" }, range === "1h" ? "The first points appear after a minute or two of traffic." : "Points here are " + (range === "24h" ? "five minutes" : "an hour") + " apart. Choose 1h to see the first minutes.")));
   }
-  const W = 600, H = 170, top = 10, base = 160;
-  const maxV = Math.max(1, ...ser.map((p) => p.latency.p95_ms)) * 1.15;
+  const step = stepSeconds(ser0);
+  const ser = bucket(ser0, 150);
+  const lat = metric === "latency";
+  const val = (p) => (lat ? p.latency.p50_ms : p.queries / (step * (p.n || 1)));
+  const raw = Math.max(...ser.map((p) => (lat ? p.latency.p95_ms : val(p))), lat ? 1 : 1);
+  // four even steps of a round size
+  const mag = 10 ** Math.floor(Math.log10(raw / 4)), stepY = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((m) => m * 4 >= raw * 1.05) || 10 * mag;
+  const yMax = stepY * 4;
+  const W = 1000, H = 300;
   const x = (i) => (i * W) / (ser.length - 1);
-  const y = (v) => base - (v / maxV) * (base - top);
-  const pts = (key) => ser.map((p, i) => `${x(i).toFixed(1)},${y(p.latency[key]).toFixed(1)}`).join(" ");
-  const area = `0,${base} ${pts("p50_ms")} ${W},${base}`;
-  const cursor = s("line", { class: "cursor", x1: 0, x2: 0, y1: top, y2: base, "vector-effect": "non-scaling-stroke", visibility: "hidden" });
-  const svg = s("svg", { class: "chart", viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: "none", role: "img", "aria-label": `Median and 95th percentile response time, ${label}; highest ${fmt.ms(maxV / 1.15)} ms` },
-    [top, (top + base) / 2, base].map((yy) => s("line", { class: "grid", x1: 0, x2: W, y1: yy, y2: yy, "vector-effect": "non-scaling-stroke" })),
-    s("polygon", { class: "area", points: area }),
-    s("polyline", { class: "p95", points: pts("p95_ms"), "vector-effect": "non-scaling-stroke" }),
-    s("polyline", { class: "p50", points: pts("p50_ms"), "vector-effect": "non-scaling-stroke" }),
+  const y = (v) => H - (v / yMax) * H;
+  const pts = ser.map((p, i) => [x(i), y(val(p))]);
+  const d = smooth(pts, H);
+  const [gid, grad] = vgrad("var(--area-top)", "var(--area-bottom)");
+  const cursor = s("line", { class: "cursor", x1: 0, x2: 0, y1: 0, y2: H, "vector-effect": "non-scaling-stroke", visibility: "hidden" });
+  const xt = [0, 0.2, 0.4, 0.6, 0.8, 1];
+  const svg = s("svg", { class: "chart", viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: "none", role: "img", "aria-label": `${lat ? "Median response time" : "Queries per second"}, ${label}; highest ${lat ? fmt.ms(raw) + " ms" : fmt.rate(raw)}` },
+    s("defs", null, grad),
+    [0, 1, 2, 3, 4].map((k) => s("line", { class: "grid", x1: 0, x2: W, y1: y(k * stepY), y2: y(k * stepY), "vector-effect": "non-scaling-stroke" })),
+    xt.slice(1, -1).map((f) => s("line", { class: "vgrid", x1: f * W, x2: f * W, y1: 0, y2: H, "vector-effect": "non-scaling-stroke" })),
+    s("path", { class: "area", d: `${d}L${W},${H}L0,${H}Z`, fill: `url(#${gid})` }),
+    lat ? s("path", { class: "p95", d: smooth(ser.map((p, i) => [x(i), y(p.latency.p95_ms)]), H), "vector-effect": "non-scaling-stroke" }) : null,
+    s("path", { class: lat ? "p50" : "traffic", d, "vector-effect": "non-scaling-stroke" }),
     cursor);
+  const unitOf = (v) => (lat ? (v ? fmt.ms(v) + " ms" : "0") : fmt.rate(v));
+  const yaxis = h("div", { class: "yaxis", "aria-hidden": "true" }, [0, 1, 2, 3, 4].map((k) => { const e = h("span", null, unitOf(k * stepY)); e.style.top = (100 - k * 25) + "%"; return e; }));
+  const ends = pts[pts.length - 1];
+  const endPin = h("span", { class: "pin" });
+  endPin.style.left = "100%";
+  endPin.style.top = (ends[1] / H) * 100 + "%";
+  const hover = h("span", { class: "pin", hidden: true });
   const tip = h("div", { class: "tip", hidden: true });
-  const scale = h("div", { class: "scale" }, h("span", null, fmt.ms(maxV / 1.15) + " ms"), h("span", null, "0"));
-  const wrap = h("div", { class: "chartwrap" }, svg, scale, tip);
-  const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => ser[Math.round(f * (ser.length - 1))].t);
+  const wrap = h("div", { class: "chartwrap" }, svg, endPin, hover, tip);
+  const full = range === "7d" || range === "30d" ? "full" : false;
+  const xaxis = h("div", { class: "xaxis", "aria-hidden": "true" }, xt.map((f, i) => {
+    const p = ser[Math.round(f * (ser.length - 1))];
+    const e = h("span", { class: i === 0 ? "first" : i === xt.length - 1 ? "last" : "" }, i === xt.length - 1 ? "now" : fmt.time(p.t, full ? true : false));
+    e.style.left = f * 100 + "%";
+    return e;
+  }));
   const show = (ev) => {
     const r = svg.getBoundingClientRect();
     const f = Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width));
@@ -1071,9 +1433,12 @@ function responseChart(ser, total, range, label) {
     cursor.setAttribute("x1", x(i));
     cursor.setAttribute("x2", x(i));
     cursor.setAttribute("visibility", "visible");
-    fill(tip, h("div", { class: "mono small" }, fmt.time(p.t, range === "7d" || range === "30d" ? "full" : false)),
-      h("div", null, h("span", { class: "swatch" }), " median ", h("strong", { class: "num" }, fmt.ms(p.latency.p50_ms) + " ms")),
-      h("div", null, h("span", { class: "swatch dash" }), " 95th ", h("strong", { class: "num" }, fmt.ms(p.latency.p95_ms) + " ms")),
+    hover.hidden = false;
+    hover.style.left = (i / (ser.length - 1)) * 100 + "%";
+    hover.style.top = (pts[i][1] / H) * 100 + "%";
+    fill(tip, h("div", { class: "mono small" }, fmt.time(p.t, full)),
+      h("div", null, h("span", { class: "swatch" }), lat ? " median " : " ", h("strong", { class: "num" }, lat ? fmt.ms(p.latency.p50_ms) + " ms" : fmt.rate(val(p)) + " q/s")),
+      lat ? h("div", null, h("span", { class: "swatch dash" }), " 95th ", h("strong", { class: "num" }, fmt.ms(p.latency.p95_ms) + " ms")) : h("div", { class: "muted" }, "median " + fmt.ms(p.latency.p50_ms) + " ms"),
       h("div", { class: "muted" }, fmt.int(p.queries) + " queries"));
     tip.hidden = false;
     const left = (i / (ser.length - 1)) * r.width;
@@ -1081,33 +1446,35 @@ function responseChart(ser, total, range, label) {
   };
   svg.addEventListener("pointermove", show);
   svg.addEventListener("pointerdown", show);
-  svg.addEventListener("pointerleave", () => { tip.hidden = true; cursor.setAttribute("visibility", "hidden"); });
-  const names = ticks.map((t, i) => (i === 4 ? "now" : fmt.time(t, range === "7d" || range === "30d")));
-  return [wrap, h("div", { class: "axis" }, names.map((n, i) => h("span", null, i && n === names[i - 1] ? "" : n)))];
-}
-
-function listenersChips(l) {
-  const out = [];
-  if (l.dot) out.push("DoT");
-  if (l.doq) out.push("DoQ");
-  if (l.doh) out.push("DoH h2");
-  if (l.doh3) out.push("DoH h3");
-  return out.map((x) => h("span", { class: "chip" }, x));
+  svg.addEventListener("pointerleave", () => { tip.hidden = true; hover.hidden = true; cursor.setAttribute("visibility", "hidden"); });
+  return [h("div", { class: "plot" }, yaxis, wrap, xaxis),
+    lat ? h("div", { class: "legend" }, h("span", null, h("span", { class: "swatch" }), "median"), h("span", null, h("span", { class: "swatch dash" }), "95th percentile")) : null];
 }
 
 // ---------- upstreams and lookup ----------
 
 function upstreamsPage(main) {
-  const body = h("div", null, h("p", { class: "muted" }, "Loading…"));
+  const body = h("div", { style: { display: "flex", flexDirection: "column", gap: "18px" } }, h("p", { class: "muted" }, "Loading…"));
   main.append(pageHead("Upstreams", "Status"), body);
   const load = async () => {
     try {
       const { upstreams } = await api("GET", "/upstreams");
-      fill(body, h("section", { class: "card" }, h("div", { class: "tablewrap" }, h("table", { class: "stack" },
-        h("thead", null, h("tr", null, ["State", "Upstream", "Role", "Latency", "Queries", "Errors", "Last error"].map((t, i) => h("th", { scope: "col", class: i >= 3 && i <= 5 ? "r" : "" }, t)))),
+      noteLatency(upstreams);
+      const q = sum(upstreams.map((u) => u.queries)), errs = sum(upstreams.map((u) => u.errors));
+      const healthyN = upstreams.filter((u) => u.healthy).length;
+      const lats = upstreams.filter((u) => u.healthy && u.role === "primary" && u.latency_ms).map((u) => u.latency_ms);
+      const tile = (color, ic, label, value, unit, note) => kpiCard(color, ic, label, value, unit, null, note, null, true);
+      fill(body, h("div", { class: "dash" },
+        tile("var(--c3)", "shieldcheck", "Healthy", `${healthyN}/${upstreams.length}`, null, healthyN === upstreams.length ? "every upstream answers" : "some upstreams fail"),
+        tile("var(--c1)", "bolt", "Primary latency", lats.length ? fmt.ms(sum(lats) / lats.length) : "–", lats.length ? "ms" : null, "average, smoothed"),
+        tile("var(--c2)", "layers", "Success rate", q ? fmt.pct(1 - errs / q) : "–", null, `${fmt.int(errs)} errors`),
+        tile("var(--c1)", "bars", "Queries sent", fmt.short(q), null, "since start")),
+        h("section", { class: "card" }, h("div", { class: "tablewrap" }, h("table", { class: "stack" },
+        h("thead", null, h("tr", null, ["State", "Upstream", "Role", "Trend", "Latency", "Queries", "Errors", "Last error"].map((t, i) => h("th", { scope: "col", class: i >= 4 && i <= 6 ? "r" : "" }, t)))),
         h("tbody", null, upstreams.map((u) => h("tr", null,
           h("td", { "data-label": "State" }, (() => { const st = upState(u, upstreams); return h("span", { class: "state " + st.cls }, h("span", { class: "dot " + st.cls }), st.label); })()),
           h("td", { class: "mono head" }, u.address), h("td", { class: "muted", "data-label": "Role" }, u.role),
+          h("td", { "data-label": "Trend", title: "Latency while this page is open" }, miniTrend((state.upHist || {})[u.address] || [])),
           h("td", { class: "r num", "data-label": "Latency" }, u.latency_ms ? fmt.ms(u.latency_ms) + " ms" : "–"),
           h("td", { class: "r num", "data-label": "Queries" }, fmt.int(u.queries)),
           h("td", { class: "r num", "data-label": "Errors" }, fmt.int(u.errors) + (u.queries ? ` · ${successRate(u)} ok` : "")),
