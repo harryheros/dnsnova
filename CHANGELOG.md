@@ -4,6 +4,25 @@ All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
 **Security**.
 
+## 1.2.0 (2026-11-10)
+
+- New look for the web interface ("Deep Ocean", see docs/design.md): dark
+  by default, a brand rail with the new trident and a chrome wordmark set
+  in Exo 2 ExtraBold (SIL OFL 1.1, stored as outlines, no font is loaded),
+  and a top bar with search, the server's state and an account menu
+  (appearance, sign out).
+- The overview is rebuilt: four key figures (queries per second, response
+  time, cache hit rate, uptime) with trend lines and, once the server has
+  run long enough, the change against the previous period; a traffic chart
+  of queries per second or response time; Traffic Flow, showing queries
+  arriving by protocol and where answers come from; then top domains,
+  upstreams with their latency trend, recent activity and the details.
+- The Upstreams page opens with a summary (healthy, latency, success rate,
+  queries) and a latency trend per upstream.
+- Sign-in, setup and the public status page use the new mark and colors.
+- Built for long shifts: light is kept to the brand; charts, figures and
+  tables are flat and high-contrast, and nothing on screen moves on its own.
+
 ## 1.1.1 (2026-11-10)
 
 - **Security**: DNS over HTTPS connections were not counted toward
