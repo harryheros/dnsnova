@@ -2067,7 +2067,7 @@ async function settingsPage(main, id) {
   if (page.certificate) parts.push(await certificateCard());
   if (page.filterStatus) parts.push(await filterCard(), whyCard());
   const alertParts = page.alerts ? await alertCards() : null;
-  if (alertParts) parts.push(alertParts.status, alertParts.destinations);
+  if (alertParts) parts.push(alertParts.status, alertParts.history, alertParts.destinations);
   const sectionCards = [];
   for (const sec of page.sections) {
     const card = h("section", { class: "card pad0", "aria-label": sec.title },
@@ -2088,7 +2088,6 @@ async function settingsPage(main, id) {
   const review = h("section", { class: "review", "aria-live": "polite", "aria-label": "Changes" });
   parts.push(review);
   if (id === "admin") parts.push(...accountCards(), historyCard(), fileCard(cfg.hash));
-  if (alertParts) parts.push(alertParts.history);
   fill(holder, ...parts);
 
   let previewSeq = 0;
@@ -2458,7 +2457,7 @@ async function alertCards() {
       h("tbody", null, a.history.map((n) => h("tr", null,
         h("td", { class: "muted", "data-label": "Sent" }, fmt.ago(n.time)),
         h("td", { class: "head", style: { whiteSpace: "normal" } }, h("div", { style: { textAlign: "left" } },
-          h("span", { class: n.status === "resolved" ? "ok" : n.status === "test" ? "" : n.severity === "critical" ? "err" : "warn" }, { reminder: "Still: ", resolved: "Resolved: " }[n.status] || ""),
+          h("span", { class: n.status === "resolved" ? "ok" : n.status === "test" ? "" : n.severity === "critical" ? "err" : "warn" }, { reminder: "Still: ", resolved: "Resolved: ", firing: n.severity === "critical" ? "Critical: " : "Warning: " }[n.status] || ""),
           n.summary, n.node && n.node !== n.server ? h("span", { class: "muted small" }, " · " + n.node) : null)),
         h("td", { "data-label": "Delivery", class: "small" }, Object.entries(n.results).map(([ch, res]) => h("div", null, ch + ": ", res === "ok" ? h("span", { class: "ok" }, "ok") : h("span", { class: "err" }, res)))))))))
       : h("p", { class: "muted", style: { margin: 0 } }, "Nothing sent since the server started."));
