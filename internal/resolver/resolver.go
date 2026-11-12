@@ -7,12 +7,14 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"net/netip"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/harryheros/dnsnova/internal/cookie"
 	m "github.com/harryheros/dnsnova/internal/dnsmsg"
 	"github.com/harryheros/dnsnova/internal/filter"
 	"github.com/harryheros/dnsnova/internal/stats"
@@ -61,11 +63,12 @@ var (
 
 // Resolver is safe for concurrent use.
 type Resolver struct {
-	set    atomic.Pointer[Settings]
-	filter atomic.Pointer[filter.Set]
-	ups    atomic.Pointer[upHolder]
-	sem    atomic.Pointer[chan struct{}]
-	cache  *cache
+	set     atomic.Pointer[Settings]
+	filter  atomic.Pointer[filter.Set]
+	cookies atomic.Pointer[cookie.Jar]
+	ups     atomic.Pointer[upHolder]
+	sem     atomic.Pointer[chan struct{}]
+	cache   *cache
 	// netMu orders a change of the client subnet against lookups: each
 	// lookup holds it for reading from start to cache write, and a change
 	// waits for them, so an answer for the old network cannot reach the
@@ -112,6 +115,10 @@ func (r *Resolver) SetSettings(s Settings) {
 // SetFilter replaces the block rules of the filtered service (nil: none).
 func (r *Resolver) SetFilter(f *filter.Set) { r.filter.Store(f) }
 
+// SetCookies turns DNS Cookies (RFC 7873) on with jar, or off (nil): a
+// query's COOKIE option is then ignored, as by a server without them.
+func (r *Resolver) SetCookies(jar *cookie.Jar) { r.cookies.Store(jar) }
+
 // SetUpstreams replaces the upstream group.
 func (r *Resolver) SetUpstreams(x Exchanger) { r.ups.Store(&upHolder{x}) }
 
@@ -126,6 +133,8 @@ type Opts struct {
 	UDP       bool // apply the client's UDP size limit
 	Encrypted bool // DoT, DoH or DoQ: pad responses for clients that pad (RFC 8467)
 	Filter    bool // the query came in through the filtered service
+	// Client is the address the query came from, for its DNS Cookie.
+	Client netip.Addr
 }
 
 // BlockedTTL is how long clients may remember that a name is blocked: short,
@@ -140,6 +149,12 @@ type Result struct {
 	Status string   // for logs: hit, stale, miss, local, refused, ...
 	// Filtered: answered by the filtered service (whether or not blocked).
 	Filtered bool
+	// Cookie is what the query's DNS Cookie showed (cookie.None when
+	// cookies are off). Good: the client is not spoofed.
+	Cookie cookie.State
+	// CookieOpt is the COOKIE option sent with Resp, for a response made
+	// again later (a truncated one, BADCOOKIE).
+	CookieOpt []byte
 }
 
 // Resolve answers one raw query. udp applies the client's UDP size limit.
@@ -302,11 +317,25 @@ func (f finisher) cnameBlocked(e *entry) bool {
 // clients that pad, and counts the result.
 func (f finisher) done(res Result, ede []byte) Result {
 	res.Filtered = f.o.Filter
+	if f.q != nil && f.q.EDNS && f.q.Cookie != nil {
+		if jar := f.r.cookies.Load(); jar != nil {
+			res.Cookie = cookie.Check(f.q.Cookie)
+			if res.Cookie == cookie.Bad && jar.Verify(f.q.Cookie, f.o.Client) {
+				res.Cookie = cookie.Good
+			}
+			f.r.stats.Cookies[res.Cookie-cookie.ClientOnly].Add(1)
+			res.CookieOpt = jar.Answer(f.q.Cookie, f.o.Client)
+		}
+	}
 	if res.Resp != nil && f.q != nil && f.q.EDNS {
-		res.Resp = m.AddOptions(res.Resp, ede)
+		res.Resp = m.AddOptions(res.Resp, append(slices.Clip(ede), res.CookieOpt...))
 	}
 	if res.Resp != nil && f.q != nil {
+		full := res.Resp
 		res.Resp = f.r.fit(res.Resp, f.req, f.q, f.o.UDP, f.s)
+		if len(res.Resp) != len(full) { // truncated: the cookie still goes along
+			res.Resp = m.AddOptions(res.Resp, res.CookieOpt)
+		}
 		if f.o.Encrypted && f.q.Padding {
 			res.Resp = m.Pad(res.Resp, m.PaddingBlock)
 		}

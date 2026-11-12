@@ -10,10 +10,13 @@ import (
 // BenchmarkResolveNew resolves a name never asked before under a zone whose
 // servers are already known: the work done for most cache misses.
 func BenchmarkResolveNew(b *testing.B) {
-	for _, min := range []bool{false, true} {
-		b.Run(fmt.Sprintf("minimise=%v", min), func(b *testing.B) {
+	for _, v := range []struct{ min, cookies bool }{{false, false}, {true, false}, {false, true}} {
+		b.Run(fmt.Sprintf("minimise=%v/cookies=%v", v.min, v.cookies), func(b *testing.B) {
 			n := world()
-			r := newTest(&testing.T{}, n, min)
+			r := newTest(&testing.T{}, n, v.min)
+			c := *r.cfg.Load()
+			c.Cookies = v.cookies
+			r.SetConfig(c)
 			ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 			defer cancel()
 			warm := buildQuery(1, dotted("www.example.com"), 1, true, nil)

@@ -14,7 +14,8 @@ you if you wish.
 
 ## Supported versions
 
-Until 1.0 is released, only the latest commit on `main` receives fixes.
+Fixes go into the latest release. Use the newest version; holders of a
+commercial license can arrange longer support (COMMERCIAL.md).
 
 ## Scope
 

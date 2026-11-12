@@ -175,7 +175,7 @@ async function boot() {
     return;
   }
   document.title = (info.domain || "DNS") + " · Encrypted DNS";
-  const state = !info.healthy ? ["err", "Upstreams not answering"] : info.domain && !info.encrypted ? ["warn", "Encrypted DNS not ready yet"] : ["ok", "Operating normally"];
+  const state = !info.healthy ? ["err", "DNS not answering"] : info.domain && !info.encrypted ? ["warn", "Encrypted DNS not ready yet"] : ["ok", "Operating normally"];
   const checkBox = h("div", { class: "checkbox", "aria-live": "polite" });
 
   const facts = [

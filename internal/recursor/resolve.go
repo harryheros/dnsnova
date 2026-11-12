@@ -41,6 +41,9 @@ func (r *Recursor) resolve(ctx context.Context, t *task, qname string, qtype uin
 		if done {
 			return ans, nil
 		}
+		if t.trace != nil {
+			t.trace.add(t, TraceStep{Kind: "cname", Name: m.NameString(name), Result: "an alias: continue with " + m.NameString(next)})
+		}
 		name = next
 	}
 	return &answer{rcode: m.RcodeServFail, sec: ans.sec}, nil // chain too long
@@ -60,7 +63,10 @@ func (r *Recursor) fresh(exp time.Time, orig uint32, final bool) bool {
 // step resolves one link of a chain. It returns the next name to follow,
 // or done when the answer is complete.
 func (r *Recursor) step(ctx context.Context, t *task, ans *answer, name string, qtype uint16, validate, first bool) (string, bool, error) {
-	// the cache
+	// the cache (not for a trace, nor for one network's own answer)
+	if t.fresh || !t.shared() {
+		goto ask
+	}
 	if cs, exp, ok := r.sets.get(tkey(name, qtype)); ok && r.fresh(exp, cs.orig, true) {
 		r.Stats.CacheHits.Add(1)
 		return "", true, r.addSet(ctx, t, ans, cs, exp, validate)
@@ -109,7 +115,7 @@ func (r *Recursor) step(ctx context.Context, t *task, ans *answer, name string, 
 		}
 	}
 	r.Stats.CacheMisses.Add(1)
-
+ask:
 	resp, err := r.iterate(ctx, t, name, qtype)
 	if err != nil {
 		return "", false, err
@@ -135,14 +141,14 @@ func (r *Recursor) step(ctx context.Context, t *task, ans *answer, name string, 
 	added := false
 	for i := 0; i < maxCNAMEs; i++ {
 		if s := find(cur, qtype); s != nil {
-			cs := r.storeSet(s, resp.zone, proof, now)
+			cs := r.storeSet(s, resp.zone, proof, now, t.shared())
 			return "", true, r.addSet(ctx, t, ans, cs, now.Add(time.Duration(cs.orig)*time.Second), validate)
 		}
 		if qtype == m.TypeANY {
 			found := false
 			for _, s := range sets {
 				if s.name == cur {
-					cs := r.storeSet(s, resp.zone, proof, now)
+					cs := r.storeSet(s, resp.zone, proof, now, t.shared())
 					if err := r.addSet(ctx, t, ans, cs, now.Add(time.Duration(cs.orig)*time.Second), validate); err != nil {
 						return "", false, err
 					}
@@ -154,7 +160,7 @@ func (r *Recursor) step(ctx context.Context, t *task, ans *answer, name string, 
 			}
 		}
 		if dn := findDNAME(sets, cur); dn != nil && qtype != typeDNAME {
-			cs := r.storeSet(dn, resp.zone, nil, now)
+			cs := r.storeSet(dn, resp.zone, nil, now, t.shared())
 			if err := r.addSet(ctx, t, ans, cs, now.Add(time.Duration(cs.orig)*time.Second), validate); err != nil {
 				return "", false, err
 			}
@@ -172,7 +178,7 @@ func (r *Recursor) step(ctx context.Context, t *task, ans *answer, name string, 
 			continue
 		}
 		if s := find(cur, m.TypeCNAME); s != nil && qtype != m.TypeCNAME && len(s.data) == 1 {
-			cs := r.storeSet(s, resp.zone, proof, now)
+			cs := r.storeSet(s, resp.zone, proof, now, t.shared())
 			if err := r.addSet(ctx, t, ans, cs, now.Add(time.Duration(cs.orig)*time.Second), validate); err != nil {
 				return "", false, err
 			}
@@ -203,7 +209,7 @@ func (r *Recursor) step(ctx context.Context, t *task, ans *answer, name string, 
 		if ne.rcode == m.RcodeNXDomain {
 			k = tkey(name, 0)
 		}
-		if ne.soa != nil {
+		if ne.soa != nil && t.shared() {
 			r.negs.set(k, ne, exp)
 		}
 		return "", true, r.addNeg(ctx, t, ans, ne, exp, name, qtype, validate)
@@ -227,13 +233,14 @@ func (a *answer) lastSec() security {
 	return a.chain[len(a.chain)-1].sec
 }
 
-func (r *Recursor) storeSet(s *rrset, zone string, proof []*rrset, now time.Time) *cachedSet {
+// storeSet makes the cache entry for s, and keeps it when keep is set.
+func (r *Recursor) storeSet(s *rrset, zone string, proof []*rrset, now time.Time, keep bool) *cachedSet {
 	ttl := min(s.ttl, maxCacheTTL)
 	cs := &cachedSet{set: s, zone: zone, orig: ttl}
 	if wildcardExpanded(s) {
 		cs.proof = proof
 	}
-	if ttl > 0 {
+	if ttl > 0 && keep {
 		r.sets.set(tkey(s.name, s.typ), cs, now.Add(time.Duration(ttl)*time.Second))
 	}
 	return cs
@@ -278,6 +285,10 @@ func (r *Recursor) addNeg(ctx context.Context, t *task, ans *answer, ne *negEntr
 		if err != nil {
 			return err
 		}
+		// As in addSet: never keep the answer past its signatures (v.orig
+		// is capped by the SOA's and the proof's RRSIG expiry).
+		ttl := min(v.orig, uint32(max(exp.Sub(r.now())/time.Second, 0)))
+		exp = r.now().Add(time.Duration(ttl) * time.Second)
 		if v.sec == secBogus {
 			exp = r.now().Add(bogusTTL * time.Second)
 		}
@@ -285,7 +296,7 @@ func (r *Recursor) addNeg(ctx context.Context, t *task, ans *answer, ne *negEntr
 		if ne.rcode == m.RcodeNXDomain {
 			k = tkey(name, 0)
 		}
-		if ne.soa != nil || qtype == typeDS {
+		if (ne.soa != nil || qtype == typeDS) && exp.After(r.now()) {
 			r.negs.set(k, v, exp)
 		}
 		ne = v

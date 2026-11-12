@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"github.com/harryheros/dnsnova/internal/alert"
 	"log/slog"
 	"net"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/harryheros/dnsnova/internal/admin"
 	"github.com/harryheros/dnsnova/internal/config"
+	"github.com/harryheros/dnsnova/internal/cookie"
 	m "github.com/harryheros/dnsnova/internal/dnsmsg"
 	"github.com/harryheros/dnsnova/internal/events"
 	"github.com/harryheros/dnsnova/internal/filter"
@@ -70,8 +72,17 @@ type Server struct {
 	hash  string
 
 	applyMu sync.Mutex // serialises admin API writes
-	admin   *admin.Admin
-	adminL  *adminListener
+
+	cookieJar *cookie.Jar // DNS Cookies; nil until first turned on (set in Start, then under mu)
+
+	cl  clusterState // nothing runs here without a [cluster] role
+	any anycastState // nor here without [anycast] enabled
+	al  alertState   // checks and notifications, quiet without [alerts] enabled
+
+	checkMu      sync.Mutex
+	lastFindings []string // security self-check, as last logged
+	admin        *admin.Admin
+	adminL       *adminListener
 
 	// Certs provides the certificate for DoT, DoQ and DoH (set up by Start).
 	Certs *tlsmgr.Manager
@@ -129,6 +140,7 @@ func New(store *config.Store, log *slog.Logger) (*Server, error) {
 		jobs:        make(chan func()),
 	}
 	s.statusPage = admin.NewStatusPage(s)
+	s.al.engine, s.al.secrets = alert.NewEngine(s.Log, ""), &alert.Secrets{}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	return s, nil
 }
@@ -296,7 +308,7 @@ func (s *Server) buildState(c *config.Config) (*state, error) {
 
 // Start loads the configuration and opens every listener.
 func (s *Server) Start() error {
-	snap, err := s.Store.Load()
+	snap, err := s.loadSnapshot()
 	if err != nil {
 		return err
 	}
@@ -309,6 +321,8 @@ func (s *Server) Start() error {
 	}
 	s.Rec = recursor.New(recConfig(snap.Config), s.Log)
 	s.res = resolver.New(settingsFrom(snap.Config), s.exchanger(snap.Config, st), s.Stats)
+	s.applyCookies(snap.Config)
+	s.loadCache(snap.Config) // before any listener: the first queries already find it
 	s.applyRetention(snap.Config)
 	s.startFilter(snap.Config)
 	s.Certs = tlsmgr.NewManager(snap.Config.Server.DataDir, s.Log)
@@ -334,15 +348,23 @@ func (s *Server) Start() error {
 	go s.sweeper()
 	go s.Certs.Run(s.ctx)
 	go s.recordHistory()
+	go s.cacheSaver()
+	if err := s.startCluster(snap.Config); err != nil {
+		s.closeAllLocked()
+		return err
+	}
+	s.startAnycast()
+	s.startAlerts(snap.Config)
 	s.Log.Info("dnsnova started", "mode", snap.Config.Server.Mode, "recursion", snap.Config.Recursion.Enabled,
 		"upstreams", len(snap.Config.Upstream.Primary), "fallbacks", len(snap.Config.Upstream.Fallback))
+	s.selfCheck(snap.Config, true)
 	return nil
 }
 
 // Reload re-reads the configuration file and applies it. On any error the
 // running configuration stays in place.
 func (s *Server) Reload() error {
-	snap, err := s.Store.Load()
+	snap, err := s.loadSnapshot()
 	if err != nil {
 		return err
 	}
@@ -363,6 +385,9 @@ func (s *Server) Apply(snap *config.Snapshot) error {
 	if old := s.state.Load(); old != nil && old.cfg.Server.DataDir != snap.Config.Server.DataDir {
 		s.Log.Warn("server.data_dir changes take effect after a restart")
 	}
+	if old := s.state.Load(); old != nil && !clusterEqual(old.cfg.Cluster, snap.Config.Cluster) {
+		s.Log.Warn("[cluster] changes take effect after a restart")
+	}
 	if err := s.Certs.Configure(tlsSettings(snap.Config)); err != nil {
 		st.group.Close()
 		return err
@@ -376,10 +401,16 @@ func (s *Server) Apply(snap *config.Snapshot) error {
 	old := s.state.Swap(st)
 	s.snap.Store(snap)
 	s.res.SetSettings(settingsFrom(snap.Config))
+	s.applyCookies(snap.Config)
 	s.applyRetention(snap.Config)
 	s.Rec.SetConfig(recConfig(snap.Config))
 	s.res.SetUpstreams(s.exchanger(snap.Config, st))
 	s.Filter.Configure(filterSettings(snap.Config))
+	if !snap.Config.PersistCache() {
+		s.dropCacheFile(snap.Config)
+	}
+	s.applyAlerts(snap.Config)
+	s.noteReload(nil)
 	s.hash = snap.Hash
 	if old != nil {
 		go func() { // let in-flight queries on the old upstreams finish
@@ -388,6 +419,7 @@ func (s *Server) Apply(snap *config.Snapshot) error {
 		}()
 	}
 	s.Log.Info("configuration applied", "mode", snap.Config.Server.Mode)
+	s.selfCheck(snap.Config, false)
 	return nil
 }
 
@@ -732,13 +764,19 @@ func (s *Server) Addrs() (udp, tcp []string, doh, metrics string) {
 // Resolver exposes the resolver (for the admin API and tests).
 func (s *Server) Resolver() *resolver.Resolver { return s.res }
 
-// Shutdown closes every listener and waits for in-flight queries.
+// Shutdown closes every listener and waits for in-flight queries. With
+// anycast, the route is withdrawn first and traffic drains away.
 func (s *Server) Shutdown() {
+	s.anycastDrain()
 	s.cancel()
 	s.mu.Lock()
 	s.closeAllLocked()
 	s.mu.Unlock()
 	s.wg.Wait()
+	s.stopCluster()
+	if err := s.saveCache(); err != nil { // nothing answers any more: the cache is final
+		s.Log.Warn("cache not saved", "err", err)
+	}
 	if st := s.state.Load(); st != nil {
 		st.group.Close()
 	}
@@ -809,6 +847,7 @@ func (s *Server) WatchConfig(every time.Duration) {
 			if s.Store.Changed() {
 				if err := s.Reload(); err != nil {
 					s.Log.Error("configuration file changed but was not applied", "err", err)
+					s.noteReload(err)
 				}
 			}
 		}

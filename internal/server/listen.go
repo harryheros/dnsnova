@@ -1,13 +1,16 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"net/netip"
@@ -17,9 +20,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/harryheros/dnsnova/internal/cookie"
 	m "github.com/harryheros/dnsnova/internal/dnsmsg"
 	"github.com/harryheros/dnsnova/internal/guard"
 	"github.com/harryheros/dnsnova/internal/insight"
+	"github.com/harryheros/dnsnova/internal/proxyproto"
 	"github.com/harryheros/dnsnova/internal/resolver"
 	"github.com/harryheros/dnsnova/internal/stats"
 )
@@ -94,6 +99,10 @@ func (l *udpListener) close() {
 
 func (s *Server) serveUDP(l *udpListener, conn *net.UDPConn) {
 	defer l.wg.Done()
+	if bc := newBatchConn(conn); bc != nil {
+		s.serveUDPBatch(l, conn, bc)
+		return
+	}
 	buf := make([]byte, 65535)
 	for {
 		n, addr, err := conn.ReadFromUDPAddrPort(buf)
@@ -103,38 +112,61 @@ func (s *Server) serveUDP(l *udpListener, conn *net.UDPConn) {
 			}
 			continue
 		}
-		if n < m.HeaderLen {
-			continue
+		if resp := s.udpPacket(l, conn, buf[:n], addr); resp != nil {
+			conn.WriteToUDPAddrPort(resp, addr)
 		}
-		s.Stats.Queries[stats.UDP].Add(1)
-		st := s.state.Load()
-		ip := addr.Addr().Unmap()
-		if v := st.guard.Admit(ip); v != guard.Allow {
-			s.reject(v, ip) // never answer over UDP: that is what an attacker wants
-			continue
-		}
-		// Most queries are answered from the cache: do that right here, and
-		// start a goroutine only for those that must wait for an upstream.
-		start := time.Now()
-		filtered := st.filterPlain(l.key)
-		if res, ok := s.resolveCached(buf[:n], true, "udp", filtered); ok {
-			s.answerUDP(conn, st, ip, addr, buf[:n], res, start)
-			continue
-		}
-		select {
-		case s.udpInflight <- struct{}{}:
-		default:
-			s.Stats.Rejected[stats.RejectOverload].Add(1)
-			continue
-		}
-		pkt := make([]byte, n)
-		copy(pkt, buf[:n])
-		s.wg.Add(1)
-		s.dispatch(func() {
-			defer func() { <-s.udpInflight; s.wg.Done() }()
-			s.answerUDP(conn, st, ip, addr, pkt, s.resolve(pkt, true, "udp", filtered), start)
-		})
 	}
+}
+
+// udpPacket handles one datagram and returns the answer to send now, or
+// nil: none (refused, rate limited, malformed), or one that a goroutine
+// sends later, when an upstream had to be asked.
+func (s *Server) udpPacket(l *udpListener, conn *net.UDPConn, payload []byte, addr netip.AddrPort) []byte {
+	if len(payload) < m.HeaderLen {
+		return nil
+	}
+	s.Stats.Queries[stats.UDP].Add(1)
+	st := s.state.Load()
+	ip := addr.Addr().Unmap()
+	if guard.ACL(st.cfg.Server.ProxyProtocol).Contains(ip) {
+		// from a load balancer: a PROXY v2 header gives the client;
+		// the answer goes back to the balancer, without a header
+		h, hn, err := proxyproto.ParseV2(payload)
+		if err != nil || len(payload)-hn < m.HeaderLen {
+			s.Stats.Rejected[stats.RejectMalformed].Add(1)
+			return nil
+		}
+		if !h.Local {
+			ip = h.Source.Addr().Unmap()
+		}
+		payload = payload[hn:]
+	}
+	if v := st.guard.Admit(ip); v != guard.Allow {
+		s.reject(v, ip) // never answer over UDP: that is what an attacker wants
+		return nil
+	}
+	// Most queries are answered from the cache: do that right here, and
+	// start a goroutine only for those that must wait for an upstream.
+	start := time.Now()
+	filtered := st.filterPlain(l.key)
+	if res, ok := s.resolveCached(payload, ip, true, "udp", filtered); ok {
+		return s.udpAnswer(st, ip, payload, res, start)
+	}
+	select {
+	case s.udpInflight <- struct{}{}:
+	default:
+		s.Stats.Rejected[stats.RejectOverload].Add(1)
+		return nil
+	}
+	pkt := bytes.Clone(payload)
+	s.wg.Add(1)
+	s.dispatch(func() {
+		defer func() { <-s.udpInflight; s.wg.Done() }()
+		if resp := s.udpAnswer(st, ip, pkt, s.resolve(pkt, ip, true, "udp", filtered), start); resp != nil {
+			conn.WriteToUDPAddrPort(resp, addr)
+		}
+	})
+	return nil
 }
 
 // dispatch runs job on an idle worker, or a new one. Workers stay for a
@@ -167,24 +199,41 @@ func (s *Server) worker(job func()) {
 
 const workerIdle = 20 * time.Second
 
-// answerUDP applies response rate limiting and sends one UDP answer.
-func (s *Server) answerUDP(conn *net.UDPConn, st *state, ip netip.Addr, addr netip.AddrPort, pkt []byte, res resolver.Result, start time.Time) {
+// udpAnswer applies response rate limiting to one UDP answer and returns
+// what to send (nil: nothing).
+//
+// RRL exists because a UDP source address can be forged, to aim answers at
+// a victim. A client that returned a valid DNS Cookie (RFC 7873) has shown
+// it receives answers at its address, so it is not limited this way. When
+// RRL slips, a client that sent a cookie gets BADCOOKIE with a fresh server
+// cookie instead of a truncated answer: it asks again over UDP with the
+// cookie, which then passes, rather than falling back to TCP.
+func (s *Server) udpAnswer(st *state, ip netip.Addr, pkt []byte, res resolver.Result, start time.Time) []byte {
 	if res.Resp == nil {
-		return
+		return nil
 	}
 	resp := res.Resp
-	switch st.guard.RRL.Check(ip, res.Q.Name, res.Q.Type, m.Rcode(resp)) {
+	verdict := guard.Send
+	if res.Cookie != cookie.Good {
+		verdict = st.guard.RRL.Check(ip, res.Q.Name, res.Q.Type, m.Rcode(resp))
+	}
+	switch verdict {
 	case guard.Drop:
 		s.Stats.Rejected[stats.RejectRRLDrop].Add(1)
 		s.Limited.Add(insight.NetworkOf(ip).String(), ip)
-		return
+		return nil
 	case guard.Slip:
 		s.Stats.Rejected[stats.RejectRRLSlip].Add(1)
 		s.Limited.Add(insight.NetworkOf(ip).String(), ip)
-		resp = m.Truncated(pkt, res.Q, m.Rcode(resp))
+		if res.CookieOpt != nil {
+			s.Stats.BadCookies.Add(1)
+			resp = m.AddOptions(m.ErrorResponse(pkt, res.Q, m.RcodeBadCookie), res.CookieOpt)
+		} else {
+			resp = m.Truncated(pkt, res.Q, m.Rcode(resp))
+		}
 	}
 	s.logQuery(st, ip, "udp", res, start) // before sending: a client may read the log as soon as it has its answer
-	conn.WriteToUDPAddrPort(resp, addr)
+	return resp
 }
 
 func (s *Server) reject(v guard.Verdict, ip netip.Addr) {
@@ -239,10 +288,11 @@ type tcpListener struct {
 // listenTCP serves length-prefixed DNS over TCP, or over TLS (DoT) when
 // tlsConf is set.
 func (s *Server) listenTCP(addr string, tlsConf *tls.Config, proto int, name string) (*tcpListener, error) {
-	ln, err := net.Listen("tcp", addr)
+	raw, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
+	var ln net.Listener = s.proxyListener(raw) // before TLS: the header comes first
 	if tlsConf != nil {
 		ln = tls.NewListener(ln, tlsConf)
 	}
@@ -358,7 +408,7 @@ func (s *Server) serveTCPConn(c net.Conn, ip netip.Addr, key string, proto, pipe
 		go func() {
 			defer func() { <-inflight; wg.Done() }()
 			start := time.Now()
-			res := s.resolve(msg, false, name, filtered(st))
+			res := s.resolve(msg, ip, false, name, filtered(st))
 			if res.Resp != nil {
 				s.logQuery(st, ip, name, res, start)
 				writeTCP(c, &wmu, res.Resp)
@@ -403,6 +453,9 @@ func (s *Server) serveHTTP(ln net.Listener, addr, path string, h http.Handler, t
 		h = s.dohMux(path, h)
 		// DoH connections count like TCP and DoT ones; directly from
 		// clients (HTTPS), the per-client limit applies too.
+		if tlsConf != nil {
+			ln = s.proxyListener(ln) // DoH over HTTPS: the header comes before TLS
+		}
 		ln = admitListener{Listener: ln, s: s, direct: tlsConf != nil}
 	}
 	srv := &http.Server{
@@ -499,11 +552,18 @@ func (s *Server) handleDoH(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case http.MethodPost:
-		if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/dns-message") {
+		if mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mt != "application/dns-message" {
 			http.Error(w, "unsupported content type", http.StatusUnsupportedMediaType)
 			return
 		}
-		if msg, err = io.ReadAll(io.LimitReader(r.Body, 65535)); err != nil {
+		// A DNS message is at most 65535 bytes: refuse a longer body rather
+		// than answering a cut-off copy of it.
+		if msg, err = io.ReadAll(http.MaxBytesReader(w, r.Body, 65535)); err != nil {
+			var tooLong *http.MaxBytesError
+			if errors.As(err, &tooLong) {
+				http.Error(w, "message too long", http.StatusRequestEntityTooLarge)
+				return
+			}
 			http.Error(w, "read error", http.StatusBadRequest)
 			return
 		}
@@ -534,12 +594,16 @@ func (s *Server) handleDoH(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "too many requests", http.StatusTooManyRequests)
 		return
 	}
+	if p := st.cfg.ECS.ClientPath; p != "" && r.URL.Path == p && st.cfg.Recursion.Enabled {
+		s.handleSubnetDoH(w, r, msg, st.cfg)
+		return
+	}
 	start := time.Now()
 	sni := ""
 	if r.TLS != nil {
 		sni = r.TLS.ServerName
 	}
-	res := s.resolve(msg, false, name, st.filterDoH(r.URL.Path, r.Host, sni))
+	res := s.resolve(msg, ip, false, name, st.filterDoH(r.URL.Path, r.Host, sni))
 	if res.Resp == nil {
 		http.Error(w, "malformed dns message", http.StatusBadRequest)
 		return
@@ -560,6 +624,13 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	fmt.Fprintf(w, "# TYPE dnsnova_tcp_connections gauge\ndnsnova_tcp_connections %d\n", s.tcpConns.Load())
 	fmt.Fprintf(w, "# TYPE dnsnova_quic_connections gauge\ndnsnova_quic_connections %d\n", s.quicConns.Load())
 	st := s.state.Load()
+	if st.cfg.Anycast.Enabled {
+		announced := 0
+		if s.anycastState() == anycastAnnounced {
+			announced = 1
+		}
+		fmt.Fprintf(w, "# HELP dnsnova_anycast_announced 1 while this node announces its anycast route.\n# TYPE dnsnova_anycast_announced gauge\ndnsnova_anycast_announced %d\n", announced)
+	}
 	fmt.Fprintf(w, "# TYPE dnsnova_upstream_queries_total counter\n")
 	for _, u := range st.group.Members() {
 		fmt.Fprintf(w, "dnsnova_upstream_queries_total{upstream=%q,role=%q} %d\n", u.U.String(), role(u.Fallback), u.Queries())
@@ -593,34 +664,57 @@ func role(fallback bool) string {
 // handleHealth answers 200 when at least one upstream is healthy, 503
 // otherwise, for monitors such as Uptime Kuma. Upstream addresses are not
 // included, so the endpoint is safe to expose.
-func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
+// health sums the server up: "ok", "unhealthy" (it cannot resolve: no
+// upstream answers, and recursion is off or failing too) or "setup" (a
+// fresh install, not serving DNS yet). /healthz, a cluster's Nodes page and
+// the anycast check all use it.
+func (s *Server) health() (status string, ok bool) {
+	status, _, _, ok = s.healthDetail()
+	return status, ok
+}
+
+func (s *Server) healthDetail() (status string, healthy, total int, ok bool) {
 	st := s.state.Load()
-	healthy, total := 0, 0
+	if st == nil {
+		return "unhealthy", 0, 0, false
+	}
 	for _, u := range st.group.Members() {
 		total++
 		if u.Healthy() {
 			healthy++
 		}
 	}
-	status, code := "ok", http.StatusOK
 	recursion := st.cfg.Recursion.Enabled
 	switch {
 	case total == 0 && !recursion && !st.cfg.ServesDNS():
-		status = "setup" // a fresh install: only the web interface runs
+		return "setup", healthy, total, true // a fresh install: only the web interface runs
 	case recursion && (s.Rec.Healthy() || healthy > 0):
-	case recursion:
-		status, code = "unhealthy", http.StatusServiceUnavailable
-	case healthy == 0:
-		status, code = "unhealthy", http.StatusServiceUnavailable
+	case recursion, healthy == 0:
+		return "unhealthy", healthy, total, false
 	}
+	return "ok", healthy, total, true
+}
+
+func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
+	st := s.state.Load()
+	status, healthy, total, ok := s.healthDetail()
+	code := http.StatusOK
+	if !ok {
+		code = http.StatusServiceUnavailable
+	}
+	recursion := st.cfg.Recursion.Enabled
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(map[string]any{
+	out := map[string]any{
 		"status":            status,
 		"upstreams_healthy": healthy,
 		"upstreams_total":   total,
 		"recursion":         recursion,
 		"uptime_seconds":    int(time.Since(s.Stats.Started).Seconds()),
-	})
+	}
+	if st.cfg.Anycast.Enabled {
+		out["anycast"] = s.anycastState()
+	}
+	json.NewEncoder(w).Encode(out)
 }

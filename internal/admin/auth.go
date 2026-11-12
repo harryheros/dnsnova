@@ -160,26 +160,18 @@ func (s *secrets) clearSetupCode() {
 // trustLocalSetup is off in tests that check the setup code itself.
 var trustLocalSetup = true
 
-// setupTrusted reports whether ip may create the administrator without the
-// setup code: the server itself, a private network (the usual home or
-// office install), or an address the installer was run from over SSH
-// (listed in setup-trust). Anyone else on the internet needs the code, so a
-// scanner that finds a fresh install first cannot take it over.
+// setupTrusted reports whether ip is the server itself (loopback, which
+// includes an SSH tunnel). See Admin.trusted for the home or office case.
 func (s *secrets) setupTrusted(ip netip.Addr) bool {
-	ip = ip.Unmap()
-	if trustLocalSetup && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()) {
-		return true
-	}
-	b, err := os.ReadFile(filepath.Join(s.dir, "setup-trust"))
-	if err != nil {
-		return false
-	}
-	for _, line := range strings.Fields(string(b)) {
-		if a, err := netip.ParseAddr(line); err == nil && a.Unmap() == ip {
-			return true
-		}
-	}
-	return false
+	return trustLocalSetup && ip.Unmap().IsLoopback()
+}
+
+// dropLegacyTrust removes setup-trust, which installers before 1.3 wrote
+// with the SSH client's address so that setup from there needed no code.
+// That address may be shared by many people (NAT), so it is no longer
+// honoured; reports whether a file was removed.
+func (s *secrets) dropLegacyTrust() bool {
+	return os.Remove(filepath.Join(s.dir, "setup-trust")) == nil
 }
 
 // writeSecret writes a 0600 file atomically.
@@ -504,4 +496,11 @@ func (l *lockout) succeed(ip netip.Addr) {
 	l.mu.Lock()
 	delete(l.m, lockKey(ip))
 	l.mu.Unlock()
+}
+
+// AccountState reports whether the administrator exists and whether it
+// has two-step verification, for the security self-check.
+func (a *Admin) AccountState() (exists, totp bool) {
+	acc := a.sec.account()
+	return acc != nil, acc != nil && acc.TOTP != ""
 }

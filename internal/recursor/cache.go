@@ -2,6 +2,7 @@ package recursor
 
 import (
 	"context"
+	"errors"
 	"hash/maphash"
 	"math/rand/v2"
 	"net/netip"
@@ -191,6 +192,14 @@ type server struct {
 	noEDNS   time.Time     // answers only without EDNS until then
 	lame     map[string]time.Time
 	lastUsed time.Time
+	// DNS Cookies (RFC 7873): the server cookie it gave, how many valid
+	// cookies in a row, and until when not to send one (it chokes on the
+	// option) or not to insist on one (it answers without one at times).
+	ccookie    []byte // the client cookie for it, made once
+	scookie    []byte
+	cookieRun  int
+	noCookie   time.Time
+	looseUntil time.Time
 }
 
 type infra struct {
@@ -317,6 +326,58 @@ func (in *infra) useEDNS(a netip.Addr, now time.Time) bool {
 	return !now.Before(in.get(a).noEDNS)
 }
 
+// cookieFor returns the client and server cookies to send to a, and
+// whether a COOKIE option may be sent at all. make makes the client cookie
+// the first time.
+func (in *infra) cookieFor(a netip.Addr, now time.Time, make func(netip.Addr) []byte) (cc, sc []byte, ok bool) {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	s := in.get(a)
+	if s.ccookie == nil {
+		s.ccookie = make(a)
+	}
+	return s.ccookie, s.scookie, !now.Before(s.noCookie)
+}
+
+// cookieGood records a valid server cookie from a.
+func (in *infra) cookieGood(a netip.Addr, sc []byte) {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	s := in.get(a)
+	if len(sc) >= 8 && len(sc) <= 32 {
+		s.scookie = append(s.scookie[:0], sc...)
+	}
+	s.cookieRun++
+}
+
+// cookieExpected reports whether a always sends cookies, so that a UDP
+// answer without one is suspect: three valid ones in a row, and no
+// genuine (TCP) answer without one lately.
+func (in *infra) cookieExpected(a netip.Addr, now time.Time) bool {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	s := in.get(a)
+	return s.cookieRun >= cookieTrust && !now.Before(s.looseUntil)
+}
+
+// cookieLoose: a answered over TCP, genuinely, without a cookie (anycast
+// instances that differ): stop insisting for a while.
+func (in *infra) cookieLoose(a netip.Addr, now time.Time) {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	s := in.get(a)
+	s.cookieRun, s.looseUntil = 0, now.Add(time.Hour)
+}
+
+func (in *infra) setNoCookie(a netip.Addr, now time.Time) {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	s := in.get(a)
+	s.noCookie, s.cookieRun, s.scookie = now.Add(time.Hour), 0, nil
+}
+
+const cookieTrust = 3
+
 func (in *infra) size() int {
 	in.mu.Lock()
 	defer in.mu.Unlock()
@@ -331,6 +392,8 @@ type flights struct {
 	mu sync.Mutex
 	m  map[string]*flight
 }
+
+var errFlightPanic = errors.New("lookup failed unexpectedly")
 
 type flight struct {
 	done chan struct{}
@@ -352,7 +415,7 @@ func (f *flights) do(ctx context.Context, key string, fn func() (any, error)) (a
 			return nil, ctx.Err()
 		}
 	}
-	c := &flight{done: make(chan struct{})}
+	c := &flight{done: make(chan struct{}), err: errFlightPanic} // replaced by fn's result unless it panics
 	f.m[key] = c
 	f.mu.Unlock()
 	defer func() {

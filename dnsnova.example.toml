@@ -17,6 +17,21 @@ listen = ["203.0.113.10:53", "[2001:db8::10]:53"]
 # Certificates, the ACME account and other state.
 data_dir = "/var/lib/dnsnova"
 
+# DNS Cookies (RFC 7873, with the server cookie of RFC 9018 that BIND, Knot
+# and Unbound share): a client that sends its cookie back has shown its
+# address is not forged, so response rate limiting leaves it alone. The
+# secret is in data_dir/secrets/cookie-secret; copy that file to every node
+# behind one anycast address so they accept each other's cookies.
+cookies = true
+
+# Load balancers in front of this server (HAProxy, dnsdist, a cloud network
+# load balancer) that send the PROXY protocol header, so the server sees each
+# client's address instead of the balancer's: version 1 or 2 on TCP, DoT and
+# DoH over HTTPS, version 2 on UDP (as dnsdist sends it). From these
+# addresses the header is required; from anyone else it is never read.
+# DoQ and HTTP/3 have no PROXY protocol.
+proxy_protocol = []     # e.g. ["10.0.0.5/32"]
+
 [dot]
 # DNS over TLS (TCP). Needs a certificate (see [tls]).
 listen = ["203.0.113.10:853", "[2001:db8::10]:853"]
@@ -113,6 +128,17 @@ fallback = true
 # with your own name servers here, e.g. ["10.0.0.0/8"]. This also opens
 # 127.0.0.0/8 and link-local addresses when listed, nothing else.
 # allow_networks = []
+# Negative trust anchors (RFC 7646): domains whose answers are passed on
+# without the DNSSEC check, for a domain whose owner broke its DNSSEC (the
+# DNSSEC page of the web interface lists names that fail, and adds them
+# here). Remove each once it validates again: meanwhile a forged answer for
+# it would get through too.
+# negative_trust_anchors = ["broken.example"]
+# DNS Cookies with name servers (RFC 7873): each question carries a cookie
+# made for that server; an answer with the wrong one, or without one from a
+# server that always sends it, is forged, and the question goes again over
+# TCP. Servers that cannot take the option are asked without it.
+cookies = true
 
 [cache]
 size = 100000           # entries, about 1 to 2 KB each; 0 disables the answer
@@ -122,6 +148,12 @@ max_ttl = "24h"
 max_negative_ttl = "1h" # NXDOMAIN and "no records"
 serve_stale = "24h"     # answer from an expired entry while refreshing it
 prefetch = true         # refresh popular entries before they expire
+persist = "auto"        # keep answers across restarts in data_dir/cache.bin (saved
+                        # every 10 minutes and on shutdown): "on", "off", or "auto"
+                        # = on in public mode, off in private mode. The file shows
+                        # which names were looked up (never by whom), which with a
+                        # few users, as at home, is close to their browsing; it is
+                        # deleted whenever this is off
 
 [access]
 # Private mode only.
@@ -146,6 +178,13 @@ records = [
 # upstreams, they must support it too. Changing it clears the cache.
 # Empty: off.
 address = ""
+# For measurement tools (DomainNova, for one): a secret DNS over HTTPS path
+# on which each query's own client subnet is sent to the domains' name
+# servers, so the tool sees how names resolve for that network. Those
+# answers come straight from resolving, never from or into the cache, and
+# reach no other client. Needs recursion. Keep the path secret; anyone with
+# it can make this server ask name servers on any network's behalf.
+# client_path = "/ecs-<24 or more random letters and digits>"
 
 [stats]
 # How far back the overview goes: "24h", "7d" or "30d". In memory only.
@@ -183,10 +222,13 @@ listen = "127.0.0.1:9153"
 [admin]
 # The web interface and its API (docs/api.md). Leave it on 127.0.0.1 and
 # reach it through an SSH tunnel (ssh -L 7000:127.0.0.1:7000 you@server),
-# or listen on ":7000" to reach it
-# from anywhere, protected by a password, login lockout and optional
-# two-step verification. It uses HTTPS on the same port once a certificate
-# exists. Leave empty to turn it off.
+# or listen on ":7000" to reach it from other machines too, protected by a
+# password, login lockout and optional two-step verification. Other machines
+# get it over HTTPS on the same port once a certificate exists. Plain HTTP
+# is answered on this server (or for a reverse proxy here that sends
+# X-Forwarded-Proto: https) and, in private mode, to the private networks in
+# access.allow: a home or office network opens it directly. Leave empty to
+# turn it off.
 listen = "127.0.0.1:7000"
 
 [status]
@@ -219,3 +261,45 @@ enabled = false
 # addresses to disk; for troubleshooting, start the query log in the admin
 # interface: it is kept in memory, hides the last part of client addresses
 # unless asked not to, and stops by itself.
+
+[cluster]
+# Several servers sharing one configuration: see docs/cluster.md. Without a
+# role this server stands alone. Changed only in this file (not in the web
+# interface); takes effect after a restart.
+# role = "primary"            # or "follower"
+# name = "ams-1"              # default: the host name
+# region = "Amsterdam"
+# listen = "10.0.0.1:7001"    # primary: where followers reach it
+# primary = "10.0.0.1:7001"   # follower: the primary
+# interval = "10s"            # follower: how often it syncs
+
+[anycast]
+# Announce or withdraw this server's anycast route as its health changes,
+# with your own commands (no shell; see docs/cluster.md). Only in this file.
+enabled = false
+# announce = ["birdc", "enable", "anycast"]
+# withdraw = ["birdc", "disable", "anycast"]
+# interval = "2s"
+# rise = 3                    # good checks in a row before announcing
+# fall = 3                    # failed checks in a row before withdrawing
+# drain = "5s"                # at shutdown: withdraw, then keep answering this long
+
+[alerts]
+# Notifications when something is wrong, and when it is fixed, to Telegram,
+# Discord, Slack or a JSON webhook (see docs/alerts.md). Where they go is set
+# in the web interface (Settings > Alerts) and kept in
+# data_dir/secrets/alerts.json, not here. A threshold of 0 turns its check off.
+enabled = false
+# repeat = "4h"                  # remind while a problem lasts (0s: once)
+# nodes = true                   # cluster primary: also notify about the followers
+# upstream_down_for = "30s"      # every upstream failing (critical)
+# upstream_failing_for = "5m"    # one upstream failing half its queries
+# servfail_ratio = 0.05          # SERVFAIL share over five minutes, DNSSEC aside
+# servfail_min_queries = 500
+# servfail_for = "5m"
+# latency_p95 = "500ms"          # queries not in the cache, over five minutes
+# latency_min_queries = 100
+# latency_for = "5m"
+# dnssec_failures = 100          # answers refused for DNSSEC in five minutes
+# cert_warn_days = 14
+# cert_critical_days = 3

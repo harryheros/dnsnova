@@ -3,6 +3,7 @@ package recursor
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -44,6 +45,13 @@ type Config struct {
 	// that network. It is one fixed network for everyone: the cache holds
 	// that one view, and is cleared when it changes.
 	ECS []byte
+	// NTAs are negative trust anchors (RFC 7646): domains (wire format,
+	// lowercase) whose answers are not validated, for a domain whose
+	// DNSSEC is known to be broken.
+	NTAs []string
+	// Cookies sends DNS Cookies (RFC 7873) to authoritative servers and
+	// checks the ones they return.
+	Cookies bool
 }
 
 // Stats are counters for monitoring.
@@ -59,6 +67,10 @@ type Stats struct {
 	BudgetReached atomic.Int64
 	Aggressive    atomic.Int64 // answered from validated NSEC records (RFC 8198)
 	Spoofed       atomic.Int64 // UDP queries that drew forged answers and went to TCP
+	// UDP answers whose DNS Cookie gave them away (asked again over TCP):
+	// another client cookie, or none from a server that always sends one
+	CookieMismatch atomic.Int64
+	CookieMissing  atomic.Int64
 }
 
 // Recursor is safe for concurrent use.
@@ -74,16 +86,20 @@ type Recursor struct {
 	fl      flights
 	// netMu orders a change of the client subnet against resolutions (see
 	// SetConfig): nothing learnt for the old network is cached after it.
-	netMu   sync.RWMutex
-	Stats   Stats
-	log     *slog.Logger
-	now     func() time.Time
-	port    uint16 // 53; tests use another
-	socks   sockPool
-	nsecs   nsecIndex
-	v6down  atomic.Int64
-	v6ok    atomic.Int64 // unix nanos of the last answer over IPv6
-	v6fails atomic.Int64 // IPv6 timeouts in a row
+	netMu sync.RWMutex
+	Stats Stats
+	log   *slog.Logger
+	now   func() time.Time
+	port  uint16 // 53; tests use another
+	socks sockPool
+	nsecs nsecIndex
+
+	failures failureLog // names that failed validation, for the admin
+
+	cookieKey [32]byte // makes the client cookies (RFC 7873)
+	v6down    atomic.Int64
+	v6ok      atomic.Int64 // unix nanos of the last answer over IPv6
+	v6fails   atomic.Int64 // IPv6 timeouts in a row
 	// hostV6 reports whether this machine has an IPv6 address that can
 	// reach the internet; checked at most once a minute (v6Checked)
 	hostV6    func() bool
@@ -148,6 +164,7 @@ func New(c Config, log *slog.Logger) *Recursor {
 		port:   53,
 		hostV6: hasGlobalIPv6,
 	}
+	rand.Read(r.cookieKey[:])
 	r.send = r.exchange
 	r.SetConfig(c)
 	return r
@@ -192,7 +209,7 @@ func (r *Recursor) SetConfig(c Config) {
 		r.cfg.Store(&c)
 	}
 	r.anchors.Store(ds)
-	if old != nil && (old.DNSSEC != c.DNSSEC || fmt.Sprint(old.TrustAnchors) != fmt.Sprint(c.TrustAnchors) ||
+	if old != nil && (old.DNSSEC != c.DNSSEC || fmt.Sprint(old.TrustAnchors) != fmt.Sprint(c.TrustAnchors) || fmt.Sprint(old.NTAs) != fmt.Sprint(c.NTAs) ||
 		fmt.Sprint(old.RootHints) != fmt.Sprint(c.RootHints)) {
 		r.ClearCache()
 	}
@@ -256,7 +273,21 @@ type task struct {
 	sigBudget int // signature checks that may still be made
 	depth     int
 	stack     map[string]bool
+	// a trace (Trace) records each step, reads nothing from the cache
+	// (fresh) and joins no other lookup in flight
+	trace *tracer
+	fresh bool
+	// private: the answer is for one client's network (ExchangeSubnet):
+	// the client's own names neither come from nor go into the shared
+	// cache (shared reports which lookups may use it)
+	private bool
 }
+
+// shared reports whether this lookup may read and fill the shared cache:
+// always, except for the names of a private task's own answer (depth 1).
+// Lookups made on the way (name server addresses, DS, DNSKEY) are not
+// specific to a network and are shared as usual.
+func (t *task) shared() bool { return !t.private || t.depth > 1 }
 
 const (
 	maxQueriesPerTask = 150
@@ -272,6 +303,23 @@ func newTask() *task {
 // Exchange implements resolver.Exchanger: msg is a query (RD set, CD and DO
 // as the client asked) and the response is built from the recursion.
 func (r *Recursor) Exchange(ctx context.Context, msg []byte) ([]byte, error) {
+	return r.answerQuery(ctx, msg, false)
+}
+
+// subnetKey carries an EDNS Client Subnet option for one lookup.
+type subnetKey struct{}
+
+// ExchangeSubnet answers msg as Exchange does, but for the network in ecs
+// (an EDNS Client Subnet option, dnsmsg.ClientSubnet): name servers are
+// asked for that network instead of Config.ECS, and the answer is neither
+// taken from nor kept in the shared cache, so no other client ever gets
+// it. It is for tools that measure how names resolve from a given network
+// (server ecs.client_path).
+func (r *Recursor) ExchangeSubnet(ctx context.Context, msg, ecs []byte) ([]byte, error) {
+	return r.answerQuery(context.WithValue(ctx, subnetKey{}, ecs), msg, true)
+}
+
+func (r *Recursor) answerQuery(ctx context.Context, msg []byte, private bool) ([]byte, error) {
 	q, rcode, err := m.ParseQuery(msg)
 	if err != nil {
 		return nil, err
@@ -295,6 +343,7 @@ func (r *Recursor) Exchange(ctx context.Context, msg []byte) ([]byte, error) {
 	// respond.
 	validate := cfg.DNSSEC && q.Flags&m.FlagCD == 0
 	t := newTask()
+	t.private = private
 	ans, err := r.resolve(ctx, t, q.Name, q.Type, cfg.DNSSEC)
 	if err != nil {
 		if errors.Is(err, errBudget) {
@@ -330,6 +379,9 @@ func (r *Recursor) respond(q *m.Query, flags uint16, ans *answer, validate bool)
 	var ede []byte
 	if ans.ede != 0 || ans.sec == secBogus {
 		ede = m.EDE(ans.ede, ans.why)
+	}
+	if ans.sec == secBogus {
+		r.failures.add(q.Name, q.Type, ans.ede, ans.why, now)
 	}
 	if ans.sec == secBogus && validate {
 		return buildMessage(q.ID, flags|m.RcodeServFail, q.Name, q.Type, nil, nil, nil, true, q.DO, ede)

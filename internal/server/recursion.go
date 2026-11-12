@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/harryheros/dnsnova/internal/admin"
 	"github.com/harryheros/dnsnova/internal/config"
+	m "github.com/harryheros/dnsnova/internal/dnsmsg"
 	"github.com/harryheros/dnsnova/internal/recursor"
 	"github.com/harryheros/dnsnova/internal/resolver"
 )
@@ -50,7 +52,21 @@ func recConfig(c *config.Config) recursor.Config {
 		TrustAnchors:      r.TrustAnchors,
 		CacheSize:         c.Cache.Size,
 		ECS:               ecsOption(c),
+		NTAs:              ntaNames(r.NegativeTrustAnchors),
+		Cookies:           r.Cookies,
 	}
+}
+
+// ntaNames turns domains into the wire names the recursor compares.
+func ntaNames(list []string) []string {
+	var out []string
+	for _, d := range list {
+		d = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(d), "."))
+		if d != "" {
+			out = append(out, m.WireName(strings.Split(d, ".")...))
+		}
+	}
+	return out
 }
 
 // exchanger returns what the resolver asks: the recursor or the upstreams.
@@ -85,6 +101,9 @@ func (s *Server) writeRecursionMetrics(w io.Writer) {
 	fmt.Fprintf(w, "# TYPE dnsnova_recursion_queries_total counter\ndnsnova_recursion_queries_total %d\n", r.Stats.Queries.Load())
 	fmt.Fprintf(w, "# TYPE dnsnova_recursion_timeouts_total counter\ndnsnova_recursion_timeouts_total %d\n", r.Stats.Timeouts.Load())
 	fmt.Fprintf(w, "# TYPE dnsnova_recursion_fallbacks_total counter\ndnsnova_recursion_fallbacks_total %d\n", s.recFallbacks.Load())
+	fmt.Fprintf(w, "# HELP dnsnova_recursion_cookie_rejected_total UDP answers from name servers whose DNS Cookie gave them away as forged (asked again over TCP).\n# TYPE dnsnova_recursion_cookie_rejected_total counter\n")
+	fmt.Fprintf(w, "dnsnova_recursion_cookie_rejected_total{reason=\"mismatch\"} %d\n", r.Stats.CookieMismatch.Load())
+	fmt.Fprintf(w, "dnsnova_recursion_cookie_rejected_total{reason=\"missing\"} %d\n", r.Stats.CookieMissing.Load())
 	fmt.Fprintf(w, "# TYPE dnsnova_recursion_spoofed_total counter\ndnsnova_recursion_spoofed_total %d\n", r.Stats.Spoofed.Load())
 	fmt.Fprintf(w, "# TYPE dnsnova_dnssec_answers_total counter\n")
 	fmt.Fprintf(w, "dnsnova_dnssec_answers_total{result=\"secure\"} %d\n", r.Stats.Secure.Load())

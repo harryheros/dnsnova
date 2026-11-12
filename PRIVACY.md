@@ -7,7 +7,12 @@ responsible for telling them how you run it.
 ## What DNSNova never does
 
 - It never writes queries or client addresses to disk. Everything about
-  queries is held in memory and is gone after a restart.
+  queries is held in memory and is gone after a restart. The one exception
+  is the answer cache of a public server: it is saved (names and their
+  records, never who asked or when) so it survives a restart. With many
+  users, a cached name says nothing about any one of them. A server for a
+  home or office network (private mode), where it would, does not save it.
+  `cache.persist` changes either; see the table below.
 - It sends no telemetry, usage statistics or crash reports, to anyone.
 - It does not forward client IP addresses to upstream resolvers. Upstreams
   see your server's address only. EDNS Client Subnet is off by default; if
@@ -23,11 +28,14 @@ responsible for telling them how you run it.
 | Data | Where | How long |
 | --- | --- | --- |
 | Cached DNS answers | Memory | Their TTL, plus up to `cache.serve_stale` |
+| The same answers, in public mode or with `cache.persist = "on"` (names and records; no client addresses, no times of queries) | `/var/lib/dnsnova/cache.bin`, mode 0600, saved every 10 minutes and on shutdown | Replaced at each save; answers past their TTL plus `cache.serve_stale` are left out. Deleted when saving is off (private mode, or `cache.persist = "off"`) and when the cache is cleared |
+| DNS Cookie secret (makes server cookies; no client data) | `/var/lib/dnsnova/secrets/cookie-secret`, mode 0600 | Until you delete it (a new one is then made) |
 | Counters and response-time histograms | Memory | Until the process stops |
 | Rate-limit state (per client address or network) | Memory | About a minute after the last query |
 | Configuration and its previous versions | `/etc/dnsnova/` | Until you delete them (10 versions are kept) |
 | Statistics history for the admin charts (totals and response times, no addresses or names) | Memory | Up to 7 days; lost on restart |
 | Most queried domains and domains that do not exist (domain and count only; see below) | Memory | Up to 7 days; lost on restart |
+| Names whose answers failed DNSSEC validation (name, type, reason, count, first and last time; no client data) | Memory | The 200 most recent; lost on restart or when cleared on the DNSSEC page |
 | Networks that hit the rate limits (IPv4 /24, IPv6 /48, and a count) | Memory | 24 hours; lost on restart |
 | Status page check names (random token and protocol, no address) | Memory | 5 minutes |
 | Query log, only while an administrator runs it (see below) | Memory | At most 10,000 queries; deleted an hour after it stops |
@@ -97,3 +105,13 @@ file, but does nothing and produces a warning.
 The `/metrics` and `/healthz` endpoints expose counts and timings only:
 no client addresses and no query names. `/metrics` names the upstream
 servers you configured, so keep it on a private address.
+
+## Alerts
+
+Alerts are off unless you turn them on, and go only to the destinations you
+set up (docs/alerts.md). They describe the server: upstreams, error rates,
+response times, the certificate, configuration errors. They carry no client
+addresses. One alert names domains: DNSSEC failures lists the names whose
+answers failed validation, as the DNSSEC page does, without who asked for
+them. The service you send alerts to (Telegram, Discord, Slack, your
+webhook) receives that text.

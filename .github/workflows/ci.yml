@@ -24,12 +24,15 @@ jobs:
       - name: test
         run: go test -race -count=1 ./...
       - name: fuzz (short)
+        # every target briefly on each change; fuzz.yml runs them longer
+        # every night and keeps the corpus
         run: |
-          go test ./internal/dnsmsg -run '^$' -fuzz '^FuzzParseQuery$' -fuzztime 60s
-          go test ./internal/config -run '^$' -fuzz '^FuzzParse$' -fuzztime 60s
-          go test ./internal/resolver -run '^$' -fuzz '^FuzzAnalyze$' -fuzztime 60s
-          go test ./internal/filter -run '^$' -fuzz '^FuzzParse$' -fuzztime 60s
-          go test ./internal/recursor -run '^$' -fuzz '^FuzzParseMessage$' -fuzztime 60s
+          set -e
+          for t in dnsmsg:FuzzParseQuery dnsmsg:FuzzOptions config:FuzzParse config:FuzzLists config:FuzzMerge \
+                   resolver:FuzzAnalyze resolver:FuzzLoadCache filter:FuzzParse recursor:FuzzParseMessage \
+                   proxyproto:FuzzParseV2 proxyproto:FuzzReadV1 cookie:FuzzCookie upstream:FuzzParseSpec; do
+            go test ./internal/${t%%:*} -run '^$' -fuzz "^${t##*:}\$" -fuzztime 30s
+          done
       - name: build
         run: |
           for arch in amd64 arm64; do

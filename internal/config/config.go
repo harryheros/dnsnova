@@ -31,6 +31,11 @@ type Config struct {
 		Mode    string
 		Listen  []string
 		DataDir string
+		Cookies bool // DNS Cookies (RFC 7873, RFC 9018)
+		// ProxyProtocol lists the load balancers whose PROXY protocol
+		// header (v1/v2 on TCP, DoT and DoH; v2 on UDP) is required and
+		// believed. Empty: none.
+		ProxyProtocol []netip.Prefix
 	}
 	DoH struct {
 		Listen         string   // plain HTTP behind a reverse proxy
@@ -74,6 +79,7 @@ type Config struct {
 		MaxNegativeTTL uint32
 		ServeStale     time.Duration
 		Prefetch       bool
+		Persist        string // keep the answer cache across restarts: "auto", "on" or "off" (see PersistCache)
 	}
 	Access struct {
 		Deny  []netip.Prefix // never answered, in either mode
@@ -103,6 +109,15 @@ type Config struct {
 	Admin struct {
 		Listen string // web interface and API; "" = off
 	}
+	// Cluster: several nodes sharing one configuration (see docs/cluster.md).
+	// Without a role the server stands alone and nothing here runs.
+	Cluster Cluster
+	// Anycast: run the operator's commands to announce or withdraw this
+	// node's anycast route as its health changes. File only.
+	Anycast Anycast
+	// Alerts: notifications when something is wrong (docs/alerts.md).
+	// Where they go is not here but in data_dir/secrets/alerts.json.
+	Alerts Alerts
 	Status struct {
 		Enabled bool // public status page on the DoH addresses
 	}
@@ -113,6 +128,11 @@ type Config struct {
 		// Address is a network ("1.2.3.0/24") or an address in it,
 		// sent as the EDNS Client Subnet of every query. Empty: off.
 		Address string
+		// ClientPath is a DoH path, kept secret, on which a query's own
+		// EDNS Client Subnet is sent to name servers, for tools that
+		// measure how names resolve from a given network. Such answers
+		// never go into the shared cache. Needs recursion. Empty: off.
+		ClientPath string
 	}
 	Stats struct {
 		Retention string // how far back statistics go: 24h, 7d or 30d (memory only)
@@ -144,13 +164,32 @@ type Config struct {
 		Fallback          bool     // ask the upstreams when no authoritative server answers
 		AllowNetworks     []string // networks that may be queried although private or local
 		TrustAnchors      []string // replace the root trust anchors: "tag algorithm digest-type digest"
-		RootHints         []string // replace the root server addresses
+		// NegativeTrustAnchors (RFC 7646) are domains whose answers are
+		// not validated: for a domain whose DNSSEC is broken by its owner.
+		NegativeTrustAnchors []string
+		RootHints            []string // replace the root server addresses
+		Cookies              bool     // DNS Cookies with authoritative servers (RFC 7873)
 	}
 }
 
 // DefaultFilterList is ShieldNova's full list: privacy, ads and security,
 // chosen for few false positives.
 const DefaultFilterList = "https://raw.githubusercontent.com/harryheros/shieldnova/main/dist/shieldnova-full.txt"
+
+// PersistCache reports whether the answer cache is kept across restarts.
+// "auto" follows what the server is for: on for a public server, where the
+// cached names belong to many people and a warm cache after a restart
+// matters most; off for a home or office network (private mode), where a
+// few people's lookups would be kept on disk for little gain.
+func (c *Config) PersistCache() bool {
+	switch c.Cache.Persist {
+	case "on":
+		return true
+	case "off":
+		return false
+	}
+	return c.Server.Mode == ModePublic
+}
 
 // Defaults returns a Config with every optional setting at its default.
 func Defaults() *Config {
@@ -172,6 +211,15 @@ func Defaults() *Config {
 	c.Cache.MaxNegativeTTL = 3600
 	c.Cache.ServeStale = 24 * time.Hour
 	c.Cache.Prefetch = true
+	c.Server.Cookies = true
+	c.Recursion.Cookies = true
+	c.Cache.Persist = "auto"
+	c.Cluster.Interval = 10 * time.Second
+	c.Anycast.Interval = 2 * time.Second
+	c.Anycast.Rise = 3
+	c.Anycast.Fall = 3
+	c.Anycast.Drain = 5 * time.Second
+	c.Alerts = DefaultAlerts
 	c.Limits.ClientQPS = 100
 	c.Limits.ClientBurst = 400
 	c.Limits.PrefixQPS = 1000
@@ -326,6 +374,8 @@ func (c *Config) validate(lines map[string]int) (Errors, []string) {
 	}
 
 	errs, warns = c.validateTLS(lines, errs, warns)
+	errs, warns = c.validateCluster(lines, errs, warns)
+	errs = c.validateAlerts(lines, errs)
 
 	if len(c.Upstream.Primary) == 0 && dns && !c.Recursion.Enabled {
 		bad("upstream.primary", "at least one upstream is required (or turn on recursion.enabled)")
@@ -384,6 +434,18 @@ func (c *Config) validate(lines map[string]int) (Errors, []string) {
 	}
 	if _, err := parseClientSubnet(c.ECS.Address); err != nil {
 		bad("ecs.address", err.Error())
+	}
+	if p := c.ECS.ClientPath; p != "" {
+		switch {
+		case !strings.HasPrefix(p, "/") || strings.ContainsAny(p, " ?#%") || len(p) < 25:
+			bad("ecs.client_path", "a secret path: / and at least 24 random letters or digits, like /ecs-k3v9q2m8x7w4r1t6y5u0p2z8")
+		case p == c.DoH.Path || p == c.Filter.DoHPath:
+			bad("ecs.client_path", "must differ from doh.path and filter.doh_path")
+		case !c.Recursion.Enabled:
+			bad("ecs.client_path", "needs recursion.enabled: the network is sent to the domains' own name servers")
+		case c.DoH.Listen == "" && len(c.DoH.HTTPSListen) == 0:
+			bad("ecs.client_path", "needs DNS over HTTPS: set doh.https_listen or doh.listen")
+		}
 	}
 	if _, ok := RetentionHours[c.Stats.Retention]; !ok {
 		bad("stats.retention", `must be "24h", "7d" or "30d"`)
@@ -484,6 +546,15 @@ func (c *Config) validateRecursion(lines map[string]int, errs Errors, warns []st
 		if _, err := netip.ParseAddr(h); err != nil {
 			bad("recursion.root_hints", fmt.Sprintf("%q is not an IP address", h))
 		}
+	}
+	for _, d := range r.NegativeTrustAnchors {
+		if !validDomain(d) {
+			// a whole top-level domain cannot be exempted: one domain at a time
+			bad("recursion.negative_trust_anchors", fmt.Sprintf("%q: give a domain such as example.com", d))
+		}
+	}
+	if n := len(r.NegativeTrustAnchors); r.Enabled && r.DNSSEC && n > 0 {
+		warns = append(warns, fmt.Sprintf("recursion.negative_trust_anchors: answers for %d domain(s) are not validated; remove each once its owner has fixed DNSSEC", n))
 	}
 	if r.Enabled && r.Fallback && len(c.Upstream.Primary) == 0 {
 		warns = append(warns, "recursion.fallback: no upstreams are set, so there is nothing to fall back to")
@@ -773,9 +844,11 @@ func SplitKey(name string) (table, key string) {
 }
 
 var fields = map[string]field{
-	"server.mode":     str(func(c *Config) *string { return &c.Server.Mode }),
-	"server.listen":   strList(func(c *Config) *[]string { return &c.Server.Listen }),
-	"server.data_dir": str(func(c *Config) *string { return &c.Server.DataDir }),
+	"server.mode":           str(func(c *Config) *string { return &c.Server.Mode }),
+	"server.listen":         strList(func(c *Config) *[]string { return &c.Server.Listen }),
+	"server.data_dir":       str(func(c *Config) *string { return &c.Server.DataDir }),
+	"server.cookies":        boolean(func(c *Config) *bool { return &c.Server.Cookies }),
+	"server.proxy_protocol": prefixes(func(c *Config) *[]netip.Prefix { return &c.Server.ProxyProtocol }),
 
 	"doh.https_listen": strList(func(c *Config) *[]string { return &c.DoH.HTTPSListen }),
 	"doh.http3":        boolean(func(c *Config) *bool { return &c.DoH.HTTP3 }),
@@ -810,11 +883,25 @@ var fields = map[string]field{
 	"cache.max_negative_ttl": seconds(func(c *Config) *uint32 { return &c.Cache.MaxNegativeTTL }),
 	"cache.serve_stale":      duration(func(c *Config) *time.Duration { return &c.Cache.ServeStale }),
 	"cache.prefetch":         boolean(func(c *Config) *bool { return &c.Cache.Prefetch }),
+	"cache.persist": {func(c *Config, v Value) error {
+		switch {
+		case v.Kind == Bool && v.Bool: // true and false read as "on" and "off"
+			c.Cache.Persist = "on"
+		case v.Kind == Bool:
+			c.Cache.Persist = "off"
+		case v.Kind == String && (v.Str == "auto" || v.Str == "on" || v.Str == "off"):
+			c.Cache.Persist = v.Str
+		default:
+			return fmt.Errorf(`must be "auto", "on" or "off"`)
+		}
+		return nil
+	}, func(c *Config) Value { return Str(c.Cache.Persist) }},
 
 	"access.allow":    prefixes(func(c *Config) *[]netip.Prefix { return &c.Access.Allow }),
 	"access.deny":     prefixes(func(c *Config) *[]netip.Prefix { return &c.Access.Deny }),
 	"local.records":   strList(func(c *Config) *[]string { return &c.Local.Records }),
 	"ecs.address":     str(func(c *Config) *string { return &c.ECS.Address }),
+	"ecs.client_path": str(func(c *Config) *string { return &c.ECS.ClientPath }),
 	"stats.retention": str(func(c *Config) *string { return &c.Stats.Retention }),
 
 	"limits.client_qps":           number(func(c *Config) *float64 { return &c.Limits.ClientQPS }),
@@ -836,6 +923,36 @@ var fields = map[string]field{
 
 	"metrics.listen": str(func(c *Config) *string { return &c.Metrics.Listen }),
 	"admin.listen":   str(func(c *Config) *string { return &c.Admin.Listen }),
+
+	"cluster.role":     str(func(c *Config) *string { return &c.Cluster.Role }),
+	"cluster.name":     str(func(c *Config) *string { return &c.Cluster.Name }),
+	"cluster.region":   str(func(c *Config) *string { return &c.Cluster.Region }),
+	"cluster.listen":   str(func(c *Config) *string { return &c.Cluster.Listen }),
+	"cluster.primary":  str(func(c *Config) *string { return &c.Cluster.Primary }),
+	"cluster.interval": duration(func(c *Config) *time.Duration { return &c.Cluster.Interval }),
+
+	"anycast.enabled":             boolean(func(c *Config) *bool { return &c.Anycast.Enabled }),
+	"anycast.announce":            strList(func(c *Config) *[]string { return &c.Anycast.Announce }),
+	"anycast.withdraw":            strList(func(c *Config) *[]string { return &c.Anycast.Withdraw }),
+	"anycast.interval":            duration(func(c *Config) *time.Duration { return &c.Anycast.Interval }),
+	"anycast.rise":                integer(func(c *Config) *int { return &c.Anycast.Rise }),
+	"anycast.fall":                integer(func(c *Config) *int { return &c.Anycast.Fall }),
+	"anycast.drain":               duration(func(c *Config) *time.Duration { return &c.Anycast.Drain }),
+	"alerts.enabled":              boolean(func(c *Config) *bool { return &c.Alerts.Enabled }),
+	"alerts.repeat":               duration(func(c *Config) *time.Duration { return &c.Alerts.Repeat }),
+	"alerts.nodes":                boolean(func(c *Config) *bool { return &c.Alerts.Nodes }),
+	"alerts.upstream_down_for":    duration(func(c *Config) *time.Duration { return &c.Alerts.UpstreamDownFor }),
+	"alerts.upstream_failing_for": duration(func(c *Config) *time.Duration { return &c.Alerts.UpstreamFailingFor }),
+	"alerts.servfail_ratio":       number(func(c *Config) *float64 { return &c.Alerts.ServfailRatio }),
+	"alerts.servfail_min_queries": integer(func(c *Config) *int { return &c.Alerts.ServfailMinQueries }),
+	"alerts.servfail_for":         duration(func(c *Config) *time.Duration { return &c.Alerts.ServfailFor }),
+	"alerts.latency_p95":          duration(func(c *Config) *time.Duration { return &c.Alerts.LatencyP95 }),
+	"alerts.latency_min_queries":  integer(func(c *Config) *int { return &c.Alerts.LatencyMinQueries }),
+	"alerts.latency_for":          duration(func(c *Config) *time.Duration { return &c.Alerts.LatencyFor }),
+	"alerts.dnssec_failures":      integer(func(c *Config) *int { return &c.Alerts.DNSSECFailures }),
+	"alerts.cert_warn_days":       integer(func(c *Config) *int { return &c.Alerts.CertWarnDays }),
+	"alerts.cert_critical_days":   integer(func(c *Config) *int { return &c.Alerts.CertCriticalDays }),
+
 	"status.enabled": boolean(func(c *Config) *bool { return &c.Status.Enabled }),
 	"log.queries":    boolean(func(c *Config) *bool { return &c.Log.Queries }),
 
@@ -849,17 +966,20 @@ var fields = map[string]field{
 	"filter.names":           strList(func(c *Config) *[]string { return &c.Filter.Names }),
 	"filter.listen":          strList(func(c *Config) *[]string { return &c.Filter.Listen }),
 
-	"recursion.enabled":            boolean(func(c *Config) *bool { return &c.Recursion.Enabled }),
-	"recursion.dnssec":             boolean(func(c *Config) *bool { return &c.Recursion.DNSSEC }),
-	"recursion.qname_minimisation": boolean(func(c *Config) *bool { return &c.Recursion.QNameMinimisation }),
-	"recursion.ipv6":               boolean(func(c *Config) *bool { return &c.Recursion.IPv6 }),
-	"recursion.fallback":           boolean(func(c *Config) *bool { return &c.Recursion.Fallback }),
-	"recursion.allow_networks":     strList(func(c *Config) *[]string { return &c.Recursion.AllowNetworks }),
-	"recursion.trust_anchors":      strList(func(c *Config) *[]string { return &c.Recursion.TrustAnchors }),
-	"recursion.root_hints":         strList(func(c *Config) *[]string { return &c.Recursion.RootHints }),
+	"recursion.enabled":                boolean(func(c *Config) *bool { return &c.Recursion.Enabled }),
+	"recursion.dnssec":                 boolean(func(c *Config) *bool { return &c.Recursion.DNSSEC }),
+	"recursion.qname_minimisation":     boolean(func(c *Config) *bool { return &c.Recursion.QNameMinimisation }),
+	"recursion.ipv6":                   boolean(func(c *Config) *bool { return &c.Recursion.IPv6 }),
+	"recursion.fallback":               boolean(func(c *Config) *bool { return &c.Recursion.Fallback }),
+	"recursion.allow_networks":         strList(func(c *Config) *[]string { return &c.Recursion.AllowNetworks }),
+	"recursion.trust_anchors":          strList(func(c *Config) *[]string { return &c.Recursion.TrustAnchors }),
+	"recursion.negative_trust_anchors": strList(func(c *Config) *[]string { return &c.Recursion.NegativeTrustAnchors }),
+	"recursion.cookies":                boolean(func(c *Config) *bool { return &c.Recursion.Cookies }),
+	"recursion.root_hints":             strList(func(c *Config) *[]string { return &c.Recursion.RootHints }),
 }
 
 var knownTables = map[string]bool{
+	"cluster": true, "anycast": true, "alerts": true,
 	"server": true, "doh": true, "dot": true, "doq": true, "tls": true, "ddr": true, "upstream": true, "cache": true,
 	"access": true, "limits": true, "metrics": true, "log": true, "admin": true, "status": true, "local": true, "stats": true, "ecs": true, "filter": true,
 	"recursion": true,
@@ -1133,4 +1253,214 @@ func ParseLocalRecords(list []string) ([]LocalRecord, error) {
 		out = append(out, LocalRecord{Name: name, Addr: a.Unmap()})
 	}
 	return out, nil
+}
+
+// Cluster is the [cluster] table.
+type Cluster struct {
+	Role     string        // "", "primary" or "follower"
+	Name     string        // this node's name; default: the host name
+	Region   string        // free text, shown on the Nodes page
+	Listen   string        // primary: address followers sync from
+	Primary  string        // follower: the primary's cluster address
+	Interval time.Duration // follower: how often it syncs
+}
+
+// Anycast is the [anycast] table.
+type Anycast struct {
+	Enabled  bool
+	Announce []string      // argv, e.g. ["birdc", "enable", "anycast"]
+	Withdraw []string      // argv
+	Interval time.Duration // between health checks
+	Rise     int           // healthy checks in a row before announcing
+	Fall     int           // failed checks in a row before withdrawing
+	Drain    time.Duration // at shutdown: withdraw, then keep answering this long
+}
+
+// NodeLocalTables are never synced from a primary: each node's own
+// [cluster] and [anycast] settings (who it follows, which commands it runs).
+var NodeLocalTables = []string{"cluster", "anycast"}
+
+// FileOnlyTables cannot be changed through the admin API, only in the file
+// on the server: [cluster] decides where a node takes its configuration
+// from and [anycast] runs commands, so a stolen admin password must not
+// reach either.
+var FileOnlyTables = NodeLocalTables
+
+func (c *Config) validateCluster(lines map[string]int, errs Errors, warns []string) (Errors, []string) {
+	bad := func(key, msg string) { errs = append(errs, &Error{Line: lines[key], Key: key, Msg: msg}) }
+	switch c.Cluster.Role {
+	case "":
+	case "primary":
+		if c.Cluster.Listen == "" {
+			bad("cluster.listen", `a primary needs an address for its followers, e.g. "10.0.0.1:7001"`)
+		} else if err := checkListen(c.Cluster.Listen); err != nil {
+			bad("cluster.listen", err.Error())
+		}
+	case "follower":
+		if _, _, err := net.SplitHostPort(c.Cluster.Primary); err != nil || c.Cluster.Primary == "" {
+			bad("cluster.primary", `a follower needs the primary's cluster address as host:port, e.g. "10.0.0.1:7001"`)
+		}
+	default:
+		bad("cluster.role", fmt.Sprintf(`must be "primary" or "follower" (or absent), got %q`, c.Cluster.Role))
+	}
+	if c.Cluster.Interval < time.Second || c.Cluster.Interval > time.Hour {
+		bad("cluster.interval", "must be between 1s and 1h")
+	}
+	if len(c.Cluster.Name) > 63 {
+		bad("cluster.name", "at most 63 characters")
+	}
+	if c.Anycast.Enabled {
+		if len(c.Anycast.Announce) == 0 || c.Anycast.Announce[0] == "" {
+			bad("anycast.announce", `the command that announces the route, as a list: ["birdc", "enable", "anycast"]`)
+		}
+		if len(c.Anycast.Withdraw) == 0 || c.Anycast.Withdraw[0] == "" {
+			bad("anycast.withdraw", `the command that withdraws the route, as a list: ["birdc", "disable", "anycast"]`)
+		}
+	}
+	if c.Anycast.Interval < 100*time.Millisecond {
+		bad("anycast.interval", "at least 100ms")
+	}
+	if c.Anycast.Rise < 1 || c.Anycast.Rise > 100 {
+		bad("anycast.rise", "between 1 and 100")
+	}
+	if c.Anycast.Fall < 1 || c.Anycast.Fall > 100 {
+		bad("anycast.fall", "between 1 and 100")
+	}
+	if c.Anycast.Drain < 0 || c.Anycast.Drain > 5*time.Minute {
+		bad("anycast.drain", "between 0s and 5m")
+	}
+	return errs, warns
+}
+
+// IsFollower reports whether the file at src makes this node a follower,
+// reading only [cluster] role: a follower's own file need not be a whole
+// configuration.
+func IsFollower(src []byte) (bool, error) {
+	doc, err := Parse(src)
+	if err != nil {
+		return false, err
+	}
+	e := doc.Lookup("cluster", "role")
+	return e != nil && e.Value.Kind == String && e.Value.Str == "follower", nil
+}
+
+// SharedPart returns src without the node-local tables, as a primary hands
+// it to its followers.
+func SharedPart(src []byte) ([]byte, error) {
+	doc, err := Parse(src)
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range doc.Entries {
+		if !slices.Contains(NodeLocalTables, e.Table) {
+			continue
+		}
+		if src, err = doc.Delete(e.Table, e.Key); err != nil {
+			return nil, err
+		}
+		if doc, err = Parse(src); err != nil {
+			return nil, err
+		}
+	}
+	return doc.Src, nil
+}
+
+// Merge makes a follower's configuration: the shared part from the primary
+// with every setting of the follower's own file on top (its listen
+// addresses, data_dir, [cluster], [anycast], ...). It returns the merged
+// source and the node's overrides: the shared settings ("table.key") its
+// own file replaces or adds ([cluster] and [anycast] are its own anyway).
+func Merge(shared, local []byte) ([]byte, []string, error) {
+	shared, err := SharedPart(shared)
+	if err != nil {
+		return nil, nil, fmt.Errorf("shared configuration: %w", err)
+	}
+	ldoc, err := Parse(local)
+	if err != nil {
+		return nil, nil, err
+	}
+	out := shared
+	var keys []string
+	for _, e := range ldoc.Entries {
+		doc, err := Parse(out)
+		if err != nil {
+			return nil, nil, err
+		}
+		if out, err = doc.Set(e.Table, e.Key, e.Value); err != nil {
+			return nil, nil, err
+		}
+		if !slices.Contains(NodeLocalTables, e.Table) {
+			keys = append(keys, strings.TrimPrefix(e.Table+"."+e.Key, "."))
+		}
+	}
+	return out, keys, nil
+}
+
+// Alerts is the [alerts] table. A threshold of 0 turns its check off.
+type Alerts struct {
+	Enabled bool
+	// Repeat: a condition that lasts is notified again this often (0: never).
+	Repeat time.Duration
+	// Nodes: on a cluster's primary, also notify about the followers
+	// (their own alerts, and a node going offline).
+	Nodes bool
+	// every upstream failing, for this long
+	UpstreamDownFor time.Duration
+	// one upstream failing at least half its queries, for this long
+	UpstreamFailingFor time.Duration
+	// SERVFAIL answers (DNSSEC failures aside) over five minutes, with at
+	// least ServfailMinQueries answers, for ServfailFor
+	ServfailRatio      float64
+	ServfailMinQueries int
+	ServfailFor        time.Duration
+	// 95th percentile of the time to answer queries not in the cache, over
+	// five minutes, with at least LatencyMinQueries of them, for LatencyFor
+	LatencyP95        time.Duration
+	LatencyMinQueries int
+	LatencyFor        time.Duration
+	// answers refused for failing DNSSEC validation in five minutes
+	DNSSECFailures int
+	// days left on the certificate: warning, then critical
+	CertWarnDays, CertCriticalDays int
+}
+
+// DefaultAlerts are the defaults of [alerts].
+var DefaultAlerts = Alerts{
+	Repeat: 4 * time.Hour, Nodes: true,
+	UpstreamDownFor: 30 * time.Second, UpstreamFailingFor: 5 * time.Minute,
+	ServfailRatio: 0.05, ServfailMinQueries: 500, ServfailFor: 5 * time.Minute,
+	LatencyP95: 500 * time.Millisecond, LatencyMinQueries: 100, LatencyFor: 5 * time.Minute,
+	DNSSECFailures: 100, CertWarnDays: 14, CertCriticalDays: 3,
+}
+
+func (c *Config) validateAlerts(lines map[string]int, errs Errors) Errors {
+	bad := func(key, msg string) { errs = append(errs, &Error{Line: lines[key], Key: key, Msg: msg}) }
+	a := &c.Alerts
+	if a.Repeat != 0 && (a.Repeat < 10*time.Minute || a.Repeat > 7*24*time.Hour) {
+		bad("alerts.repeat", "between 10m and 168h, or 0s for never")
+	}
+	for key, d := range map[string]time.Duration{"alerts.upstream_down_for": a.UpstreamDownFor,
+		"alerts.upstream_failing_for": a.UpstreamFailingFor, "alerts.servfail_for": a.ServfailFor, "alerts.latency_for": a.LatencyFor} {
+		if d < 0 || d > 24*time.Hour {
+			bad(key, "between 0s and 24h")
+		}
+	}
+	if a.ServfailRatio < 0 || a.ServfailRatio > 1 {
+		bad("alerts.servfail_ratio", "a fraction between 0 and 1 (0.05 is 5%), or 0 for off")
+	}
+	if a.LatencyP95 < 0 || a.LatencyP95 > 10*time.Second {
+		bad("alerts.latency_p95", "between 0s (off) and 10s")
+	}
+	for key, n := range map[string]int{"alerts.servfail_min_queries": a.ServfailMinQueries, "alerts.latency_min_queries": a.LatencyMinQueries,
+		"alerts.dnssec_failures": a.DNSSECFailures} {
+		if n < 0 || n > 100_000_000 {
+			bad(key, "a number of queries, 0 or more")
+		}
+	}
+	if a.CertWarnDays < 0 || a.CertWarnDays > 90 || a.CertCriticalDays < 0 || a.CertCriticalDays > 90 {
+		bad("alerts.cert_warn_days", "days between 0 (off) and 90")
+	} else if a.CertCriticalDays > a.CertWarnDays && a.CertWarnDays > 0 {
+		bad("alerts.cert_critical_days", "fewer days than alerts.cert_warn_days")
+	}
+	return errs
 }
