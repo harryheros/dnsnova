@@ -3,9 +3,11 @@ package recursor
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/netip"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -195,5 +197,75 @@ func TestDSReferralNextServer(t *testing.T) {
 	}
 	if tr.Rcode != "NOERROR" || tr.DNSSEC != "secure" || len(tr.Answers) == 0 {
 		t.Fatalf("trace %s %s %v %s", tr.Rcode, tr.DNSSEC, tr.Answers, tr.Error)
+	}
+}
+
+// When no server of a zone answers, the error says which zone, which
+// servers, and what each did; it is still ErrUnreachable.
+func TestUnreachableSaysWhy(t *testing.T) {
+	n := world()
+	r := newTest(t, n, false)
+	r.send = func(ctx context.Context, addr netip.AddrPort, q []byte, tcp bool) ([]byte, error) {
+		if a := addr.Addr(); a == exA || a == ex2A {
+			qm, _ := parseMessage(q)
+			return buildMessage(qm.id, m.FlagQR|m.RcodeRefused, qm.qname, qm.qtype, nil, nil, nil, true, false, nil), nil
+		}
+		return n.send(ctx, addr, q, tcp)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	q := buildQuery(5, dotted("www.example.com"), m.TypeA, true, nil)
+	q[2] |= 1
+	_, err := r.Exchange(ctx, q)
+	if !errors.Is(err, ErrUnreachable) {
+		t.Fatalf("err %v", err)
+	}
+	for _, want := range []string{"www.example.com. A", "no server of example.com.", exA.String() + " REFUSED", ex2A.String() + " REFUSED"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("%q does not say %q", err, want)
+		}
+	}
+}
+
+// A server of the zone that answers without AA (a load balancer the zone
+// is delegated to) is taken at its word, not called lame.
+func TestAnswerWithoutAA(t *testing.T) {
+	n := world()
+	r := newTest(t, n, false)
+	r.send = func(ctx context.Context, addr netip.AddrPort, q []byte, tcp bool) ([]byte, error) {
+		resp, err := n.send(ctx, addr, q, tcp)
+		if a := addr.Addr(); err == nil && (a == exA || a == ex2A) {
+			resp = bytes.Clone(resp)
+			resp[2] &^= byte(m.FlagAA >> 8)
+		}
+		return resp, err
+	}
+	if got := addrs(ask(t, r, "www.example.com", m.TypeA)); len(got) != 1 || got[0] != "198.51.100.1" {
+		t.Fatalf("answers %v", got)
+	}
+}
+
+// When the addresses found for a zone's glueless name servers all fail,
+// its other name servers are looked up and asked.
+func TestMoreNameServersAfterFailures(t *testing.T) {
+	good := netip.MustParseAddr("192.0.2.46")
+	for run := range 10 { // which servers are looked up first is random
+		n := &fakeNet{servers: map[netip.Addr]*fakeServer{
+			rootA: {zones: []*fakeZone{zone(".", ". NS a.root.", "a.root. A 192.0.2.1",
+				"com. NS ns.com.", "ns.com. A 192.0.2.2", "org. NS ns.org.", "ns.org. A 192.0.2.3")}},
+			comA: {zones: []*fakeZone{zone("com.",
+				"many.com. NS ns1.host.org.", "many.com. NS ns2.host.org.", "many.com. NS ns3.host.org.",
+				"many.com. NS ns4.host.org.", "many.com. NS ns5.host.org.", "many.com. NS ns6.host.org.")}},
+			orgA: {zones: []*fakeZone{zone("org.", "host.org. NS ns.host.org.", "ns.host.org. A 192.0.2.20")}},
+			hostA: {zones: []*fakeZone{zone("host.org.", "ns.host.org. A 192.0.2.20",
+				// five name servers that do not answer (no server at those addresses)
+				"ns1.host.org. A 192.0.2.41", "ns2.host.org. A 192.0.2.42", "ns3.host.org. A 192.0.2.43",
+				"ns4.host.org. A 192.0.2.44", "ns5.host.org. A 192.0.2.45", "ns6.host.org. A 192.0.2.46")}},
+			good: {zones: []*fakeZone{zone("many.com.", "www.many.com. A 198.51.100.7")}},
+		}}
+		r := newTest(t, n, false)
+		if got := addrs(ask(t, r, "www.many.com", m.TypeA)); len(got) != 1 || got[0] != "198.51.100.7" {
+			t.Fatalf("run %d: answers %v", run, got)
+		}
 	}
 }

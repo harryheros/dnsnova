@@ -7,11 +7,13 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"math/rand/v2"
 	"net"
 	"net/netip"
 	"slices"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -289,7 +291,16 @@ func usable(msg *message, zone, qname string) bool {
 	if child, _ := referral(msg, zone, qname); child != nil {
 		return true
 	}
-	// some servers leave AA off negative answers; accept them with an SOA
+	// some servers leave AA off answers (load balancers answering for a
+	// zone delegated to them): an answer for the very name asked, from a
+	// server of the zone it was delegated to (scrub has dropped anything
+	// outside the zone), is as good as one with AA
+	for _, a := range msg.answer {
+		if a.name == qname {
+			return true
+		}
+	}
+	// and off negative answers; accept them with an SOA
 	for _, a := range msg.authority {
 		if a.typ == m.TypeSOA && isSub(qname, a.name) && len(msg.answer) == 0 {
 			return true
@@ -301,10 +312,34 @@ func usable(msg *message, zone, qname string) bool {
 // query asks the servers of d, best first, until one gives a usable reply.
 func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name string, qtype uint16) (*message, error) {
 	cfg := r.cfg.Load()
-	addrs := r.serverAddrs(ctx, t, d, cfg)
+	addrs := r.serverAddrs(ctx, t, d, cfg, false)
 	now := r.now()
 	tried := 0
-	for len(addrs) > 0 && tried < 8 {
+	var asked []netip.Addr
+	more := false
+	var why []string // what each server did, for the error when none answers
+	note := func(a netip.Addr, s string) {
+		if len(why) < 8 {
+			why = append(why, a.String()+" "+s)
+		}
+	}
+	for tried < 8 {
+		if len(addrs) == 0 {
+			// every address known failed: look up the zone's other name
+			// servers (glueless ones are only partly looked up at first)
+			if more {
+				break
+			}
+			more = true
+			for _, a := range r.serverAddrs(ctx, t, d, cfg, true) {
+				if !slices.Contains(asked, a) {
+					addrs = append(addrs, a)
+				}
+			}
+			if len(addrs) == 0 {
+				break
+			}
+		}
 		scores := make(map[netip.Addr]time.Duration, len(addrs))
 		v6proven := r.v6Proven()
 		for _, a := range addrs {
@@ -322,6 +357,7 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 		}
 		t.budget--
 		tried++
+		asked = append(asked, a)
 		start := time.Now()
 		msg, err := r.ask(ctx, a, name, qtype)
 		rtt := time.Since(start)
@@ -332,6 +368,11 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
+			if errors.Is(err, context.DeadlineExceeded) || isTimeout(err) {
+				note(a, "timed out")
+			} else {
+				note(a, err.Error())
+			}
 			continue
 		}
 		if msg.rcode != m.RcodeNoError && msg.rcode != m.RcodeNXDomain {
@@ -339,6 +380,7 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 				r.traceQuery(t, d.zone, a, name, qtype, rtt, msg, nil, false)
 			}
 			r.infra.setLame(a, d.zone, now)
+			note(a, m.RcodeString(msg.rcode))
 			continue
 		}
 		scrub(msg, d.zone)
@@ -347,6 +389,7 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 				r.traceQuery(t, d.zone, a, name, qtype, rtt, msg, nil, true)
 			}
 			r.infra.setLame(a, d.zone, now)
+			note(a, "not authoritative (lame)")
 			continue
 		}
 		if qtype == typeDS {
@@ -357,6 +400,7 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 				if t.trace != nil {
 					r.traceQuery(t, d.zone, a, name, qtype, rtt, msg, nil, false)
 				}
+				note(a, "sent the DS question down")
 				continue
 			}
 		}
@@ -365,12 +409,32 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 		}
 		return msg, nil
 	}
-	return nil, ErrUnreachable
+	return nil, &unreachable{zone: d.zone, name: name, qtype: qtype, servers: len(d.ns), why: why}
 }
+
+// unreachable is ErrUnreachable with what happened: which zone's servers
+// were asked, for what, and what each did. It is only made when a lookup
+// fails, for the log and the trace.
+type unreachable struct {
+	zone, name string
+	qtype      uint16
+	servers    int // name servers of the zone
+	why        []string
+}
+
+func (e *unreachable) Error() string {
+	q := m.NameString(e.name) + " " + m.TypeString(e.qtype)
+	if len(e.why) == 0 {
+		return fmt.Sprintf("%s: no address to ask for any of the %d name servers of %s", q, e.servers, zoneName(e.zone))
+	}
+	return fmt.Sprintf("%s: no server of %s answered (%s)", q, zoneName(e.zone), strings.Join(e.why, "; "))
+}
+
+func (e *unreachable) Is(target error) bool { return target == ErrUnreachable }
 
 // serverAddrs returns the addresses that may be asked for d, looking up
 // the addresses of name servers that came without glue.
-func (r *Recursor) serverAddrs(ctx context.Context, t *task, d *delegation, cfg *Config) []netip.Addr {
+func (r *Recursor) serverAddrs(ctx context.Context, t *task, d *delegation, cfg *Config, more bool) []netip.Addr {
 	var out []netip.Addr
 	add := func(a netip.Addr) {
 		if r.allowed(cfg, a) && !(a.Is6() && r.v6Down()) && !slices.Contains(out, a) {
@@ -392,14 +456,18 @@ func (r *Recursor) serverAddrs(ctx context.Context, t *task, d *delegation, cfg 
 			}
 		}
 	}
-	if len(out) >= 2 || len(missing) == 0 || t.depth >= maxDepth-2 {
+	if (len(out) >= 2 && !more) || len(missing) == 0 || t.depth >= maxDepth-2 {
 		return out
 	}
-	// glueless: look up a few name servers (NXNSAttack: not all of them)
+	// glueless: look up a few name servers (NXNSAttack: not all of them).
+	// With more (the addresses known so far all failed), up to six.
 	rand.Shuffle(len(missing), func(i, j int) { missing[i], missing[j] = missing[j], missing[i] })
-	found := false
+	found, limit := false, 3
+	if more {
+		limit = 6
+	}
 	for i, host := range missing {
-		if i >= 3 || (found && len(out) >= 2) {
+		if i >= limit || (found && len(out) >= 2 && !more) {
 			break
 		}
 		types := []uint16{m.TypeA}
