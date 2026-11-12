@@ -159,6 +159,13 @@ func (r *Recursor) iterateOnce(ctx context.Context, t *task, qname string, qtype
 		}
 		msg, err := r.query(ctx, t, d, sendName, sendType)
 		if err != nil {
+			if sendName != qname && errors.Is(err, ErrUnreachable) {
+				// no server gave a usable reply to the shortened name (some
+				// mishandle names that only exist as part of longer ones):
+				// ask for the full name instead
+				minimise = false
+				continue
+			}
 			return nil, err
 		}
 		if child, ttl := referral(msg, d.zone, sendName); child != nil {
@@ -447,11 +454,16 @@ func (r *Recursor) serverAddrs(ctx context.Context, t *task, d *delegation, cfg 
 			add(a)
 		}
 		if len(h.addrs) == 0 && h.name != "" {
-			if addrs := r.cachedAddrs(h.name, cfg); len(addrs) > 0 {
-				for _, a := range addrs {
-					add(a)
-				}
-			} else if !isSub(h.name, d.zone) { // in-zone names without glue cannot be found
+			addrs := r.cachedAddrs(h.name, cfg)
+			for _, a := range addrs {
+				add(a)
+			}
+			switch {
+			case isSub(h.name, d.zone): // in-zone names without glue cannot be found
+			case len(addrs) == 0:
+				missing = append(missing, h.name)
+			case more && !slices.ContainsFunc(addrs, netip.Addr.Is4):
+				// only IPv6 known, and it failed: its IPv4 addresses too
 				missing = append(missing, h.name)
 			}
 		}

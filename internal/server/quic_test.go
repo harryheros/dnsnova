@@ -401,6 +401,13 @@ func TestQUICAccessLimitsAndReload(t *testing.T) {
 		t.Fatalf("over the client limit: %v", err)
 	}
 	q.edit(t, "client_qps = 0.01\nclient_burst = 1", "client_qps = 0\nquic_connections = 1")
+	// the connections asked on above are closed, but on a busy machine the
+	// server may not have counted them out yet (see below)
+	for deadline := time.Now().Add(q.snapIdle() + 3*time.Second); q.quicConns.Load() != 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("closed connections still counted: %d", q.quicConns.Load())
+		}
+	}
 
 	// connection cap: a second connection is refused while the first is open
 	c1, err := dialQUIC(doq[0], clientTLS(q.pool, "doq"))
