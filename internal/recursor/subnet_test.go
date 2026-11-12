@@ -269,3 +269,46 @@ func TestMoreNameServersAfterFailures(t *testing.T) {
 		}
 	}
 }
+
+// A shortened (minimised) name that no server of a zone answers usably is
+// asked again in full, rather than ending the lookup.
+func TestMinimisedNameFallsBack(t *testing.T) {
+	n := world()
+	r := newTest(t, n, true)
+	full := dotted("a.b.c.example.com")
+	r.send = func(ctx context.Context, addr netip.AddrPort, q []byte, tcp bool) ([]byte, error) {
+		if a := addr.Addr(); a == exA || a == ex2A {
+			qm, _ := parseMessage(q)
+			if qm.qname != full { // only the full name gets a proper answer
+				return buildMessage(qm.id, m.FlagQR, qm.qname, qm.qtype, nil, nil, nil, true, false, nil), nil
+			}
+		}
+		return n.send(ctx, addr, q, tcp)
+	}
+	if got := addrs(ask(t, r, "a.b.c.example.com", m.TypeA)); len(got) != 1 || got[0] != "198.51.100.9" {
+		t.Fatalf("answers %v", got)
+	}
+}
+
+// A name server whose only known addresses are IPv6, and failing: its
+// IPv4 addresses are looked up and asked.
+func TestIPv4WhenIPv6Fails(t *testing.T) {
+	n := world()
+	n.servers[comA].zones[0] = zone("com.",
+		"example.com. NS ns1.example.com.", "ns1.example.com. A 192.0.2.10",
+		"v6only.com. NS dns6.host.org.")
+	n.servers[hostA].zones = append(n.servers[hostA].zones, zone("host.org.",
+		"ns.host.org. A 192.0.2.20", "dns6.host.org. A 192.0.2.47", "dns6.host.org. AAAA 2001:db8::99"))
+	n.servers[hostA].zones = n.servers[hostA].zones[1:] // the new host.org replaces the first
+	n.servers[netip.MustParseAddr("192.0.2.47")] = &fakeServer{zones: []*fakeZone{zone("v6only.com.", "www.v6only.com. A 198.51.100.8")}}
+	r := dualStackRecursor(n, n.send) // 2001:db8::99 has no server: it times out
+	r.hostV6 = func() bool { return true }
+	r.v6ok.Store(time.Now().UnixNano())
+	// learn only the IPv6 address of the name server
+	if msg := ask(t, r, "dns6.host.org", m.TypeAAAA); len(msg.answer) != 1 {
+		t.Fatalf("AAAA: %d answers", len(msg.answer))
+	}
+	if got := addrs(ask(t, r, "www.v6only.com", m.TypeA)); len(got) != 1 || got[0] != "198.51.100.8" {
+		t.Fatalf("answers %v", got)
+	}
+}
