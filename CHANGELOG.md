@@ -33,6 +33,9 @@ the binary are now in THIRD_PARTY_NOTICES.md, included in the release
 archives. ShieldNova, the default list of the filtered service, may be used
 in DNSNova free of charge, commercial deployments included.
 
+- A query whose OPT record is rejected (FORMERR) no longer keeps a client
+  cookie or other EDNS details read before the error. Nothing used them on
+  that path; found by the nightly fuzzing.
 - `ecs.client_path`: a secret DNS over HTTPS path for measurement tools.
   A query there has its own EDNS Client Subnet sent to the domains' name
   servers (cut to /24 or /56), so a tool sees how names resolve for that

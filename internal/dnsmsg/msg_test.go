@@ -275,6 +275,25 @@ func FuzzOptions(f *testing.F) {
 	})
 }
 
+// A query whose OPT record is rejected (FORMERR) keeps nothing read from
+// it: here a COOKIE option followed by an option that runs past the end
+// (found by FuzzOptions).
+func TestRejectedOPTKeepsNothing(t *testing.T) {
+	q := dnstest.Query(1, "example.com", 1, true, true)
+	for _, opts := range [][]byte{
+		{0, 10, 0, 0, 0, 15, 0, 9, 1},                         // empty cookie, then a cut-off option
+		{0, 10, 0, 8, 1, 2, 3, 4, 5, 6, 7, 8, 0, 12, 0, 9, 1}, // valid cookie, then a cut-off option
+	} {
+		pq, rc, err := m.ParseQuery(m.AddOptions(q, opts))
+		if err != nil || rc != m.RcodeFormErr {
+			t.Fatalf("%x: rcode %d, %v", opts, rc, err)
+		}
+		if pq.Cookie != nil || pq.EDNS || pq.DO || pq.Padding || pq.UDPSize != 0 {
+			t.Fatalf("%x: kept %+v", opts, pq)
+		}
+	}
+}
+
 func TestQueryClientSubnet(t *testing.T) {
 	q := func(opts []byte) []byte {
 		return m.BuildUpstreamQuery(&m.Query{ID: 1, Name: "\x07example\x03com", Type: m.TypeA, Class: 1}, opts)
