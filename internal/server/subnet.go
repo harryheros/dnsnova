@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/netip"
+	"time"
 
 	"github.com/harryheros/dnsnova/internal/config"
 	m "github.com/harryheros/dnsnova/internal/dnsmsg"
@@ -17,6 +18,13 @@ import (
 // for that network (DomainNova checks where domains are hosted this way).
 // The answers come straight from the recursion: no shared cache, no
 // filtering, no query log. They never reach any other client.
+
+// subnetDeadline is how long one such lookup may take. Longer than for
+// clients: a measurement tool waits, and every name in the chain is asked
+// afresh, so on a lossy path to the name servers (Hong Kong to mainland
+// China, for one) the spare time goes into trying other servers. Under the
+// 10 seconds tools such as DomainNova wait for an answer.
+const subnetDeadline = 9 * time.Second
 
 // subnetMax is the longest prefix passed on (RFC 7871 11.1): enough for
 // name servers to answer for the network, not a single machine.
@@ -33,7 +41,7 @@ func (s *Server) handleSubnetDoH(w http.ResponseWriter, r *http.Request, msg []b
 		bits := min(p.Bits(), subnetMax[p.Addr().Is6()])
 		ecs = m.ClientSubnet(netip.PrefixFrom(p.Addr(), bits).Masked())
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), timeout(c))
+	ctx, cancel := context.WithTimeout(r.Context(), max(timeout(c), subnetDeadline))
 	defer cancel()
 	resp, err := s.Rec.ExchangeSubnet(ctx, msg, ecs)
 	if err != nil {

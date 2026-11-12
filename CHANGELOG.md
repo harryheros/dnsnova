@@ -6,6 +6,15 @@ All notable changes are listed here. Versions follow
 
 ## Unreleased
 
+## 1.3.1 (2026-11-11)
+
+- `ecs.client_path`: a lookup may take up to 9 seconds instead of 6. Each
+  name of such a lookup is asked afresh, and from a server with a lossy
+  path to the name servers (Hong Kong to mainland China, for one) the
+  first servers tried often do not answer in time; the spare seconds go
+  into trying the others. Measured from Hong Kong, a few percent of
+  mainland domains failed for this alone.
+
 ## 1.3.0 (2026-11-11)
 
 DNSNova grows from a home and office resolver into one for public and
