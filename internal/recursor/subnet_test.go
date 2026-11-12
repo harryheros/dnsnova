@@ -3,6 +3,8 @@ package recursor
 import (
 	"bytes"
 	"context"
+	"io"
+	"log/slog"
 	"net/netip"
 	"sync"
 	"testing"
@@ -125,5 +127,73 @@ func TestTraceSubnet(t *testing.T) {
 	tr = r.Trace(ctx, "\x03www\x07example\x03com", m.TypeA)
 	if len(tr.Answers) != 1 || !bytes.Contains([]byte(tr.Answers[0]), []byte("198.51.100.1")) {
 		t.Fatalf("ordinary trace: %+v", tr.Answers)
+	}
+}
+
+// Under a zone that is not signed nothing is: no DS question is asked for
+// the zones below it, so a parent server that mishandles DS questions in an
+// unsigned zone (sending them down to the child, as some do) cannot break
+// the lookup.
+func TestNoDSBelowUnsigned(t *testing.T) {
+	n := world()
+	ds := 0
+	send := func(ctx context.Context, addr netip.AddrPort, q []byte, tcp bool) ([]byte, error) {
+		qm, err := parseMessage(q)
+		if err == nil && qm.qtype == typeDS {
+			ds++
+			if qm.qname == dotted("example.com") { // answered with a referral to the child
+				aq := buildQuery(qm.id, qm.qname, m.TypeA, true, nil)
+				resp, err := n.send(ctx, addr, aq, tcp)
+				if err != nil {
+					return nil, err
+				}
+				rm, _ := parseMessage(resp)
+				return buildMessage(rm.id, rm.flags, qm.qname, typeDS, rm.answer, rm.authority, rm.additional, true, false, nil), nil
+			}
+		}
+		return n.send(ctx, addr, q, tcp)
+	}
+	r := New(Config{DNSSEC: true, RootHints: []netip.Addr{rootA}, Allow: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}},
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	r.anchors.Store(&rrset{}) // no trust anchor: the root, and so everything, is not signed
+	r.send = send
+	msg := ask(t, r, "www.example.com", m.TypeA)
+	if got := addrs(msg); msg.rcode != m.RcodeNoError || len(got) != 1 || got[0] != "198.51.100.1" {
+		t.Fatalf("rcode %d answers %v", msg.rcode, got)
+	}
+	if ds != 0 {
+		t.Fatalf("%d DS questions below an unsigned root", ds)
+	}
+}
+
+// A parent server that sends a DS question down to the child is skipped:
+// another of the parent's servers is asked, and the chain validates.
+func TestDSReferralNextServer(t *testing.T) {
+	r, n := newSignedTest(t)
+	misled := 0
+	r.send = func(ctx context.Context, addr netip.AddrPort, q []byte, tcp bool) ([]byte, error) {
+		qm, err := parseMessage(q)
+		if err == nil && qm.qtype == typeDS && qm.qname == dotted("ed.com") && misled == 0 {
+			misled++
+			aq := buildQuery(qm.id, qm.qname, m.TypeA, true, nil)
+			resp, err := n.send(ctx, addr, aq, tcp)
+			if err != nil {
+				return nil, err
+			}
+			rm, _ := parseMessage(resp)
+			return buildMessage(rm.id, rm.flags, qm.qname, typeDS, rm.answer, rm.authority, rm.additional, true, true, nil), nil
+		}
+		return n.send(ctx, addr, q, tcp)
+	}
+	// a trace reads nothing from the cache, so it asks for the DS itself
+	// rather than using the one that came with the referral
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tr := r.Trace(ctx, dotted("www.ed.com"), m.TypeA)
+	if misled != 1 {
+		t.Fatalf("the misleading server was asked %d times", misled)
+	}
+	if tr.Rcode != "NOERROR" || tr.DNSSEC != "secure" || len(tr.Answers) == 0 {
+		t.Fatalf("trace %s %s %v %s", tr.Rcode, tr.DNSSEC, tr.Answers, tr.Error)
 	}
 }
