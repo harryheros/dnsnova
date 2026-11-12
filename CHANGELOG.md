@@ -6,6 +6,26 @@ All notable changes are listed here. Versions follow
 
 ## Unreleased
 
+## 1.3.4 (2026-11-11)
+
+Found by comparing, for some 5,000 domains hosted in Asia, what this
+resolver answers with what a large public resolver answers:
+
+- An answer from a zone's server without the AA flag is accepted when it
+  is for the very name asked. Some load balancers that zones delegate
+  their names to leave AA off (Huawei Cloud's storage endpoints, for
+  one); their answers were taken for lame replies and the lookup failed.
+- When every address known for a zone's name servers fails, its other
+  name servers are looked up and asked. Name servers without glue were
+  looked up only partly, two or three of them; when those did not answer
+  from where this server is (sgcc.com.cn's, for one), the lookup gave up
+  although other name servers would have answered.
+- When no name server of a zone gives a usable answer, the error says
+  which question, which zone, and what each server did (timed out,
+  REFUSED, not authoritative, ...) instead of only "no authoritative
+  server answered". It shows in the log of `ecs.client_path`, in Trace a
+  lookup and in the DNSSEC page's failures.
+
 ## 1.3.3 (2026-11-11)
 
 - Resolving from the root, with DNSSEC on: some names under zones that are
