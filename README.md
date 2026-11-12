@@ -1,6 +1,6 @@
 # DNSNova
 
-> A secure, lightweight DNS server for your home, office or a public resolver.
+> A secure, lightweight DNS server for your home, your office, a public resolver or a fleet of them.
 
 [![Version](https://img.shields.io/badge/version-v1.3.0-blue)](https://github.com/harryheros/dnsnova/releases)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](./LICENSE)
@@ -8,6 +8,8 @@
 [![CI](https://github.com/harryheros/dnsnova/actions/workflows/ci.yml/badge.svg)](https://github.com/harryheros/dnsnova/actions/workflows/ci.yml)
 
 DNSNova answers your devices' DNS queries from its cache, by resolving them itself from the root servers with DNSSEC, or through upstream resolvers you choose (Cloudflare, Quad9, Google or your own), over plain or encrypted DNS. It is set up and managed in the browser, keeps no logs of your queries, and is safe to put on the internet.
+
+New in 1.3: several servers with one configuration and anycast, alerts to Telegram, Discord, Slack or a webhook, lookup traces and a DNSSEC page, DNS Cookies, the PROXY protocol, and a cache that survives restarts. See the [changelog](./CHANGELOG.md).
 
 ![The DNSNova web interface: key figures, DNS traffic, how queries flow through the server, top domains, upstreams and recent activity](./docs/images/overview.webp)
 
@@ -64,15 +66,15 @@ Forgot the administrator password? Run `dnsnova -reset-admin` on the server; the
 - **Its own resolver, or forwarding**: resolve names itself from the root servers, with DNSSEC validation and minimal names (no third party sees the queries), or forward to upstreams such as Cloudflare or Google over DNS over HTTPS, TLS or QUIC. With both, the upstreams step in when a domain's own servers cannot be reached.
 - **Web interface**: queries per second, response times, cache hit rate and traffic over time, how queries flow from each protocol through the server to its upstreams, upstream health, most queried domains, every setting with a preview before it is applied, a setup guide for each kind of device, and dark and light appearance.
 - **Optional filtering, without forcing it on anyone**: one server, two doors. The usual addresses answer everything; a second address, name or DoH path blocks ads, trackers and malware (the [ShieldNova](https://github.com/harryheros/shieldnova) list by default, free to use in DNSNova including commercially, or any AdGuard-style, hosts or domain list). Lists update by themselves (only when they have changed), a broken update never replaces a good list, *Check a domain* shows which list blocks a name, and a wrongly blocked domain is allowed again with one click. Trackers disguised as a site's own subdomain (CNAME cloaking) are blocked too.
-- **Answers for another network** (EDNS Client Subnet): give it an address, and name servers answer as they would for that network, wherever the server is. Off by default, and never your clients' addresses.
+- **Answers for another network** (EDNS Client Subnet): give it an address, and name servers answer as they would for that network, wherever the server is. Off by default, and never your clients' addresses. For measurement tools, a secret DoH path can pass each query's own network on instead.
 - **Diagnostics**: trace any lookup from the root, server by server, with the DNSSEC verdict on every zone; a DNSSEC page lists the domains that fail validation and why, and can exempt a domain whose owner broke it (RFC 7646).
 - **Several servers, one configuration**, and anycast routes withdrawn when a server cannot answer ([docs/cluster.md](./docs/cluster.md)).
 - **Alerts** to Telegram, Discord, Slack or a webhook when something is wrong, and when it is fixed ([docs/alerts.md](./docs/alerts.md)).
 - **Local names** such as `nas.home`, and a list of blocked clients.
-- **Public or private**: open to everyone with rate limits that stop abuse, or only to the networks you list.
+- **Public or private**: open to everyone with rate limits that stop abuse, or only to the networks you list. At startup and after every change, a self-check reports what would weaken the server, such as an admin page open without HTTPS or secrets other users can read.
 - **Fast**: on a single CPU core, about 200,000 answers per second from the cache, 94,000 over DNS over TLS, and 23,000 for names it has to look up; a 225,000-rule blocklist costs about 14%. [How this was measured](./docs/benchmark.md).
-- **Hard to poison**: answers are only accepted from the server asked, for the question asked, on a random port with a random ID; a flood of forged answers is noticed and the question is asked again over TCP, which cannot be forged from outside.
-- **Built for busy servers**: one UDP socket per CPU core, cache hits answered without extra work, failures remembered briefly so a broken domain cannot flood the upstreams, and Extended DNS Errors that tell clients why an answer failed.
+- **Hard to poison**: answers are only accepted from the server asked, for the question asked, on a random port with a random ID, and DNS Cookies (RFC 7873) show which ones really came from it; a flood of forged answers, or an answer with the wrong cookie, is noticed and the question is asked again over TCP, which cannot be forged from outside.
+- **Built for busy servers**: one UDP socket per CPU core with batched reads and writes, cache hits answered without extra work, a cache that is saved and loaded back across restarts (by default on public servers), failures remembered briefly so a broken domain cannot flood the upstreams, and Extended DNS Errors that tell clients why an answer failed. Behind a load balancer, the PROXY protocol gives each client's real address; DNS Cookies let real clients through response rate limiting.
 - **Privacy**: queries and client addresses are never written to disk, no telemetry. A query log for troubleshooting runs in memory and stops by itself. See [PRIVACY.md](./PRIVACY.md).
 - **Status page** (optional): a public page with the addresses, setup steps, and a check that shows a visitor whether their device is using the server.
 
