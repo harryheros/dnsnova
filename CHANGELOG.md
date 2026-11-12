@@ -6,6 +6,19 @@ All notable changes are listed here. Versions follow
 
 ## Unreleased
 
+## 1.3.5 (2026-11-11)
+
+Two more causes of SERVFAIL found the same way as in 1.3.4:
+
+- With QNAME minimisation, a shortened name that no server of a zone
+  answers usably is asked again in full, instead of ending the lookup.
+  Some servers mishandle names that only exist as part of longer ones
+  (Huawei Cloud's CDN name servers, behind nia.gov.cn and others).
+- A name server whose only known addresses are IPv6, when they fail, has
+  its IPv4 addresses looked up and asked. On a server whose IPv6 path to
+  some networks is poor, a zone could fail although its name servers
+  answered over IPv4 (esspt.com's, for one).
+
 ## 1.3.4 (2026-11-11)
 
 Found by comparing, for some 5,000 domains hosted in Asia, what this
