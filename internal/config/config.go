@@ -1238,11 +1238,13 @@ func ParseLocalRecords(list []string) ([]LocalRecord, error) {
 		}
 		name := strings.ToLower(strings.TrimSuffix(f[0], "."))
 		check := strings.TrimPrefix(name, "*.")
-		if check == "" || len(check) > 253 || strings.Contains(check, "*") || strings.Contains(check, "..") || strings.HasPrefix(check, ".") {
+		if check == "" || len(check) > 253 || strings.Contains(check, "*") {
 			return nil, fmt.Errorf("%q: not a valid name", f[0])
 		}
+		// Every label is non-empty (so no "..", no leading or extra trailing
+		// dot) and does not start or end with a hyphen.
 		for _, l := range strings.Split(check, ".") {
-			if len(l) > 63 || strings.Trim(l, "abcdefghijklmnopqrstuvwxyz0123456789-_") != "" {
+			if l == "" || len(l) > 63 || l[0] == '-' || l[len(l)-1] == '-' || strings.Trim(l, "abcdefghijklmnopqrstuvwxyz0123456789-_") != "" {
 				return nil, fmt.Errorf("%q: not a valid name", f[0])
 			}
 		}

@@ -1,14 +1,15 @@
 name: fuzz
 
-# Every night, each fuzz target runs for 10 minutes. The corpus that the
-# fuzzer builds is kept between runs (actions/cache), so each night starts
-# where the last one stopped instead of from the seeds. A failure uploads
-# the input that caused it: add it under the package's testdata/fuzz/ to
-# make it a regression test.
+# Once a week, each fuzz target runs for 10 minutes, at most four at a
+# time. The corpus that the fuzzer builds is kept between runs
+# (actions/cache), so each run starts where the last one stopped instead of
+# from the seeds. A failure uploads the input that caused it: add it under
+# the package's testdata/fuzz/ to make it a regression test. It can also be
+# started by hand from the Actions tab (Run workflow).
 
 on:
   schedule:
-    - cron: "17 9 * * *" # 09:17 UTC, outside busy hours
+    - cron: "17 9 * * 1" # Mondays 09:17 UTC, outside busy hours
   workflow_dispatch:
     inputs:
       fuzztime:
@@ -24,6 +25,7 @@ jobs:
     timeout-minutes: 90
     strategy:
       fail-fast: false
+      max-parallel: 4
       matrix:
         target:
           - dnsmsg:FuzzParseQuery
@@ -53,7 +55,7 @@ jobs:
           echo "fn=${t##*:}" >> "$GITHUB_OUTPUT"
           echo "corpus=$(go env GOCACHE)/fuzz/github.com/harryheros/dnsnova/internal/${t%%:*}/${t##*:}" >> "$GITHUB_OUTPUT"
       - name: restore corpus
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ steps.t.outputs.corpus }}
           key: fuzz-${{ matrix.target }}-${{ github.run_id }}
@@ -62,7 +64,7 @@ jobs:
         run: go test ./internal/${{ steps.t.outputs.pkg }} -run '^$' -fuzz '^${{ steps.t.outputs.fn }}$' -fuzztime ${{ inputs.fuzztime || '10m' }}
       - name: upload failing input
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: failing-${{ steps.t.outputs.pkg }}-${{ steps.t.outputs.fn }}
           path: internal/${{ steps.t.outputs.pkg }}/testdata/fuzz/
