@@ -6,6 +6,20 @@ All notable changes are listed here. Versions follow
 
 ## Unreleased
 
+## 1.3.3 (2026-11-11)
+
+- Resolving from the root, with DNSSEC on: some names under zones that are
+  not signed failed with SERVFAIL ("no authoritative server answered"),
+  qqmusic.com among them. To check a zone, the resolver asked its parent
+  for the zone's DS record, and some parents (qq.com's servers, for one)
+  wrongly send that question down to the child zone instead of answering
+  it, which ended the lookup. Two changes:
+  - below a zone that is not signed, nothing is checked any more and no DS
+    question is asked (RFC 4035 5): the zone above is looked at first. This
+    also saves queries for every name under an unsigned domain;
+  - a parent server that sends a DS question down is passed over, and the
+    parent's other servers are asked, instead of giving up.
+
 ## 1.3.2 (2026-11-11)
 
 - Trace a lookup can show how a name resolves for another network: give a
