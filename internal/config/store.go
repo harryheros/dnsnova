@@ -72,6 +72,24 @@ func (s *Store) loadLocked() (*Snapshot, error) {
 	return &Snapshot{Config: cfg, Doc: doc, Hash: s.hash, Warnings: warns}, nil
 }
 
+// LoadRaw reads the file without validating it and remembers it as the
+// version loaded (see Changed). A cluster follower's own file is only its
+// overrides, not a whole configuration.
+func (s *Store) LoadRaw() ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	src, fi, err := readFile(s.Path)
+	if err != nil {
+		return nil, err
+	}
+	s.hash, s.modTime, s.size = HashOf(src), fi.ModTime(), fi.Size()
+	return src, nil
+}
+
+// ErrFollower is returned for a change made on a cluster follower, whose
+// settings come from the primary.
+var ErrFollower = errors.New("this node follows a cluster primary: change the settings there (node-specific ones in this node's own file)")
+
 func readFile(path string) ([]byte, os.FileInfo, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -196,8 +214,19 @@ func (s *Store) saveHistory(src []byte) error {
 		return err
 	}
 	base := strings.TrimSuffix(filepath.Base(s.Path), filepath.Ext(s.Path))
-	stamp := time.Now().UTC().Format("20060102-150405.000")
-	name := filepath.Join(s.HistoryDir, fmt.Sprintf("%s-%s.toml", base, stamp))
+	// Names sort by time, to the millisecond. Two saves within the same
+	// millisecond (quick edits, scripts, a restore) would get the same name
+	// and the second would replace the first, so step forward to the next
+	// free millisecond: every version is kept and the order stays right.
+	t := time.Now().UTC().Truncate(time.Millisecond)
+	var name string
+	for {
+		name = filepath.Join(s.HistoryDir, fmt.Sprintf("%s-%s.toml", base, t.Format("20060102-150405.000")))
+		if _, err := os.Lstat(name); errors.Is(err, os.ErrNotExist) {
+			break
+		}
+		t = t.Add(time.Millisecond)
+	}
 	if err := writeAtomic(name, src); err != nil {
 		return err
 	}

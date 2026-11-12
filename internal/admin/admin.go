@@ -16,14 +16,17 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
+	"github.com/harryheros/dnsnova/internal/alert"
 	"io"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"mime"
 	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -33,6 +36,7 @@ import (
 	"github.com/harryheros/dnsnova/internal/events"
 	"github.com/harryheros/dnsnova/internal/filter"
 	"github.com/harryheros/dnsnova/internal/insight"
+	"github.com/harryheros/dnsnova/internal/recursor"
 	"github.com/harryheros/dnsnova/internal/stats"
 	"github.com/harryheros/dnsnova/internal/tlsmgr"
 )
@@ -78,6 +82,79 @@ type Backend interface {
 	FilterWhy(name string) filter.Why
 	// RecursionStatus describes resolving from the root servers.
 	RecursionStatus() Recursion
+	// Cluster describes this node's place in a cluster (Role "" alone).
+	Cluster() Cluster
+	// Trace resolves name (wire format) and type from scratch and records
+	// each step.
+	Trace(ctx context.Context, name string, qtype uint16) *recursor.TraceResult
+	// DNSSEC describes validation: counts, failures, negative trust anchors.
+	DNSSEC() DNSSEC
+	// ClearDNSSECFailures forgets the failures listed.
+	ClearDNSSECFailures()
+	// Alerts describes notifications: where they go (never the secrets),
+	// what is wrong now, what was sent.
+	Alerts() Alerts
+	// SetAlertDestination sets where notifications go (empty: nowhere).
+	SetAlertDestination(name string, fields map[string]string) error
+	// TestAlerts sends a test notification to every destination now.
+	TestAlerts(ctx context.Context) (map[string]string, error)
+}
+
+// Alerts is the state of notifications, for the Alerts page.
+type Alerts struct {
+	Enabled bool   `json:"enabled"`
+	Role    string `json:"role"` // the cluster role: a follower's primary notifies for it
+	// Destinations: whether each is set up, and a hint (never the secret)
+	Destinations map[string]alert.Shown `json:"destinations"`
+	Channels     []string               `json:"channels"` // in use
+	Active       []alert.Active         `json:"active"`
+	History      []alert.Sent           `json:"history"`
+}
+
+// DNSSEC is the state of validation, for the DNSSEC page.
+type DNSSEC struct {
+	Recursion bool               `json:"recursion"` // resolving from the root servers
+	Enabled   bool               `json:"enabled"`   // validating
+	Secure    int64              `json:"secure"`    // answers by result, since start
+	Insecure  int64              `json:"insecure"`
+	Bogus     int64              `json:"bogus"`
+	Failures  []recursor.Failure `json:"failures"`
+	NTAs      []string           `json:"negative_trust_anchors"`
+}
+
+// Cluster is this node's view of its cluster.
+type Cluster struct {
+	Role   string `json:"role"` // "", "primary" or "follower"
+	Name   string `json:"name"`
+	Region string `json:"region,omitempty"`
+	// Follower: the primary's address and name, the last sync and its
+	// outcome.
+	Primary     string    `json:"primary,omitempty"`
+	PrimaryName string    `json:"primary_name,omitempty"`
+	LastSync    time.Time `json:"last_sync,omitzero"`
+	SyncError   string    `json:"sync_error,omitempty"`
+	ConfigHash  string    `json:"config_hash,omitempty"` // of the shared configuration
+	Overrides   []string  `json:"overrides,omitempty"`
+	// Primary: every node, itself first.
+	Nodes []Node `json:"nodes,omitempty"`
+}
+
+// Node is one node as its primary last heard of it.
+type Node struct {
+	Name        string    `json:"name"`
+	Region      string    `json:"region,omitempty"`
+	Address     string    `json:"address,omitempty"`
+	Self        bool      `json:"self,omitempty"`
+	Online      bool      `json:"online"`
+	LastSeen    time.Time `json:"last_seen,omitzero"`
+	Version     string    `json:"version"`
+	Status      string    `json:"status"` // ok, unhealthy, setup
+	Anycast     string    `json:"anycast,omitempty"`
+	InSync      bool      `json:"in_sync"` // runs the current shared configuration
+	ConfigError string    `json:"config_error,omitempty"`
+	CertUntil   time.Time `json:"cert_until,omitzero"`
+	Uptime      int64     `json:"uptime_seconds"`
+	Overrides   []string  `json:"overrides,omitempty"`
 }
 
 // Recursion is the state of resolving from the root servers.
@@ -150,6 +227,8 @@ type Admin struct {
 
 	totpMu   sync.Mutex
 	totpLast uint64 // last accepted TOTP counter: a code works once
+
+	traceMu sync.Mutex // one trace at a time: each asks dozens of servers
 }
 
 // New opens the account store under dataDir. When no administrator exists
@@ -160,6 +239,9 @@ func New(b Backend, dataDir string, log *slog.Logger) (*Admin, error) {
 		return nil, err
 	}
 	a := &Admin{b: b, log: log, sec: sec, Now: time.Now}
+	if sec.dropLegacyTrust() {
+		log.Warn("security: removed " + sec.dir + "/setup-trust from an earlier installer; setup without the code now works only on this server itself (or through an SSH tunnel)")
+	}
 	if code, err := sec.setupCode(); err != nil {
 		return nil, err
 	} else if code != "" {
@@ -199,7 +281,24 @@ func (a *Admin) routes() {
 	m.Handle("POST /api/v1/querylog", auth(a.startQueryLog))
 	m.Handle("DELETE /api/v1/querylog", auth(a.stopQueryLog))
 	m.Handle("GET /api/v1/system/addresses", auth(a.addresses))
+	m.Handle("GET /api/v1/cluster", auth(func(w http.ResponseWriter, r *http.Request, c *call) { writeJSON(w, http.StatusOK, a.b.Cluster()) }))
 	m.Handle("POST /api/v1/tools/lookup", auth(a.lookup))
+	m.Handle("POST /api/v1/tools/trace", auth(a.trace))
+	m.Handle("GET /api/v1/dnssec", auth(func(w http.ResponseWriter, r *http.Request, c *call) { writeJSON(w, http.StatusOK, a.b.DNSSEC()) }))
+	m.Handle("DELETE /api/v1/dnssec/failures", auth(func(w http.ResponseWriter, r *http.Request, c *call) {
+		a.b.ClearDNSSECFailures()
+		writeJSON(w, http.StatusOK, a.b.DNSSEC())
+	}))
+	m.Handle("GET /api/v1/alerts", auth(func(w http.ResponseWriter, r *http.Request, c *call) { writeJSON(w, http.StatusOK, a.b.Alerts()) }))
+	m.Handle("PUT /api/v1/alerts/destinations/{name}", auth(a.putAlertDestination))
+	m.Handle("POST /api/v1/alerts/test", auth(func(w http.ResponseWriter, r *http.Request, c *call) {
+		res, err := a.b.TestAlerts(r.Context())
+		if err != nil {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"results": res})
+	}))
 	m.Handle("POST /api/v1/filter/why", auth(func(w http.ResponseWriter, r *http.Request, c *call) {
 		var req struct {
 			Name string `json:"name"`
@@ -314,11 +413,106 @@ func viaProxy(r *http.Request) bool {
 	return false
 }
 
+// Local reports whether the request comes from this machine itself: a
+// loopback connection (an SSH tunnel ends there too) that no reverse proxy
+// forwarded.
+func Local(r *http.Request) bool { return clientIP(r).IsLoopback() && !viaProxy(r) }
+
+// ForwardedHTTPS reports whether a reverse proxy on this machine forwarded
+// the request and says the visitor reached it over HTTPS (X-Forwarded-Proto
+// or Forwarded proto=, the value the nearest proxy added, which is the
+// last). Only a loopback connection is believed: anyone else could send the
+// header. Every such header present must say https.
+func ForwardedHTTPS(r *http.Request) bool {
+	if !clientIP(r).IsLoopback() {
+		return false
+	}
+	seen := false
+	if v := lastListItem(r.Header.Values("X-Forwarded-Proto")); v != "" {
+		if !strings.EqualFold(v, "https") {
+			return false
+		}
+		seen = true
+	}
+	if v := lastListItem(r.Header.Values("Forwarded")); v != "" {
+		proto := ""
+		for _, pair := range strings.Split(v, ";") {
+			if k, val, ok := strings.Cut(strings.TrimSpace(pair), "="); ok && strings.EqualFold(k, "proto") {
+				proto = strings.Trim(val, `"`)
+			}
+		}
+		if !strings.EqualFold(proto, "https") {
+			return false
+		}
+		seen = true
+	}
+	return seen
+}
+
+// lastListItem is the last element of a comma-separated header, over all
+// its lines.
+func lastListItem(vals []string) string {
+	if len(vals) == 0 {
+		return ""
+	}
+	items := strings.Split(vals[len(vals)-1], ",")
+	return strings.TrimSpace(items[len(items)-1])
+}
+
+// secureConn reports whether the browser's connection is encrypted: HTTPS
+// to this server, or to a reverse proxy on this machine that says so.
+func secureConn(r *http.Request) bool { return r.TLS != nil || ForwardedHTTPS(r) }
+
 func newCall(r *http.Request) *call { return &call{ip: clientIP(r), proxied: viaProxy(r)} }
 
 // trusted reports whether this request may create the administrator
-// without the setup code.
-func (a *Admin) trusted(c *call) bool { return !c.proxied && a.sec.setupTrusted(c.ip) }
+// without the setup code: from the server itself, or, on a server installed
+// for a home or office network, from that network (see lanAddr). On a
+// public server everyone else gives the code, which only someone with a
+// shell on the server can read: there, a private address says nothing about
+// who is on the other end (a cloud network, a carrier-grade NAT).
+func (a *Admin) trusted(c *call) bool {
+	return !c.proxied && (a.sec.setupTrusted(c.ip) || (trustLocalSetup && a.lanAddr(c.ip)))
+}
+
+// cgnat is the shared address space of RFC 6598, used by carrier-grade NAT
+// and by VPNs such as Tailscale: never routed on the internet.
+var cgnat = netip.MustParsePrefix("100.64.0.0/10")
+
+// NonPublic reports whether ip is never routed on the internet: private
+// (RFC 1918, fc00::/7), link-local or shared (100.64.0.0/10).
+func NonPublic(ip netip.Addr) bool {
+	ip = ip.Unmap()
+	return ip.IsPrivate() || ip.IsLinkLocalUnicast() || cgnat.Contains(ip)
+}
+
+// lanAddr reports whether ip belongs to the network of a server installed
+// for a home or office: server.mode = "private" (what the installer's --lan
+// and the setup wizard's "My network" choose), ip among access.allow, and
+// an address that is never routed on the internet, so it can only be
+// someone on that network.
+func (a *Admin) lanAddr(ip netip.Addr) bool {
+	ip = ip.Unmap()
+	if !NonPublic(ip) {
+		return false
+	}
+	snap := a.b.Snapshot()
+	if snap == nil || snap.Config.Server.Mode != config.ModePrivate {
+		return false
+	}
+	for _, p := range snap.Config.Access.Allow {
+		if p.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// LAN reports whether r comes straight (no reverse proxy) from the network
+// of a server installed for a home or office network. Such a server serves
+// its admin interface there over plain HTTP: the network is the operator's
+// own, and asking for a tunnel or a certificate at home helps no one.
+func (a *Admin) LAN(r *http.Request) bool { return !viaProxy(r) && a.lanAddr(clientIP(r)) }
 
 func safeMethod(m string) bool { return m == http.MethodGet || m == http.MethodHead }
 
@@ -426,7 +620,7 @@ func decode(w http.ResponseWriter, r *http.Request, limit int64, v any) bool {
 func (a *Admin) setCookie(w http.ResponseWriter, r *http.Request, token string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{
 		Name: cookieName, Value: token, Path: "/", MaxAge: maxAge,
-		HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode,
+		HttpOnly: true, Secure: secureConn(r), SameSite: http.SameSiteStrictMode,
 	})
 }
 
@@ -456,4 +650,28 @@ func (a *Admin) assets() http.Handler {
 		w.Header().Set("Cache-Control", "no-cache")
 		fsrv.ServeHTTP(w, r)
 	})
+}
+
+// putAlertDestination sets one destination of notifications. The fields
+// are write-only: nothing gives them back.
+func (a *Admin) putAlertDestination(w http.ResponseWriter, r *http.Request, c *call) {
+	name := r.PathValue("name")
+	if !slices.Contains(alert.Names, name) {
+		writeError(w, http.StatusNotFound, "no such destination")
+		return
+	}
+	var f map[string]string
+	if !decode(w, r, 8<<10, &f) {
+		return
+	}
+	if err := a.b.SetAlertDestination(name, f); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	what := "set"
+	if strings.TrimSpace(strings.Join(slices.Collect(maps.Values(f)), "")) == "" {
+		what = "removed"
+	}
+	a.log.Info("admin: alert destination "+what, "destination", name, "from", c.ip.String())
+	writeJSON(w, http.StatusOK, a.b.Alerts())
 }

@@ -190,6 +190,16 @@ of them is shown in the interface until it works.
 | Navigation | Status, Settings, Tools | a **Nodes** page under Status (inventory, version, region, health); Settings gain a scope: fleet or node |
 | Recent Activity | this node | events tagged with the node |
 
+Diagnostics: **Trace a lookup** (Tools) shows a resolution step by step,
+nested lookups indented, DNSSEC verdicts as state words with their dot;
+the **DNSSEC** page (Status, only with recursion) lists failures with the
+action that fixes each (trace, or stop validating the domain).
+
+Done so far: the **Nodes** page (shown only on a node of a cluster) with
+each node's state, region, settings version, anycast state, version and
+certificate; configuration sync with per-node overrides; the settings pages
+of a follower say where its settings come from. See docs/cluster.md.
+
 Features worth planning for, in this order, each because a DNS operator
 needs it, not to fill the screen:
 

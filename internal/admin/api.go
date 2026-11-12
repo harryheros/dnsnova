@@ -1,12 +1,14 @@
 package admin
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,7 +25,7 @@ func subtleEq(a, b string) bool { return subtle.ConstantTimeCompare([]byte(a), [
 
 func (a *Admin) getSetup(w http.ResponseWriter, r *http.Request, c *call) {
 	needed := a.sec.account() == nil
-	writeJSON(w, http.StatusOK, map[string]any{"needed": needed, "code_required": needed && !a.trusted(c), "secure": r.TLS != nil})
+	writeJSON(w, http.StatusOK, map[string]any{"needed": needed, "code_required": needed && !a.trusted(c), "secure": secureConn(r)})
 }
 
 func (a *Admin) postSetup(w http.ResponseWriter, r *http.Request, c *call) {
@@ -88,7 +90,7 @@ func (a *Admin) startSession(w http.ResponseWriter, r *http.Request, c *call, us
 	token, s := a.sess.create(user, a.Now())
 	a.setCookie(w, r, token, int(maxLifetime.Seconds()))
 	acc := a.sec.account()
-	writeJSON(w, status, map[string]any{"username": user, "csrf": s.csrf, "totp": acc != nil && acc.TOTP != "", "secure": r.TLS != nil, "client_ip": c.ip.String()})
+	writeJSON(w, status, map[string]any{"username": user, "csrf": s.csrf, "totp": acc != nil && acc.TOTP != "", "secure": secureConn(r), "client_ip": c.ip.String()})
 }
 
 func (a *Admin) login(w http.ResponseWriter, r *http.Request, c *call) {
@@ -159,7 +161,7 @@ func (a *Admin) logout(w http.ResponseWriter, r *http.Request, c *call) {
 
 func (a *Admin) getSession(w http.ResponseWriter, r *http.Request, c *call) {
 	acc := a.sec.account()
-	writeJSON(w, http.StatusOK, map[string]any{"username": c.sess.user, "csrf": c.sess.csrf, "totp": acc.TOTP != "", "secure": r.TLS != nil, "client_ip": c.ip.String()})
+	writeJSON(w, http.StatusOK, map[string]any{"username": c.sess.user, "csrf": c.sess.csrf, "totp": acc.TOTP != "", "secure": secureConn(r), "client_ip": c.ip.String()})
 }
 
 // ---- account ----
@@ -422,6 +424,39 @@ func (a *Admin) lookup(w http.ResponseWriter, r *http.Request, c *call) {
 		"results": a.b.Lookup(r.Context(), wire, qt, req.Upstreams)})
 }
 
+// trace resolves a name from scratch and returns every step. Only one runs
+// at a time: a trace can send a hundred queries.
+func (a *Admin) trace(w http.ResponseWriter, r *http.Request, c *call) {
+	var req struct {
+		Name string `json:"name"`
+		Type string `json:"type"`
+	}
+	if !decode(w, r, 8<<10, &req) {
+		return
+	}
+	wire, err := wireName(req.Name)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Type == "" {
+		req.Type = "A"
+	}
+	qt, ok := qtypes[strings.ToUpper(req.Type)]
+	if !ok {
+		writeError(w, http.StatusBadRequest, "unsupported record type "+req.Type)
+		return
+	}
+	if !a.traceMu.TryLock() {
+		writeError(w, http.StatusTooManyRequests, "a trace is already running; try again in a moment")
+		return
+	}
+	defer a.traceMu.Unlock()
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	writeJSON(w, http.StatusOK, a.b.Trace(ctx, wire, qt))
+}
+
 // wireName converts a dotted name to wire format (without the final zero).
 func wireName(name string) (string, error) {
 	name = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(name)), ".")
@@ -626,6 +661,10 @@ func (a *Admin) patchConfig(w http.ResponseWriter, r *http.Request, c *call) {
 
 // write validates, saves and applies src.
 func (a *Admin) write(w http.ResponseWriter, c *call, snap *config.Snapshot, src []byte, what string) {
+	if key := fileOnlyChange(snap.Doc.Src, src); key != "" {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": key + " can only be changed in the configuration file on the server: [cluster] decides where this node takes its settings from, and [anycast] runs commands"})
+		return
+	}
 	res, ok := a.check(w, snap, src)
 	if !ok {
 		return
@@ -636,6 +675,9 @@ func (a *Admin) write(w http.ResponseWriter, c *call, snap *config.Snapshot, src
 	}
 	nsnap, err := a.b.ApplyConfig(src, snap.Hash)
 	switch {
+	case errors.Is(err, config.ErrFollower):
+		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error()})
+		return
 	case errors.Is(err, config.ErrConflict):
 		cur := a.b.Snapshot()
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "hash": cur.Hash})
@@ -812,6 +854,32 @@ func valueOf(x any, depth int) (config.Value, error) {
 func ecsShown(c *config.Config) string {
 	if p, ok := c.ClientSubnet(); ok {
 		return p.String()
+	}
+	return ""
+}
+
+// fileOnlyChange returns the first setting of config.FileOnlyTables that
+// differs between the two sources ("" if none).
+func fileOnlyChange(old, new []byte) string {
+	od, err1 := config.Parse(old)
+	nd, err2 := config.Parse(new)
+	if err1 != nil || err2 != nil {
+		return "" // check reports the syntax error
+	}
+	keys := map[string]bool{}
+	for _, d := range []*config.Document{od, nd} {
+		for _, e := range d.Entries {
+			if slices.Contains(config.FileOnlyTables, e.Table) {
+				keys[e.Table+"\x00"+e.Key] = true
+			}
+		}
+	}
+	for k := range keys {
+		table, key, _ := strings.Cut(k, "\x00")
+		oe, ne := od.Lookup(table, key), nd.Lookup(table, key)
+		if (oe == nil) != (ne == nil) || (oe != nil && config.Format(oe.Value) != config.Format(ne.Value)) {
+			return table + "." + key
+		}
 	}
 	return ""
 }

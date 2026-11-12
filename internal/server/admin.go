@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/netip"
@@ -25,8 +27,8 @@ import (
 
 // adminListener serves the admin API on one TCP port, over HTTPS when a
 // certificate is available and plain HTTP otherwise: the first byte of each
-// connection tells them apart (0x16 starts a TLS handshake). Plain requests
-// that name one of the certificate's domains are redirected to HTTPS.
+// connection tells them apart (0x16 starts a TLS handshake). Plain HTTP is
+// answered only on this machine (see adminPlain).
 type adminListener struct {
 	addr          string
 	ln            net.Listener
@@ -48,22 +50,16 @@ func (s *Server) listenAdmin(addr string) (*adminListener, error) {
 		return nil, err
 	}
 	l := &adminListener{addr: addr, ln: ln, plainL: newChanListener(ln.Addr()), tlsL: newChanListener(ln.Addr())}
-	loopback := false
-	if ap, err := netip.ParseAddrPort(ln.Addr().String()); err == nil {
-		loopback = ap.Addr().IsLoopback()
-	}
 	newSrv := func(h http.Handler) *http.Server {
 		return &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second,
 			WriteTimeout: 30 * time.Second, IdleTimeout: 120 * time.Second, MaxHeaderBytes: 16 << 10}
 	}
+	port := ""
+	if _, p, err := net.SplitHostPort(ln.Addr().String()); err == nil {
+		port = p
+	}
 	l.secure = newSrv(s.admin)
-	l.plain = newSrv(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !loopback && s.Certs.Ready() && s.isDomain(r.Host) {
-			http.Redirect(w, r, "https://"+r.Host+r.URL.RequestURI(), http.StatusPermanentRedirect)
-			return
-		}
-		s.admin.ServeHTTP(w, r)
-	}))
+	l.plain = newSrv(s.adminPlain(port))
 	tlsConf := s.Certs.TLSConfig("http/1.1")
 	go l.plain.Serve(l.plainL)
 	go l.secure.Serve(l.tlsL)
@@ -120,15 +116,111 @@ func (l *adminListener) close() {
 	l.secure.Shutdown(ctx)
 }
 
-func (s *Server) isDomain(hostport string) bool {
+// adminPlain serves the admin interface over plain HTTP, which carries the
+// password and the session cookie in the clear. It is answered on this
+// machine (a browser on the server itself or at the end of an SSH tunnel,
+// or a reverse proxy here that says the visitor used HTTPS) and, on a
+// server installed for a home or office network (server.mode = "private"),
+// to that network. Anyone else is sent to HTTPS when the certificate covers
+// the name they used, and otherwise refused with directions, so a password
+// is never typed into an unencrypted page across the internet.
+func (s *Server) adminPlain(port string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if admin.Local(r) || admin.ForwardedHTTPS(r) || s.admin.LAN(r) {
+			s.admin.ServeHTTP(w, r)
+			return
+		}
+		ready := s.Certs != nil && s.Certs.Ready()
+		var names []string
+		if ready {
+			names = s.Certs.Status().Names
+			if certCovers(names, r.Host) && !proxied(r) {
+				http.Redirect(w, r, "https://"+r.Host+r.URL.RequestURI(), http.StatusPermanentRedirect)
+				return
+			}
+		}
+		msg := plainRefusal(r, port, names)
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Cache-Control", "no-store")
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			h.Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]string{"error": msg})
+			return
+		}
+		h.Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusForbidden)
+		io.WriteString(w, msg+"\n")
+	})
+}
+
+// proxied reports whether a reverse proxy forwarded r (as admin sees it).
+func proxied(r *http.Request) bool {
+	for _, h := range []string{"Forwarded", "X-Forwarded-For", "X-Real-Ip", "X-Forwarded-Host", "X-Forwarded-Proto", "Via"} {
+		if r.Header.Get(h) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// plainRefusal says how to reach the admin interface instead.
+func plainRefusal(r *http.Request, port string, certNames []string) string {
+	if proxied(r) {
+		return "The admin interface needs HTTPS. This request came through a reverse proxy that did not say the visitor used HTTPS: serve the interface over HTTPS there and send X-Forwarded-Proto: https."
+	}
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	if port == "" {
+		port = "7000"
+	}
+	lanHint := ""
+	if ap, err := netip.ParseAddrPort(r.RemoteAddr); err == nil && admin.NonPublic(ap.Addr()) {
+		lanHint = " This server is set up for the internet (server.mode = \"public\"); on a home or office network, choose \"My network\" in the setup wizard or set server.mode = \"private\", and it opens directly from there."
+	}
+	tunnel := "ssh -L " + port + ":127.0.0.1:" + port + " user@" + host + " then open http://127.0.0.1:" + port + "/"
+	for _, n := range certNames {
+		if _, err := netip.ParseAddr(n); err != nil && !strings.HasPrefix(n, "*.") {
+			return "The admin interface is not served over plain HTTP from other machines. Open https://" + n + ":" + port + "/ or use an SSH tunnel: " + tunnel + "." + lanHint
+		}
+	}
+	return "The admin interface has no certificate yet, so it is not served to other machines: plain HTTP would send the password in the clear. From your computer, open an SSH tunnel: " + tunnel + ". Once a domain is set up (Settings > Encrypted DNS), it also opens over HTTPS on this port." + lanHint
+}
+
+// certCovers reports whether a certificate for names is valid for the host
+// in hostport (exact names, IP addresses and one-label wildcards).
+func certCovers(names []string, hostport string) bool {
 	host := hostport
 	if h, _, err := net.SplitHostPort(hostport); err == nil {
 		host = h
 	}
-	host = strings.TrimSuffix(strings.ToLower(host), ".")
-	for _, d := range s.state.Load().cfg.TLS.Domains {
-		if strings.EqualFold(strings.TrimSuffix(d, "."), host) {
+	host = strings.TrimSuffix(strings.ToLower(strings.Trim(host, "[]")), ".")
+	if host == "" {
+		return false
+	}
+	ip, ipErr := netip.ParseAddr(host)
+	for _, n := range names {
+		n = strings.TrimSuffix(strings.ToLower(n), ".")
+		if ipErr == nil {
+			if a, err := netip.ParseAddr(n); err == nil && a.Unmap() == ip.Unmap() {
+				return true
+			}
+			continue
+		}
+		if n == host {
 			return true
+		}
+		if rest, ok := strings.CutPrefix(n, "*."); ok {
+			if _, after, ok := strings.Cut(host, "."); ok && after == rest {
+				return true
+			}
 		}
 	}
 	return false
@@ -210,6 +302,9 @@ func (s *Server) Snapshot() *config.Snapshot { return s.snap.Load() }
 // ApplyConfig implements admin.Backend: write, apply, and put the previous
 // file back if applying fails (a port already in use, for example).
 func (s *Server) ApplyConfig(src []byte, expected string) (*config.Snapshot, error) {
+	if s.cl.run.Role == "follower" {
+		return nil, config.ErrFollower
+	}
 	s.applyMu.Lock()
 	defer s.applyMu.Unlock()
 	old := s.snap.Load()
@@ -269,7 +364,13 @@ func (s *Server) Events(limit int) []events.Event { return s.EventLog.Recent(lim
 func (s *Server) Cache() (positive, negative int) { return s.res.CacheCounts() }
 
 // ClearCache implements admin.Backend.
-func (s *Server) ClearCache() { s.res.ClearCache(); s.Rec.ClearCache() }
+func (s *Server) ClearCache() {
+	s.res.ClearCache()
+	s.Rec.ClearCache()
+	if st := s.state.Load(); st != nil {
+		s.dropCacheFile(st.cfg) // or the old answers would come back after a restart
+	}
+}
 
 // Listeners implements admin.Backend.
 func (s *Server) Listeners() map[string][]string {

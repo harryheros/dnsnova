@@ -52,6 +52,16 @@ const (
 	numSource
 )
 
+// Cookie states counted in Stats.Cookies.
+const (
+	CookieClientOnly = iota
+	CookieBad
+	CookieGood
+)
+
+// CookieNames label Stats.Cookies in the metrics.
+var CookieNames = [3]string{"client_only", "bad", "good"}
+
 var sourceNames = [numSource]string{"cache", "stale", "upstream", "local", "blocked"}
 
 // Stats is the set of counters for one server.
@@ -62,6 +72,12 @@ type Stats struct {
 	Rcodes    [7]atomic.Uint64 // NOERROR..REFUSED, then other
 	Refreshes atomic.Uint64
 	Truncated atomic.Uint64
+	// Cookies counts queries by their DNS Cookie (RFC 7873): client
+	// cookie only, a server cookie not (or no longer) valid, a valid one.
+	Cookies [3]atomic.Uint64
+	// BadCookies counts BADCOOKIE answers sent instead of a truncated one
+	// when response rate limiting slips.
+	BadCookies atomic.Uint64
 
 	LatencyCache    *Histogram
 	LatencyUpstream *Histogram
@@ -166,6 +182,13 @@ func (s *Stats) WritePrometheus(w io.Writer) {
 	p("dnsnova_cache_refreshes_total %d", s.Refreshes.Load())
 	p("# TYPE dnsnova_truncated_total counter")
 	p("dnsnova_truncated_total %d", s.Truncated.Load())
+	p("# HELP dnsnova_cookie_queries_total Queries with a DNS Cookie, by what it showed.")
+	p("# TYPE dnsnova_cookie_queries_total counter")
+	for i, n := range CookieNames {
+		p(`dnsnova_cookie_queries_total{cookie=%q} %d`, n, s.Cookies[i].Load())
+	}
+	p("# TYPE dnsnova_badcookie_total counter")
+	p("dnsnova_badcookie_total %d", s.BadCookies.Load())
 	p("# HELP dnsnova_response_seconds Time to answer, by answer source.")
 	p("# TYPE dnsnova_response_seconds histogram")
 	s.LatencyCache.write(w, "dnsnova_response_seconds", `source="cache"`)
@@ -181,3 +204,51 @@ func SourceName(src int) string {
 	}
 	return sourceNames[src]
 }
+
+// Counts are the totals the alert checks compare over time.
+type Counts struct {
+	Answers  uint64     // responses, every code
+	ServFail uint64     // SERVFAIL responses
+	Upstream [16]uint64 // LatencyUpstream's buckets: queries not answered from the cache
+}
+
+// Counts reads the totals now.
+func (s *Stats) Counts() Counts {
+	var c Counts
+	for i := range s.Rcodes {
+		c.Answers += s.Rcodes[i].Load()
+	}
+	c.ServFail = s.Rcodes[2].Load()
+	for i := range s.LatencyUpstream.counts {
+		c.Upstream[i] = s.LatencyUpstream.counts[i].Load()
+	}
+	return c
+}
+
+// Since is what was counted between old and c (zero if the counters were
+// cleared in between).
+func (c Counts) Since(old Counts) Counts {
+	if c.Answers < old.Answers || c.ServFail < old.ServFail {
+		return Counts{}
+	}
+	out := Counts{Answers: c.Answers - old.Answers, ServFail: c.ServFail - old.ServFail}
+	for i := range c.Upstream {
+		if c.Upstream[i] < old.Upstream[i] {
+			return Counts{}
+		}
+		out.Upstream[i] = c.Upstream[i] - old.Upstream[i]
+	}
+	return out
+}
+
+// UpstreamQueries is how many queries the upstream latencies cover.
+func (c Counts) UpstreamQueries() uint64 {
+	var n uint64
+	for _, v := range c.Upstream {
+		n += v
+	}
+	return n
+}
+
+// UpstreamQuantile estimates quantile q (0..1) of their latency.
+func (c Counts) UpstreamQuantile(q float64) time.Duration { return quantile(c.Upstream[:], q) }

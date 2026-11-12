@@ -121,7 +121,12 @@ func FuzzParseQuery(f *testing.F) {
 	f.Add(dnstest.Query(1, "example.com", 1, true, true))
 	f.Add(dnstest.Query(2, "a.b.c.d.e", 28, false, false))
 	f.Add([]byte{0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0xC0, 0x0C, 0, 1, 0, 1})
+	f.Add(m.AddOptions(dnstest.Query(3, "example.com", 1, true, false), []byte{0, 10, 0, 8, 1, 2, 3, 4, 5, 6, 7, 8}))
+	f.Add(m.AddOptions(dnstest.Query(4, "example.com", 1, true, false), m.ClientSubnet(netip.MustParsePrefix("203.0.113.0/24"))))
 	f.Fuzz(func(t *testing.T, b []byte) {
+		if p, ok, err := m.QueryClientSubnet(b); ok && (err != nil || p.Masked() != p) {
+			t.Fatalf("client subnet %v with %v", p, err)
+		}
 		q, rc, err := m.ParseQuery(b)
 		m.ResponseMinTTL(b)
 		m.MatchResponse(b, b)
@@ -241,5 +246,62 @@ func TestClientSubnet(t *testing.T) {
 	pq, _, err := m.ParseQuery(q)
 	if err != nil || !pq.EDNS || len(q) != m.HeaderLen+len(pq.Name)+5+11+11 {
 		t.Fatalf("query with a client subnet: %v, %d bytes", err, len(q))
+	}
+}
+
+// Any response from an upstream: removing its OPT record, adding options
+// and padding never panic, and padding gives the block size.
+func FuzzOptions(f *testing.F) {
+	q := dnstest.Query(1, "example.com", 1, true, true)
+	f.Add(q, []byte{0, 15, 0, 2, 0, 0})
+	f.Add(m.AddOptions(q, m.EDE(m.EDEBlocked, "x")), []byte{0, 10, 0, 8, 1, 2, 3, 4, 5, 6, 7, 8})
+	f.Fuzz(func(t *testing.T, msg, opts []byte) {
+		if out, ede, err := m.StripOPT(msg); err == nil {
+			if len(out) > len(msg) {
+				t.Fatal("StripOPT grew the message")
+			}
+			_ = ede
+		}
+		added := m.AddOptions(bytes.Clone(msg), opts)
+		padded := m.Pad(bytes.Clone(added), m.PaddingBlock)
+		if len(padded) != len(added) && len(padded)%m.PaddingBlock != 0 {
+			t.Fatalf("padded to %d", len(padded))
+		}
+		if q, _, err := m.ParseQuery(msg); err == nil && q.Cookie != nil {
+			if n := len(q.Cookie); n != 8 && (n < 16 || n > 40) {
+				t.Fatalf("cookie of %d bytes accepted", n)
+			}
+		}
+	})
+}
+
+func TestQueryClientSubnet(t *testing.T) {
+	q := func(opts []byte) []byte {
+		return m.BuildUpstreamQuery(&m.Query{ID: 1, Name: "\x07example\x03com", Type: m.TypeA, Class: 1}, opts)
+	}
+	for _, p := range []string{"203.0.113.0/24", "2001:db8::/48", "198.51.100.7/32", "0.0.0.0/0"} {
+		want := netip.MustParsePrefix(p)
+		got, ok, err := m.QueryClientSubnet(q(m.ClientSubnet(want)))
+		if err != nil || !ok || got != want.Masked() {
+			t.Errorf("%s: %v %v %v", p, got, ok, err)
+		}
+	}
+	if _, ok, err := m.QueryClientSubnet(q(nil)); ok || err != nil {
+		t.Errorf("no option: %v %v", ok, err)
+	}
+	for name, opt := range map[string][]byte{
+		"family 3":         {0, 8, 0, 5, 0, 3, 8, 0, 1},
+		"bits too long":    {0, 8, 0, 5, 0, 1, 33, 0, 1},
+		"address too long": {0, 8, 0, 6, 0, 1, 8, 0, 1, 2},
+		"bits past prefix": {0, 8, 0, 6, 0, 1, 9, 0, 1, 0xff},
+		"too short":        {0, 8, 0, 2, 0, 1},
+		"two options":      append(m.ClientSubnet(netip.MustParsePrefix("203.0.113.0/24")), m.ClientSubnet(netip.MustParsePrefix("203.0.113.0/24"))...),
+	} {
+		if _, _, err := m.QueryClientSubnet(q(opt)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	if _, _, err := m.QueryClientSubnet([]byte{1, 2}); err == nil {
+		t.Error("short message accepted")
 	}
 }

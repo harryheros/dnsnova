@@ -68,13 +68,17 @@ func plainListen(c *config.Config) []string {
 	return append(slices.Clone(c.Server.Listen), c.Filter.Listen...)
 }
 
-// dohPaths lists the DoH paths, separated by a space: doh.path and, while
-// filtering is on, filter.doh_path. A listener is reopened when it changes.
+// dohPaths lists the DoH paths, separated by a space: doh.path, while
+// filtering is on filter.doh_path, and ecs.client_path when set. A listener is reopened when it changes.
 func dohPaths(c *config.Config) string {
+	p := c.DoH.Path
 	if c.Filter.Enabled && c.Filter.DoHPath != "" {
-		return c.DoH.Path + " " + c.Filter.DoHPath
+		p += " " + c.Filter.DoHPath
 	}
-	return c.DoH.Path
+	if c.ECS.ClientPath != "" && c.Recursion.Enabled {
+		p += " " + c.ECS.ClientPath
+	}
+	return p
 }
 
 // dohMux serves h on each of the space-separated paths and the status page

@@ -1,0 +1,68 @@
+name: fuzz
+
+# Every night, each fuzz target runs for 10 minutes. The corpus that the
+# fuzzer builds is kept between runs (actions/cache), so each night starts
+# where the last one stopped instead of from the seeds. A failure uploads
+# the input that caused it: add it under the package's testdata/fuzz/ to
+# make it a regression test.
+
+on:
+  schedule:
+    - cron: "17 9 * * *" # 09:17 UTC, outside busy hours
+  workflow_dispatch:
+    inputs:
+      fuzztime:
+        description: time per target (e.g. 10m, 1h)
+        default: 10m
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - dnsmsg:FuzzParseQuery
+          - dnsmsg:FuzzOptions
+          - config:FuzzParse
+          - config:FuzzLists
+          - config:FuzzMerge
+          - resolver:FuzzAnalyze
+          - resolver:FuzzLoadCache
+          - filter:FuzzParse
+          - recursor:FuzzParseMessage
+          - proxyproto:FuzzParseV2
+          - proxyproto:FuzzReadV1
+          - cookie:FuzzCookie
+          - upstream:FuzzParseSpec
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: target
+        id: t
+        run: |
+          t='${{ matrix.target }}'
+          echo "pkg=${t%%:*}" >> "$GITHUB_OUTPUT"
+          echo "fn=${t##*:}" >> "$GITHUB_OUTPUT"
+          echo "corpus=$(go env GOCACHE)/fuzz/github.com/harryheros/dnsnova/internal/${t%%:*}/${t##*:}" >> "$GITHUB_OUTPUT"
+      - name: restore corpus
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.t.outputs.corpus }}
+          key: fuzz-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-${{ matrix.target }}-
+      - name: fuzz
+        run: go test ./internal/${{ steps.t.outputs.pkg }} -run '^$' -fuzz '^${{ steps.t.outputs.fn }}$' -fuzztime ${{ inputs.fuzztime || '10m' }}
+      - name: upload failing input
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failing-${{ steps.t.outputs.pkg }}-${{ steps.t.outputs.fn }}
+          path: internal/${{ steps.t.outputs.pkg }}/testdata/fuzz/

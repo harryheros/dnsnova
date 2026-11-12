@@ -295,7 +295,7 @@ func (s *Server) serveDoQStream(c *quic.Conn, str *quic.Stream, ip netip.Addr, s
 		return
 	}
 	start := time.Now()
-	res := s.resolve(msg, false, "doq", st.filterName(sni))
+	res := s.resolve(msg, ip, false, "doq", st.filterName(sni))
 	if res.Resp == nil {
 		c.CloseWithError(doqProtocolError, "malformed query")
 		return

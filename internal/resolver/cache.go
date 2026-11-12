@@ -1,6 +1,7 @@
 package resolver
 
 import (
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -309,11 +310,19 @@ func (g *flightGroup) do(key string, fn func() (*entry, error)) (*entry, error) 
 	g.m[key] = c
 	g.mu.Unlock()
 
+	// Release the key and the waiters even if fn panics: otherwise, when
+	// the panic is recovered (net/http does it for DoH), every later query
+	// for this key would wait forever. Waiters then get errFlightPanic; the
+	// panic itself goes on up the leader's stack.
+	c.err = errFlightPanic
+	defer func() {
+		g.mu.Lock()
+		delete(g.m, key)
+		g.mu.Unlock()
+		c.wg.Done()
+	}()
 	c.e, c.err = fn()
-
-	g.mu.Lock()
-	delete(g.m, key)
-	g.mu.Unlock()
-	c.wg.Done()
 	return c.e, c.err
 }
+
+var errFlightPanic = errors.New("resolver: query failed unexpectedly")
