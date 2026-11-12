@@ -23,9 +23,9 @@ says so through restraint and precision, not decoration.
   before effect.
 - **Dense but calm.** Many facts on one screen, each in a fixed place, with
   a clear order of importance.
-- **Built for more than one node.** DNSNova runs as one server today and is
-  heading toward managing several. Screens are laid out so a second node is
-  an extra row or an extra column, not a redesign (see *Toward clusters*).
+- **Built for more than one node.** DNSNova runs as one server or as a
+  cluster of several. Screens are laid out so a second node is an extra row
+  or an extra column, not a redesign (see *Clusters*).
 
 ## Principles
 
@@ -174,11 +174,10 @@ color. No glow on icons. Icons never replace a label.
   are collected in the floating review panel before anything is applied.
 - **Toasts**: bottom right, a state dot, errors stay longer.
 
-## Toward clusters
+## Clusters
 
-The interface is shaped for the multi-node DNSNova so that the step is
-additive. These are design commitments, not features of this release; none
-of them is shown in the interface until it works.
+The interface is shaped for several nodes so that each step is additive.
+What is not done yet is not shown in the interface until it works.
 
 | Area | Today | With several nodes |
 | --- | --- | --- |
@@ -195,25 +194,23 @@ nested lookups indented, DNSSEC verdicts as state words with their dot;
 the **DNSSEC** page (Status, only with recursion) lists failures with the
 action that fixes each (trace, or stop validating the domain).
 
-Done so far: the **Nodes** page (shown only on a node of a cluster) with
-each node's state, region, settings version, anycast state, version and
-certificate; configuration sync with per-node overrides; the settings pages
-of a follower say where its settings come from. See docs/cluster.md.
+Done (1.3):
 
-Features worth planning for, in this order, each because a DNS operator
-needs it, not to fill the screen:
+- the **Nodes** page (shown only on a node of a cluster) with each node's
+  state, region, settings version, anycast state, version and certificate;
+- **configuration sync** through the usual preview / apply / history flow,
+  per-node overrides shown as such, and the settings pages of a follower
+  saying where its settings come from (docs/cluster.md);
+- **fleet health** in the top bar ("1 of 2 nodes online");
+- **alerts** (Settings › Alerts): thresholds on failing upstreams, errors,
+  response times, DNSSEC failures and certificate days, sent to Telegram,
+  Discord, Slack or a webhook by the primary for the whole cluster, and
+  listed in Recent Activity (docs/alerts.md).
 
-1. **Nodes** page and node identity (name, region, role) in the API, with
-   the overview's "1 node" chip linking to it.
-2. **Configuration sync**: one configuration applied to several nodes with
-   the existing preview / apply / history flow, per-node overrides shown as
-   such.
-3. **Fleet health**: per-node reachability, version drift, certificate
-   expiry across nodes, shown in the top bar and on the Nodes page.
-4. **Anycast / geography**: only when nodes carry a region, a map of node
-   locations with health replaces nothing; it is added beside Traffic Flow.
-5. **Alerts**: thresholds on the key figures (latency, failing upstreams,
-   certificate days) delivered by webhook, listed in Recent Activity.
+Still to come, only when nodes carry a region and an operator needs it: a
+map of node locations with their health, added beside Traffic Flow rather
+than replacing anything; and fleet totals in the key figures, per node on
+hover.
 
 ## Writing
 
