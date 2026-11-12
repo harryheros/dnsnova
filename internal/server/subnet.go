@@ -50,6 +50,10 @@ func (s *Server) handleSubnetDoH(w http.ResponseWriter, r *http.Request, msg []b
 			http.Error(w, "malformed dns message", http.StatusBadRequest)
 			return
 		}
+		// why, for whoever investigates a name that fails here (Trace,
+		// with the same network, shows each step)
+		s.Log.Info("ecs.client_path: no answer", "name", m.NameString(q.Name), "type", m.TypeString(q.Type),
+			"subnet", p.String(), "err", err.Error())
 		resp = m.ErrorResponse(msg, q, m.RcodeServFail)
 	}
 	s.Stats.Rcode(int(resp[3] & 0xF))

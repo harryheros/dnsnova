@@ -6,6 +6,17 @@ All notable changes are listed here. Versions follow
 
 ## Unreleased
 
+## 1.3.2 (2026-11-11)
+
+- Trace a lookup can show how a name resolves for another network: give a
+  client network (or an address, which stands for its /24 or /56) under
+  "As seen from another network", and every question carries it as EDNS
+  Client Subnet. With recursion only. API: `subnet` in
+  `POST /tools/trace`.
+- `ecs.client_path`: a lookup that gets no answer is logged with the
+  reason (timed out, too many queries, no server reachable), the name and
+  the network, so a name that fails there can be traced.
+
 ## 1.3.1 (2026-11-11)
 
 - `ecs.client_path`: a lookup may take up to 9 seconds instead of 6. Each

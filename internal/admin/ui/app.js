@@ -1545,13 +1545,15 @@ function tracePage(main) {
   name.style.maxWidth = "none";
   const type = h("select", { "aria-label": "Record type" }, ["A", "AAAA", "CNAME", "MX", "TXT", "NS", "HTTPS", "CAA", "SOA", "DS", "DNSKEY", "PTR"].map((t) => h("option", { selected: (p.type || "A") === t }, t)));
   type.style.maxWidth = "120px";
+  const subnet = h("input", { type: "text", class: "mono", value: p.subnet || "", placeholder: "e.g. 219.141.140.0/24", "aria-label": "As seen from network (optional)", spellcheck: "false" });
+  subnet.style.maxWidth = "220px";
   const out = h("div", { style: { display: "flex", flexDirection: "column", gap: "18px" } });
   const btn = h("button", { type: "submit", class: "btn primary" }, "Trace");
   const run = async () => {
     btn.disabled = true;
     fill(out, h("p", { class: "muted" }, "Asking the name servers… this can take a few seconds."));
     try {
-      const r = await api("POST", "/tools/trace", { name: name.value, type: type.value });
+      const r = await api("POST", "/tools/trace", { name: name.value, type: type.value, subnet: subnet.value });
       fill(out, traceView(r));
     } catch (e) { fill(out, errorBox(e)); }
     btn.disabled = false;
@@ -1560,7 +1562,10 @@ function tracePage(main) {
     h("section", { class: "card" },
       h("p", { class: "muted", style: { margin: 0 } }, "Resolves the name from scratch, without the cache, and shows every step: which server was asked, what it answered, and the DNSSEC check of each zone. Use it to see why a name fails."),
       h("form", { class: "row", style: { alignItems: "center" }, onsubmit: (ev) => { ev.preventDefault(); run(); } },
-        h("div", { style: { flex: "1 1 260px" } }, name), type, btn)),
+        h("div", { style: { flex: "1 1 260px" } }, name), type, btn),
+      h("details", { class: "adv", open: !!p.subnet }, h("summary", null, "As seen from another network"),
+        h("label", { class: "small", style: { display: "grid", gap: "6px", marginTop: "8px" } },
+          "Client network sent to name servers (EDNS Client Subnet), to see what they answer for it. An address stands for its /24 or /56.", subnet))),
     out);
   if (p.name) run(); else name.focus();
 }
@@ -1574,6 +1579,7 @@ function traceView(r) {
       h("div", null, h("dt", null, "DNSSEC"), h("dd", null, secPill(secOf(r.dnssec, r.why)), r.ede ? h("span", { class: "muted small" }, " " + r.ede) : null)),
       r.why ? h("div", null, h("dt", null, "Why"), h("dd", { class: "small", style: { whiteSpace: "normal" } }, r.why)) : null,
       h("div", null, h("dt", null, r.dnssec === "bogus" ? "Answer (refused: clients get SERVFAIL)" : "Answer"), h("dd", { class: "mono small", style: { whiteSpace: "normal" } }, (r.answers || []).length ? r.answers.map((a) => h("div", null, a)) : "none")),
+      r.subnet ? h("div", null, h("dt", null, "As seen from"), h("dd", { class: "mono" }, r.subnet)) : null,
       h("div", null, h("dt", null, "Work"), h("dd", null, `${fmt.int(r.queries)} queries · ${fmt.ms(r.ms)} ms`))));
   const kindLabel = { query: "Asked", cname: "Alias", keys: "Keys", validate: "Checked" };
   const rows = (r.steps || []).map((s) => h("tr", null,

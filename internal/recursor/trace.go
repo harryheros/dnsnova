@@ -51,6 +51,8 @@ type TraceResult struct {
 	Error    string      `json:"error,omitempty"`
 	Steps    []TraceStep `json:"steps"`
 	Truncate bool        `json:"truncated,omitempty"` // more steps than kept
+	// Subnet is the client network name servers were asked for, if any
+	Subnet string `json:"subnet,omitempty"`
 }
 
 const maxTraceSteps = 400
@@ -75,6 +77,7 @@ func (tr *tracer) add(t *task, s TraceStep) {
 }
 
 // Trace resolves name (wire format) and type from scratch and records how.
+// With WithSubnet, name servers are asked for that network.
 func (r *Recursor) Trace(ctx context.Context, name string, qtype uint16) *TraceResult {
 	cfg := r.cfg.Load()
 	t := newTask()
