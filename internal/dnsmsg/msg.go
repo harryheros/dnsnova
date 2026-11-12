@@ -332,7 +332,8 @@ func ParseQuery(msg []byte) (*Query, int, error) {
 		return nil
 	})
 	if err != nil {
-		q.EDNS = false
+		// nothing read from a rejected OPT record is kept
+		q.EDNS, q.DO, q.UDPSize, q.EDNSVersion, q.Padding, q.Cookie = false, false, 0, 0, false, nil
 		return q, RcodeFormErr, nil
 	}
 	if q.EDNS && q.EDNSVersion != 0 {
