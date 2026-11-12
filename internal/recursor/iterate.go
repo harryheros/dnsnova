@@ -349,6 +349,17 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 			r.infra.setLame(a, d.zone, now)
 			continue
 		}
+		if qtype == typeDS {
+			if child, _ := referral(msg, d.zone, name); child != nil && child.zone == name {
+				// a DS question sent down to the child, which some servers do
+				// wrongly (the parent holds DS): ask another of the parent's
+				// servers. Not lame: it answers everything else.
+				if t.trace != nil {
+					r.traceQuery(t, d.zone, a, name, qtype, rtt, msg, nil, false)
+				}
+				continue
+			}
+		}
 		if t.trace != nil {
 			r.traceQuery(t, d.zone, a, name, qtype, rtt, msg, nil, false)
 		}

@@ -349,6 +349,28 @@ func (r *Recursor) fetchKeys(ctx context.Context, t *task, zone string) (*keyEnt
 		r.keys.set(zone, ke, now.Add(time.Duration(ttl)*time.Second))
 		return ke, nil
 	}
+	// Below a zone that is not signed nothing is (RFC 4035 5): no DS
+	// question to ask. Besides saving queries, this keeps validation away
+	// from parent servers that mishandle DS questions in zones that are
+	// not signed anyway (some refer them down to the child).
+	if zone != "" {
+		p := r.parentZone(zone)
+		pk, err := r.zoneKeys(ctx, t, p)
+		if err != nil {
+			return nil, err
+		}
+		if pk.sec == secInsecure {
+			ttl := uint32(3600)
+			if _, exp, ok := r.keys.get(p); ok {
+				ttl = uint32(max(min(exp.Sub(now), time.Hour)/time.Second, 5))
+			}
+			why := pk.why
+			if why == "" {
+				why = "not signed: " + zoneName(p) + " above it is not signed"
+			}
+			return keep(&keyEntry{sec: secInsecure, ede: pk.ede, why: why}, ttl)
+		}
+	}
 	var ds *rrset
 	dsTTL := uint32(maxCacheTTL)
 	if zone == "" {
@@ -452,4 +474,17 @@ func negTTL(a *answer, now time.Time) uint32 {
 		return 3600
 	}
 	return uint32(max(a.negUntil.Sub(now)/time.Second, 0))
+}
+
+// parentZone returns the zone that contains zone's delegation (where its DS
+// lives), as far as known: the closest ancestor with a delegation in the
+// cache, or the root.
+func (r *Recursor) parentZone(zone string) string {
+	now := r.now()
+	for a := parent(zone); a != ""; a = parent(a) {
+		if _, exp, ok := r.delegs.get(a); ok && now.Before(exp) {
+			return a
+		}
+	}
+	return ""
 }
