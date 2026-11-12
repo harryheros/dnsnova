@@ -18,12 +18,18 @@ code filled in.
   This stops other web pages from reaching the API through a visitor's
   browser (DNS rebinding).
 - **HTTPS.** The admin port speaks HTTPS as soon as a certificate is
-  available, on the same port as plain HTTP. When the admin interface is
-  reachable from other machines, plain requests addressed to one of
-  `tls.domains` are redirected to HTTPS.
+  available, on the same port as plain HTTP. Plain HTTP is answered on the
+  server itself (loopback, which includes an SSH tunnel), for a reverse
+  proxy on the server that says the visitor used HTTPS
+  (`X-Forwarded-Proto: https` or `Forwarded: proto=https`) and, on a server
+  for a home or office network (`server.mode = "private"`), to clients in
+  `access.allow` whose address is private, shared (100.64.0.0/10) or
+  link-local. Plain requests from anywhere else are redirected to HTTPS when the certificate covers the
+  name they used, and otherwise refused with `403` and directions (JSON
+  under `/api/`, text elsewhere).
 - **Sessions.** `POST /api/v1/setup` and `POST /api/v1/login` set a
   `dnsnova_session` cookie (`HttpOnly`, `SameSite=Strict`, `Secure` over
-  HTTPS) and return a `csrf` token. Sessions live in memory: they end after
+  HTTPS, including behind such a proxy) and return a `csrf` token. Sessions live in memory: they end after
   12 hours without use, after 7 days in any case, and when DNSNova restarts.
 - **State-changing requests** (`POST`, `PUT`, `PATCH`, `DELETE`) must:
   - send their body as `Content-Type: application/json`;
@@ -50,7 +56,7 @@ curl -s -b jar -X POST -H "X-CSRF-Token: $csrf" $api/cache/clear
 
 | Method and path | Body | Result |
 | --- | --- | --- |
-| `GET /setup` | | `{"needed": true, "code_required": false, "secure": false}`: whether an administrator still has to be created, whether this client must give the setup code (not from loopback, private networks or the installer's SSH address; a request forwarded by a reverse proxy, recognised by its Forwarded, X-Forwarded-For, X-Real-IP or Via header, always needs the code), and whether this connection is HTTPS |
+| `GET /setup` | | `{"needed": true, "code_required": false, "secure": false}`: whether an administrator still has to be created, whether this client must give the setup code (everyone but the server itself, through loopback or an SSH tunnel, and, in private mode, the allowed private networks as above; a request forwarded by a reverse proxy, recognised by its Forwarded, X-Forwarded-For, X-Real-IP or Via header, always needs the code), and whether this connection is HTTPS |
 | `POST /setup` | `{"code", "username", "password"}` | `201` and a session. `code` is the one-time setup code from `<data_dir>/secrets/setup-code`, which the installer prints: 8 letters and digits as `XXXX-XXXX`; case, spaces and dashes are ignored. After 20 wrong codes from any addresses, a new code replaces it. Passwords need at least 10 characters. |
 | `POST /login` | `{"username", "password", "totp"}` | A session: `{"username", "csrf", "totp", "secure", "client_ip"}`. With two-step verification on and no `totp`, `401` with `"totp_required": true`. |
 | `POST /logout` | | `204` |
@@ -76,6 +82,7 @@ early or late, and each code works only once.
 | `GET /stats?range=1h\|24h\|7d` | Totals for the range: queries by protocol (`udp`, `tcp`, `dot`, `doh`, `doh3`, `doq`), rejections by reason, answers by source, `cache_ratio`, response-time percentiles (`p50_ms`, `p95_ms`) for cache hits, upstream answers and all; `series`, one point per minute, five minutes or hour, for charts; `top_domains` and `top_nxdomains` (`[{"name", "count"}]`, domains asked for by at least 5 networks within an hour); and `top_limited_networks`, the /24 and /48 networks that hit the rate limits most (at most the last 24 hours). Kept in memory only. |
 | `GET /querylog?limit=500&q=` | The query log: `{"state": {"on", "until", "full_ip", "stopped", "count"}, "entries": [{"time", "client", "proto", "name", "type", "rcode", "source", "ms", "filtered"}]}`, newest first. `source` is `blocked` for a name the filter answered; `filtered` marks queries that came in through a filtered address. `q` keeps entries whose name or client contains it. |
 | `GET /upstreams` | Each upstream: `address`, `role` (`primary` or `fallback`), `healthy`, `latency_ms` (smoothed), `queries`, `errors`, `last_ok`, `last_error`. |
+| `GET /cluster` | This node in its cluster (docs/cluster.md): `role` (`""` on its own, `primary`, `follower`), `name`, `region`. A follower adds `primary`, `primary_name`, `last_sync`, `sync_error`, `config_hash`, `overrides`; a primary adds `nodes`, each with `name`, `region`, `address`, `self`, `online`, `last_seen`, `version`, `status`, `anycast`, `in_sync`, `config_error`, `cert_until`, `uptime_seconds`, `overrides`. On a follower, changing the configuration answers `409`; changing `[cluster]` or `[anycast]` answers `403` everywhere (file only). |
 | `GET /events?limit=50` | Recent log records, newest first (up to 200): start-up, errors, setting changes with the user and keys, certificates. Queries are never among them. |
 | `POST /cache/clear` | `204` |
 | `POST /filter/why` | Body `{"name"}`: which filter lists block the name and which rules let it through: `{"enabled", "blocked", "blocked_by": [sources], "allowed_by": [sources]}`; your own rules are `filter.block` and `filter.allow`. |
@@ -100,6 +107,12 @@ as EDNS Client Subnet (`ecs.address`), or `""` when off.
 | Method and path | Body | Result |
 | --- | --- | --- |
 | `GET /system/addresses` | | `{"addresses": [{"address", "interface", "public", "loopback"}]}`: the server's IP addresses, for choosing `server.listen`. |
+| `POST /tools/trace` | `{"name", "type"}` | Resolves the name from scratch, without the cache, and returns every step: `{"name", "type", "rcode", "dnssec" (secure, insecure, bogus or unchecked), "ede", "why", "answers", "ms", "queries", "error", "steps": [{"ms", "depth", "kind" (query, cname, keys, validate), "zone", "server", "name", "type", "rtt_ms", "result", "dnssec", "why"}]}`. With recursion off, each upstream is asked instead. One trace at a time (`429` otherwise); at most 20 seconds. |
+| `GET /dnssec` | | `{"recursion", "enabled", "secure", "insecure", "bogus", "failures": [{"name", "type", "ede", "why", "count", "first", "last"}], "negative_trust_anchors"}`: answers by DNSSEC result since start, and the names whose answers failed validation (at most 200, newest first, no client data). |
+| `DELETE /dnssec/failures` | | Forgets the failures listed; returns the same as `GET /dnssec`. |
+| `GET /alerts` | | Notifications (docs/alerts.md): `enabled`, `role`, `destinations` (for each of `webhook`, `slack`, `discord`, `telegram`, `heartbeat`: `set` and a `hint`, never the address or token), `channels` in use, `active` (what is wrong now: `key`, `kind`, `severity`, `node`, `summary`, `details`, `since`, `firing`) and `history` (the last 50 sent, newest first, each with its delivery `results` by channel). |
+| `PUT /alerts/destinations/{name}` | `{"url": "...", "secret": "..."}`; Telegram `{"token": "...", "chat_id": "..."}`; `{}` removes it | Sets where notifications go, saved in `secrets/alerts.json`. Write-only: nothing gives the fields back. `400` if they are not valid (Slack and Discord need `https://`). Returns the same as `GET /alerts`. |
+| `POST /alerts/test` | | Sends a test notification to every destination now and returns `{"results": {"slack": "ok", ...}}`. `409` when alerts are off, nothing is set up, or on a cluster follower. |
 | `POST /tools/lookup` | `{"name", "type", "upstreams"}` | `{"results": [{"upstream", "rcode", "answers", "ms", "error"}]}`: asks each upstream directly, bypassing the cache, in parallel with a 5-second limit. `type` is a record type such as `A` or `HTTPS`; `upstreams` is optional; by default the configured ones are asked. |
 
 ## Public status page

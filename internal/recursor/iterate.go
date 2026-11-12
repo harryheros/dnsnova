@@ -1,7 +1,10 @@
 package recursor
 
 import (
+	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -103,6 +106,9 @@ func (r *Recursor) closestDeleg(ctx context.Context, t *task, qname string, qtyp
 	if qtype == typeDS && name != "" {
 		name = parent(name)
 	}
+	if t.fresh {
+		name = "" // a trace walks down from the root
+	}
 	now := r.now()
 	for name != "" {
 		if d, exp, ok := r.delegs.get(name); ok && now.Before(exp) {
@@ -124,6 +130,9 @@ func (r *Recursor) iterate(ctx context.Context, t *task, qname string, qtype uin
 	}
 	t.stack[key] = true
 	defer delete(t.stack, key)
+	if t.fresh || !t.shared() { // a trace, or one network's answer, joins no other lookup
+		return r.iterateOnce(ctx, t, qname, qtype)
+	}
 	v, err := r.fl.do(ctx, key, func() (any, error) { return r.iterateOnce(ctx, t, qname, qtype) })
 	if err != nil {
 		return nil, err
@@ -313,21 +322,35 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 		}
 		t.budget--
 		tried++
+		start := time.Now()
 		msg, err := r.ask(ctx, a, name, qtype)
+		rtt := time.Since(start)
 		if err != nil {
+			if t.trace != nil {
+				r.traceQuery(t, d.zone, a, name, qtype, rtt, nil, err, false)
+			}
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
 			continue
 		}
 		if msg.rcode != m.RcodeNoError && msg.rcode != m.RcodeNXDomain {
+			if t.trace != nil {
+				r.traceQuery(t, d.zone, a, name, qtype, rtt, msg, nil, false)
+			}
 			r.infra.setLame(a, d.zone, now)
 			continue
 		}
 		scrub(msg, d.zone)
 		if !usable(msg, d.zone, name) {
+			if t.trace != nil {
+				r.traceQuery(t, d.zone, a, name, qtype, rtt, msg, nil, true)
+			}
 			r.infra.setLame(a, d.zone, now)
 			continue
+		}
+		if t.trace != nil {
+			r.traceQuery(t, d.zone, a, name, qtype, rtt, msg, nil, false)
 		}
 		return msg, nil
 	}
@@ -499,24 +522,57 @@ func (r *Recursor) v6Result(a netip.Addr, err error, now time.Time) {
 }
 
 // ask sends one question to one server: over UDP, then TCP if the answer
-// was truncated; without EDNS for servers that do not support it.
+// was truncated or looks forged; without EDNS for servers that do not
+// support it.
+//
+// With DNS Cookies (RFC 7873) each question carries a client cookie made
+// for this server, and the server cookie it gave last time. A UDP answer
+// with another client cookie cannot be the server's: it is forged, and the
+// question goes again over TCP. A server that has always sent cookies but
+// answers over UDP without one is asked again over TCP too; if its genuine
+// TCP answer has no cookie either (anycast instances that differ), cookies
+// are not insisted on for that server for an hour.
 func (r *Recursor) ask(ctx context.Context, a netip.Addr, name string, qtype uint16) (*message, error) {
 	now := r.now()
+	cfg := r.cfg.Load()
 	edns := r.infra.useEDNS(a, now)
 	ap := netip.AddrPortFrom(a, r.port)
 	// The client subnet goes with questions for a name's records, not
 	// with those that only find the way there (NS, DS, DNSKEY, SOA).
 	var ecs []byte
 	if edns && qtype != m.TypeNS && qtype != typeDS && qtype != typeDNSKEY && qtype != m.TypeSOA {
-		ecs = r.cfg.Load().ECS
+		ecs = cfg.ECS
+		if v, ok := ctx.Value(subnetKey{}).([]byte); ok { // ExchangeSubnet
+			ecs = v
+		}
 	}
-	for attempt := 0; attempt < 3; attempt++ {
-		q := buildQuery(uint16(rand.Uint32()), name, qtype, edns, ecs)
+	cookies, badRetried := cfg.Cookies, false
+	for attempt := 0; attempt < 5; attempt++ {
+		opts, cc := ecs, []byte(nil)
+		if cookies && edns {
+			if c, sc, ok := r.infra.cookieFor(a, now, r.clientCookie); ok {
+				cc = c
+				opts = append(append(make([]byte, 0, len(ecs)+4+8+len(sc)), ecs...), cookieOption(cc, sc)...)
+			}
+		}
+		q := buildQuery(uint16(rand.Uint32()), name, qtype, edns, opts)
+		overTCP := func() (*message, error) {
+			c, cancel := context.WithTimeout(ctx, 2*r.infra.timeout(a)+time.Second)
+			resp, err := r.send(c, ap, q, true)
+			cancel()
+			r.Stats.TCP.Add(1)
+			if err != nil {
+				r.infra.fail(a, now)
+				return nil, err
+			}
+			return parseMessage(resp)
+		}
 		start := time.Now()
 		c, cancel := context.WithTimeout(ctx, r.infra.timeout(a))
 		resp, err := r.send(c, ap, q, false)
 		cancel()
 		r.Stats.Queries.Add(1)
+		tcp := false
 		if errors.Is(err, ErrSpoofed) {
 			// Someone is guessing answers to this query: ask over TCP.
 			r.Stats.Spoofed.Add(1)
@@ -524,6 +580,7 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, name string, qtype uin
 			resp, err = r.send(c, ap, q, true)
 			cancel()
 			r.Stats.TCP.Add(1)
+			tcp = true
 		}
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) || isTimeout(err) {
@@ -543,31 +600,93 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, name string, qtype uin
 			r.infra.setLame(a, "", now)
 			return nil, err
 		}
-		if msg.tc() {
-			c, cancel := context.WithTimeout(ctx, 2*r.infra.timeout(a)+time.Second)
-			resp, err = r.send(c, ap, q, true)
-			cancel()
-			r.Stats.TCP.Add(1)
-			if err != nil {
-				r.infra.fail(a, now)
+		if msg.tc() && !tcp {
+			if msg, err = overTCP(); err != nil {
 				return nil, err
 			}
-			if msg, err = parseMessage(resp); err != nil {
-				return nil, err
+			tcp = true
+		}
+		if cc != nil {
+			switch r.checkCookie(a, cc, msg, tcp, badRetried, now) {
+			case cookieAgain: // BADCOOKIE: now with the server cookie it just gave
+				badRetried = true
+				continue
+			case cookieTCP:
+				if msg, err = overTCP(); err != nil {
+					return nil, err
+				}
+				r.checkCookie(a, cc, msg, true, true, now) // learns from the genuine answer
 			}
 		}
-		if ecs != nil && (msg.rcode == m.RcodeFormErr || msg.rcode == m.RcodeNotImp) {
-			ecs = nil // a server that trips over the option: ask without it
-			continue
-		}
-		if edns && !msg.edns && (msg.rcode == m.RcodeFormErr || msg.rcode == m.RcodeNotImp) {
-			r.infra.setNoEDNS(a, now)
-			edns = false
-			continue
+		if msg.rcode == m.RcodeFormErr || msg.rcode == m.RcodeNotImp {
+			switch {
+			case ecs != nil: // a server that trips over the client subnet: ask without it
+				ecs = nil
+				continue
+			case cc != nil: // or over the cookie
+				r.infra.setNoCookie(a, now)
+				continue
+			case edns && !msg.edns:
+				r.infra.setNoEDNS(a, now)
+				edns = false
+				continue
+			}
 		}
 		return msg, nil
 	}
 	return nil, ErrUnreachable
+}
+
+// What to do after looking at an answer's cookie.
+const (
+	cookieOK    = iota
+	cookieAgain // BADCOOKIE: ask again (once) with the new server cookie
+	cookieTCP   // looks forged: ask over TCP
+)
+
+func (r *Recursor) checkCookie(a netip.Addr, cc []byte, msg *message, tcp, retried bool, now time.Time) int {
+	valid := len(msg.cookie) >= 8 && bytes.Equal(msg.cookie[:8], cc)
+	switch {
+	case msg.cookie != nil && !valid:
+		if tcp {
+			return cookieOK // a genuine answer with a broken cookie: nothing to learn
+		}
+		r.Stats.CookieMismatch.Add(1)
+		return cookieTCP
+	case valid:
+		r.infra.cookieGood(a, msg.cookie[8:])
+		if msg.rcode == m.RcodeBadCookie && !retried {
+			return cookieAgain
+		}
+		if msg.rcode == m.RcodeBadCookie && !tcp {
+			return cookieTCP
+		}
+		return cookieOK
+	case r.infra.cookieExpected(a, now):
+		if tcp {
+			r.infra.cookieLoose(a, now) // genuinely without one: not every instance does cookies
+			return cookieOK
+		}
+		r.Stats.CookieMissing.Add(1)
+		return cookieTCP
+	}
+	return cookieOK
+}
+
+// clientCookie is this resolver's client cookie for server a: from a
+// secret made at start, different for every server, so that servers
+// cannot link the questions they receive from it to each other's.
+func (r *Recursor) clientCookie(a netip.Addr) []byte {
+	mac := hmac.New(sha256.New, r.cookieKey[:])
+	b := a.As16()
+	mac.Write(b[:])
+	return mac.Sum(nil)[:8]
+}
+
+func cookieOption(cc, sc []byte) []byte {
+	o := binary.BigEndian.AppendUint16(nil, m.OptCookie)
+	o = binary.BigEndian.AppendUint16(o, uint16(len(cc)+len(sc)))
+	return append(append(o, cc...), sc...)
 }
 
 func isTimeout(err error) bool {

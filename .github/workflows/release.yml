@@ -31,7 +31,7 @@ jobs:
             mkdir -p "build/$dir"
             CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath \
               -ldflags "-s -w -X main.version=${TAG}" -o "build/$dir/dnsnova" ./cmd/dnsnova
-            cp deploy/dnsnova.service deploy/nginx-doh.conf dnsnova.example.toml LICENSE README.md "build/$dir/"
+            cp deploy/dnsnova.service deploy/nginx-doh.conf dnsnova.example.toml LICENSE THIRD_PARTY_NOTICES.md README.md "build/$dir/"
             tar -C build -czf "dist/dnsnova-linux-${arch}.tar.gz" --owner=0 --group=0 --mtime='2000-01-01' "$dir"
           done
           cp install.sh dist/install.sh

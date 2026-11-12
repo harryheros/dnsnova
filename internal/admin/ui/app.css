@@ -345,6 +345,10 @@ input[aria-invalid="true"], textarea[aria-invalid="true"], select[aria-invalid="
 .kvs dt { color: var(--muted); flex: none; }
 .kvs dd { margin: 0; font-weight: 600; min-width: 0; text-align: right; }
 .kvs dd.ok { color: var(--ok); } .kvs dd.warn { color: var(--warn); }
+.dests { display: flex; flex-direction: column; margin-bottom: 12px; }
+.dest { padding: 10px 0; border-top: 1px solid var(--hairline); }
+.dest:first-child { border-top: 0; }
+.dest .row { flex-wrap: wrap; }
 
 /* top domains */
 .toprows .slot { grid-template-columns: 18px minmax(0, 1fr) minmax(44px, 24%) 50px 44px; gap: 10px; }

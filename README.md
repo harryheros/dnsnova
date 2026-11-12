@@ -2,7 +2,7 @@
 
 > A secure, lightweight DNS server for your home, office or a public resolver.
 
-[![Version](https://img.shields.io/badge/version-v1.2.0-blue)](https://github.com/harryheros/dnsnova/releases)
+[![Version](https://img.shields.io/badge/version-v1.3.0-blue)](https://github.com/harryheros/dnsnova/releases)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](./LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux%20amd64%20%7C%20arm64-lightgrey.svg)](#)
 [![CI](https://github.com/harryheros/dnsnova/actions/workflows/ci.yml/badge.svg)](https://github.com/harryheros/dnsnova/actions/workflows/ci.yml)
@@ -21,16 +21,26 @@ curl -fsSL https://raw.githubusercontent.com/harryheros/dnsnova/main/install.sh 
 
 As a normal user it asks for your sudo password; without sudo (common on Debian), log in as root first with `su -`.
 
-When it finishes, it prints the addresses of the web interface:
+For a home or office network, add `--lan` (`| sh -s -- --lan`): DNS then answers your private networks only, and the web interface opens directly from them:
 
 ```
 DNSNova is installed and running.
-Open one of these addresses and follow the setup wizard:
+Open one of these addresses from a device on your network and follow the setup wizard:
   http://192.168.1.10:7000
   http://127.0.0.1:7000
 ```
 
-Open one and follow the wizard: administrator password, who the server is for (your home or office network, or anyone on the internet) and where plain DNS answers, whether DNSNova resolves names itself or asks upstreams, a domain for encrypted DNS (optional), and filtering. DNS starts when you finish, and the last page says what to set on your router or devices.
+Without it, the server is set up for the internet. Its web interface is not encrypted until a domain and certificate are set up, so until then it opens only on the server itself; from your computer, go through an SSH tunnel:
+
+```
+DNSNova is installed and running.
+The web interface is not encrypted yet, so it opens only on this server.
+On your computer, open a tunnel:
+  ssh -L 7000:127.0.0.1:7000 root@203.0.113.10
+then open http://127.0.0.1:7000/ and follow the setup wizard.
+```
+
+Follow the wizard: administrator password, who the server is for (your home or office network, or anyone on the internet) and where plain DNS answers, whether DNSNova resolves names itself or asks upstreams, a domain for encrypted DNS (optional), and filtering. DNS starts when you finish, and the last page says what to set on your router or devices.
 
 ## Uninstall
 
@@ -53,8 +63,11 @@ Forgot the administrator password? Run `dnsnova -reset-admin` on the server; the
 - **Plain and encrypted DNS**: UDP and TCP on port 53, DNS over TLS, DNS over QUIC and DNS over HTTPS (HTTP/2 and HTTP/3), with an automatic Let's Encrypt certificate.
 - **Its own resolver, or forwarding**: resolve names itself from the root servers, with DNSSEC validation and minimal names (no third party sees the queries), or forward to upstreams such as Cloudflare or Google over DNS over HTTPS, TLS or QUIC. With both, the upstreams step in when a domain's own servers cannot be reached.
 - **Web interface**: queries per second, response times, cache hit rate and traffic over time, how queries flow from each protocol through the server to its upstreams, upstream health, most queried domains, every setting with a preview before it is applied, a setup guide for each kind of device, and dark and light appearance.
-- **Optional filtering, without forcing it on anyone**: one server, two doors. The usual addresses answer everything; a second address, name or DoH path blocks ads, trackers and malware (the [ShieldNova](https://github.com/harryheros/shieldnova) list by default, or any AdGuard-style, hosts or domain list). Lists update by themselves (only when they have changed), a broken update never replaces a good list, *Check a domain* shows which list blocks a name, and a wrongly blocked domain is allowed again with one click. Trackers disguised as a site's own subdomain (CNAME cloaking) are blocked too.
+- **Optional filtering, without forcing it on anyone**: one server, two doors. The usual addresses answer everything; a second address, name or DoH path blocks ads, trackers and malware (the [ShieldNova](https://github.com/harryheros/shieldnova) list by default, free to use in DNSNova including commercially, or any AdGuard-style, hosts or domain list). Lists update by themselves (only when they have changed), a broken update never replaces a good list, *Check a domain* shows which list blocks a name, and a wrongly blocked domain is allowed again with one click. Trackers disguised as a site's own subdomain (CNAME cloaking) are blocked too.
 - **Answers for another network** (EDNS Client Subnet): give it an address, and name servers answer as they would for that network, wherever the server is. Off by default, and never your clients' addresses.
+- **Diagnostics**: trace any lookup from the root, server by server, with the DNSSEC verdict on every zone; a DNSSEC page lists the domains that fail validation and why, and can exempt a domain whose owner broke it (RFC 7646).
+- **Several servers, one configuration**, and anycast routes withdrawn when a server cannot answer ([docs/cluster.md](./docs/cluster.md)).
+- **Alerts** to Telegram, Discord, Slack or a webhook when something is wrong, and when it is fixed ([docs/alerts.md](./docs/alerts.md)).
 - **Local names** such as `nas.home`, and a list of blocked clients.
 - **Public or private**: open to everyone with rate limits that stop abuse, or only to the networks you list.
 - **Fast**: on a single CPU core, about 200,000 answers per second from the cache, 94,000 over DNS over TLS, and 23,000 for names it has to look up; a 225,000-rule blocklist costs about 14%. [How this was measured](./docs/benchmark.md).
@@ -81,6 +94,8 @@ To offer only encrypted DNS, choose *Only this server* in the setup wizard: plai
 - [`dnsnova.example.toml`](./dnsnova.example.toml): every setting, explained. The file is `/etc/dnsnova/dnsnova.toml`; changes apply when it is saved.
 - [docs/api.md](./docs/api.md): the admin API used by the web interface, for scripts.
 - [docs/benchmark.md](./docs/benchmark.md): performance, and how to measure it yourself.
+- [docs/cluster.md](./docs/cluster.md): several servers sharing one configuration, and anycast.
+- [docs/alerts.md](./docs/alerts.md): notifications to Telegram, Discord, Slack or a webhook.
 - [tools/resolver-check.sh](./tools/resolver-check.sh): checks a running server from the outside (popular domains, DNSSEC, minimal names, TCP, response times) next to a reference resolver: `bash resolver-check.sh <server-ip>`.
 - `install.sh --help`: options to configure everything from the command line instead.
 - [CHANGELOG.md](./CHANGELOG.md), [SECURITY.md](./SECURITY.md) (report vulnerabilities privately).
@@ -89,6 +104,6 @@ Build from source (Go 1.27 or later): `CGO_ENABLED=0 go build -o dnsnova ./cmd/d
 
 ## License
 
-[GNU Affero General Public License v3.0](./LICENSE). If you modify DNSNova and offer it to others as a network service, you must make your modified source available to them.
+[GNU Affero General Public License v3.0](./LICENSE): free for any use, including commercial. If you modify DNSNova and offer it to others as a network service, you must make your modified source available to them. For other terms, a commercial license is available: see [COMMERCIAL.md](./COMMERCIAL.md). Contributions are welcome under the [contributor license agreement](./CONTRIBUTING.md). Third-party components: [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
 
-Part of the [Nova infrastructure toolkit](https://github.com/harryheros).
+Part of the [Nova Infrastructure Toolkit](https://novaod.com).

@@ -52,6 +52,7 @@ type message struct {
 	additional []rr
 	edns       bool
 	ede        []uint16 // Extended DNS Error codes the server sent
+	cookie     []byte   // the COOKIE option's data (RFC 7873), nil without one
 }
 
 func (msg *message) aa() bool { return msg.flags&m.FlagAA != 0 }
@@ -289,6 +290,9 @@ func parseMessage(b []byte) (*message, error) {
 					}
 					if code == m.OptEDE && l >= 2 {
 						msg.ede = append(msg.ede, binary.BigEndian.Uint16(rd[4:]))
+					}
+					if code == m.OptCookie && msg.cookie == nil {
+						msg.cookie = append(make([]byte, 0, l), rd[4:4+l]...)
 					}
 					rd = rd[4+l:]
 				}

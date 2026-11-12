@@ -4,6 +4,204 @@ All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
 **Security**.
 
+## Unreleased
+
+## 1.3.0 (2026-11-11)
+
+DNSNova grows from a home and office resolver into one for public and
+company-wide service: several nodes with one configuration and anycast,
+DNS Cookies, PROXY protocol, a cache that survives restarts, a DNSSEC page
+and lookup traces, and alerts. Every new feature is off or set safely by
+default, and configuration files from 1.2 work unchanged.
+
+**Upgrading from 1.2: check this first.** On a public server
+(`server.mode = "public"`), the admin interface no longer opens over plain
+HTTP from other machines. If you reach it at `http://` from another
+computer, after upgrading either open it through an SSH tunnel
+(`ssh -L 7000:127.0.0.1:7000 server`, then http://127.0.0.1:7000), put it
+behind a reverse proxy with HTTPS, or give the server a certificate for
+the name you use to reach it (Settings › Encrypted DNS): plain HTTP is then
+redirected to HTTPS. A home or office
+server (private mode) is reached over plain HTTP from its networks as
+before. Details below.
+
+Licensing: DNSNova stays AGPL-3.0, free for any use including commercial;
+commercial licenses are available for other terms (COMMERCIAL.md).
+Contributions are accepted under a contributor license agreement
+(CONTRIBUTING.md, CLA.md). The licenses of the components compiled into
+the binary are now in THIRD_PARTY_NOTICES.md, included in the release
+archives. ShieldNova, the default list of the filtered service, may be used
+in DNSNova free of charge, commercial deployments included.
+
+- `ecs.client_path`: a secret DNS over HTTPS path for measurement tools.
+  A query there has its own EDNS Client Subnet sent to the domains' name
+  servers (cut to /24 or /56), so a tool sees how names resolve for that
+  network, without a public resolver in between. Those answers bypass the
+  cache in both directions (delegations and DNSSEC keys are still shared)
+  and reach no other client. Needs recursion. On every other path, as
+  before, nothing a client sends shapes what name servers are told.
+- Alerts (`[alerts]`, off by default; docs/alerts.md): notifications to
+  Telegram, Discord, Slack or a signed JSON webhook when every upstream
+  fails, one keeps failing, the SERVFAIL share or the response time of
+  queries not in the cache stays high, DNSSEC failures pile up, the
+  certificate nears expiry or cannot be renewed, a changed configuration
+  file or a block list update fails, or anycast withdraws the route; and
+  again when it is fixed, with reminders while it lasts. Each has a
+  threshold and a time it must last, so a blip does not page anyone.
+  Delivery runs in the background, per destination, with a timeout and
+  retries; it never holds up a query. In a cluster the followers report
+  their alerts to the primary, which sends them (and says when a node
+  stops checking in). A heartbeat URL lets an outside monitor notice the
+  server being down, which it cannot report itself. Destinations are set
+  in Settings › Alerts, with a test button, and kept in
+  `secrets/alerts.json` (0600), never shown again.
+- DNS Cookies when resolving (RFC 7873, `recursion.cookies`, on by
+  default): every question to a name server carries a client cookie made
+  for that server (servers cannot link them), and the server cookie it gave
+  last time. A UDP answer with another client cookie is forged; so is one
+  without a cookie from a server that has always sent one. Either way the
+  question goes again over TCP. If the genuine TCP answer has no cookie
+  either (anycast instances that differ), cookies are not insisted on for
+  that server for an hour, so such servers do not cost a TCP connection
+  each time; an attacker cannot cause this, as TCP answers cannot be
+  forged. BADCOOKIE is answered once with the new server cookie; a server
+  that rejects the option is asked without it. New metric:
+  `dnsnova_recursion_cookie_rejected_total{reason}`.
+- Clusters: the top bar shows the fleet ("3 of 3 nodes online"; amber when
+  a node is offline, unhealthy or behind on settings) and links to the
+  Nodes page; a follower says so when it is out of touch with its primary.
+  This server's own trouble still comes first.
+- **Trace a lookup** (Tools): resolves a name from scratch, without the
+  cache, and shows every step: each server asked and what it answered
+  (referral, answer, NXDOMAIN, lame, timeout, with its time), each CNAME
+  followed, and the DNSSEC verdict on each zone's keys and on the answer,
+  with the reason when it fails. With upstreams only, each upstream is
+  asked instead. `POST /api/v1/tools/trace`. Ordinary queries do not pay
+  for it: same allocations and speed as before.
+- **DNSSEC page** (Status, with recursion on): answers by result (secure,
+  not signed, failed) and the names whose answers failed validation, with
+  the reason (RFC 8914 code and detail), how often and when; each with a
+  Trace button. `GET /api/v1/dnssec`. No client data is kept.
+- Negative trust anchors (RFC 7646, `recursion.negative_trust_anchors`):
+  domains whose answers skip the DNSSEC check, for a domain whose owner
+  broke its DNSSEC. Added from the DNSSEC page ("Stop validating…") or in
+  the settings, removed with "Validate again"; ordinary settings with
+  preview and history, and a startup warning while any is set. Whole
+  top-level domains cannot be exempted.
+- Tests: DNSSEC is now tested end to end through iteration, against a
+  signed hierarchy served as real servers would (good, bad and expired
+  signatures, negative trust anchors), and the same hierarchy can be
+  served over the network for manual tests (`TestServeSignedFixture`).
+- Several servers, one configuration (docs/cluster.md): a `[cluster]`
+  primary keeps the settings and followers sync them every few seconds,
+  each keeping what its own file sets (its addresses, for example) and
+  never the primary's `[cluster]` or `[anycast]`. A follower that cannot
+  use new settings keeps the last ones that worked and says why; without
+  its primary it keeps answering, and starts again from its copy. The
+  exchange is encrypted and authenticated with AES-256-GCM under a shared
+  key, with a timestamp and a challenge against replay, so it needs no
+  certificates. The web interface gains a Nodes page (state, region,
+  settings version, anycast, version, certificate) and `GET /api/v1/cluster`.
+  Without `[cluster]` nothing of this runs, and queries never pass through
+  it.
+- Anycast (`[anycast]`): the server checks itself (it can resolve, and its
+  own UDP listener answers) and runs your commands to announce or withdraw
+  its route, after `rise` good or `fall` failed checks in a row; at
+  shutdown it withdraws first and keeps answering for `drain`. State in
+  `/healthz`, the metrics and the Nodes page.
+- **Security**: `[cluster]` and `[anycast]` can only be changed in the file
+  on the server, never through the admin API, so a stolen admin password
+  cannot point a server at another primary or run commands.
+- Fuzzing: the configuration merge of a cluster follower (`FuzzMerge`).
+- PROXY protocol (HAProxy's, versions 1 and 2) for servers behind a load
+  balancer: `server.proxy_protocol` lists the balancers, and from them a
+  header is required and gives each client's real address, so access
+  lists, rate limits, DNS Cookies and logs see the client rather than the
+  balancer. Versions 1 and 2 on TCP, DoT and DoH over HTTPS (the header
+  comes before TLS); version 2 on UDP, one header per datagram as dnsdist
+  sends it, with answers going back to the balancer without one. From
+  anyone else a header is never read. Headers are read off the accept loop,
+  so a slow balancer holds up no other connection. DoQ and HTTP/3 have no
+  PROXY protocol. The security self-check warns when the list covers
+  everyone.
+- Fuzzing: new targets for the PROXY protocol header (datagram and stream),
+  DNS Cookies, the saved cache file, EDNS options, upstream addresses and
+  the network and local-name lists, twelve in all. Each runs briefly in CI
+  on every change, and for ten minutes every night (`fuzz.yml`), keeping
+  the corpus between nights and uploading any input that fails.
+- UDP on Linux reads and sends in batches (recvmmsg and sendmmsg, up to 32
+  datagrams per system call): answers from the cache are sent together.
+  Under load a call moved 5 to 8 datagrams instead of one, and answers
+  from the cache rose from about 163,000 to 190,000 a second on one core
+  in the benchmark setup (p50 0.34 to 0.29 ms), where the load generator
+  itself was then the limit. What remains is mostly the kernel's work per
+  packet; SO_REUSEPORT already spreads that over every core. Other
+  systems read one datagram at a time as before.
+- `go build -tags pprof` adds the Go profiler on 127.0.0.1:6060, for
+  performance work (see docs/benchmark.md); release builds do not have it.
+- DNS Cookies (RFC 7873), with the interoperable server cookie of RFC 9018
+  that BIND, Knot and Unbound also make: on by default (`server.cookies`).
+  A client that sends back its cookie has shown that its address is not
+  forged, so response rate limiting no longer applies to it; when RRL would
+  answer a client that sent a cookie with a truncated response, it gets
+  BADCOOKIE and a fresh cookie instead, and asks again over UDP rather than
+  TCP. A malformed COOKIE option is answered FORMERR. The secret is in
+  `secrets/cookie-secret`; nodes behind one anycast address share it by
+  copying that file. New metrics: `dnsnova_cookie_queries_total{cookie}`
+  and `dnsnova_badcookie_total`.
+- The answer cache survives restarts on a public server: it is saved to
+  `data_dir/cache.bin` every 10 minutes and on shutdown, and loaded before
+  the server starts answering. Every saved answer is checked again as a new
+  upstream answer, with the current `cache.*` limits; a damaged file is
+  ignored. `cache.persist = "auto"` (the default) saves it in public mode
+  and not in private mode: with a few users, as at home, the names looked
+  up are close to their browsing. `"on"` and `"off"` decide either way.
+  Whenever saving is off, and when the cache is cleared, the file is
+  deleted.
+- **Security**: who reaches the admin interface without HTTPS now follows
+  what the server is for. On a server for a home or office network
+  (`server.mode = "private"`: the installer's new `--lan`, or "My network"
+  in the setup wizard) it opens over plain HTTP from the allowed private
+  networks, and the administrator is created there without the setup code,
+  as before. On a public server, plain HTTP is answered only on the server
+  itself (loopback, an SSH tunnel) or for a reverse proxy there that sends
+  `X-Forwarded-Proto: https`; other machines are redirected to HTTPS when
+  the certificate covers the name they used, and otherwise refused with
+  directions. The setup code is needed from everywhere but the server
+  itself: a private address on a public server (a cloud network) says
+  nothing about who is behind it. Behind such a proxy the session cookie is
+  now `Secure`.
+- **Security**: the installer no longer writes the SSH client's address to
+  `secrets/setup-trust` to skip the setup code from there: behind a shared
+  or carrier-grade NAT, that address also belongs to other people. A
+  leftover file is removed at startup, with a warning.
+- **Security**: a self-check at startup, and after each settings change,
+  logs (and shows among the events) what weakens the server: on a public
+  server, an admin port open to other machines without a certificate, or
+  without two-step verification; secrets, the TLS key or the configuration
+  file readable or writable by other users; metrics open to other machines;
+  public mode without rate limits or with ANY answered; running as root.
+- Installer: `--lan` installs for a home or office network (private mode for
+  the private networks, web interface open to them). Without it, the
+  install is for the internet: the web interface listens on 127.0.0.1 and
+  the installer prints the SSH tunnel command; on a machine with only
+  private addresses it also mentions `--lan`.
+- **Security**: with DNSSEC, a validated negative answer (NXDOMAIN or no
+  data) could stay in the cache, and be served as secure (AD), after the
+  signatures that proved it had expired. It is now kept no longer than the
+  SOA's and the NSEC/NSEC3 records' signatures; the same limit applies to
+  wildcard answers and to the NSEC records remembered for RFC 8198.
+- A panic while answering one query is now answered SERVFAIL and logged
+  with its stack, instead of stopping the whole server (UDP, TCP) or, for
+  DoH, leaving every later query for the same name waiting forever.
+- DoH: a POST must have the exact media type application/dns-message
+  (parameters allowed), and a body over 65535 bytes is refused with 413
+  instead of being cut off and answered.
+- Settings history: versions saved within the same millisecond no longer
+  replace each other.
+- Public status page: with recursion on, the server is shown as working
+  when the resolver works, even without upstreams, as /healthz already did.
+
 ## 1.2.0 (2026-11-10)
 
 - New look for the web interface ("Deep Ocean", see docs/design.md): dark

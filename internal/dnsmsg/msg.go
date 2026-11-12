@@ -42,8 +42,12 @@ const (
 	RcodeNotImp   = 4
 	RcodeRefused  = 5
 	RcodeBadVers  = 16 // extended rcode (RFC 6891): carried partly in the OPT record
+	// RcodeBadCookie (RFC 7873): the server wants its cookie back; the
+	// response carries a fresh one to retry with.
+	RcodeBadCookie = 23
 
 	// EDNS options (RFC 6891).
+	OptCookie  = 10 // DNS Cookies, RFC 7873
 	OptPadding = 12 // RFC 7830
 	OptEDE     = 15 // Extended DNS Errors, RFC 8914
 
@@ -100,6 +104,11 @@ type Query struct {
 	// one defined); Padding reports whether the client padded its query.
 	EDNSVersion uint8
 	Padding     bool
+	// Cookie is the data of the client's COOKIE option (RFC 7873): its
+	// client cookie and, after the first exchange, a server cookie. Nil
+	// when the query had none. Its length is 8 or 16 to 40 bytes; any
+	// other makes the query FORMERR (RFC 7873 5.2.2).
+	Cookie []byte
 }
 
 // CacheKey identifies answers that may be shared between clients: the same
@@ -299,11 +308,26 @@ func ParseQuery(msg []byte) (*Query, int, error) {
 			q.UDPSize = rr.Class
 			q.EDNSVersion = msg[rr.TTLOff+1]
 			q.DO = msg[rr.TTLOff+2]&0x80 != 0
-			return eachOption(msg[rr.RDOff:rr.End], func(code uint16, _ []byte) {
-				if code == OptPadding {
+			badCookie := false
+			if err := eachOption(msg[rr.RDOff:rr.End], func(code uint16, data []byte) {
+				switch code {
+				case OptPadding:
 					q.Padding = true
+				case OptCookie:
+					n := len(data)
+					if q.Cookie != nil || (n != 8 && (n < 16 || n > 40)) {
+						badCookie = true // a second one, or an impossible length
+					}
+					q.Cookie = bytes.Clone(data)
 				}
-			})
+			}); err != nil {
+				return err
+			}
+			if badCookie {
+				q.Cookie = nil
+				return ErrMalformed
+			}
+			return nil
 		}
 		return nil
 	})
@@ -781,8 +805,74 @@ func RcodeString(rc int) string {
 	if rc >= 0 && rc < len(rcodeNames) {
 		return rcodeNames[rc]
 	}
-	if rc == RcodeBadVers {
+	switch rc {
+	case RcodeBadVers:
 		return "BADVERS"
+	case RcodeBadCookie:
+		return "BADCOOKIE"
 	}
 	return "RCODE" + strconv.Itoa(rc)
+}
+
+// QueryClientSubnet returns the network in the EDNS Client Subnet option
+// (RFC 7871) of query msg, and whether there is one. An option that is not
+// well formed is an error. ParseQuery does not read this option: answers
+// are never tailored to a client's own network, except where a tool asks
+// for it on purpose (the server's ecs.client_path).
+func QueryClientSubnet(msg []byte) (netip.Prefix, bool, error) {
+	if len(msg) < HeaderLen {
+		return netip.Prefix{}, false, ErrMalformed
+	}
+	_, off, err := ReadQName(msg, HeaderLen)
+	if err != nil || off+4 > len(msg) {
+		return netip.Prefix{}, false, ErrMalformed
+	}
+	off += 4
+	an, ns, ar := U16(msg, 6), U16(msg, 8), U16(msg, 10)
+	if off, err = WalkRRs(msg, off, int(an)+int(ns), nil); err != nil {
+		return netip.Prefix{}, false, ErrMalformed
+	}
+	var p netip.Prefix
+	found, bad := false, false
+	_, err = WalkRRs(msg, off, int(ar), func(rr RR) error {
+		if rr.Type != TypeOPT {
+			return nil
+		}
+		return eachOption(msg[rr.RDOff:rr.End], func(code uint16, data []byte) {
+			if code != optClientSubnet {
+				return
+			}
+			if found || len(data) < 4 {
+				bad = true
+				return
+			}
+			found = true
+			family, bits, addr := U16(data, 0), int(data[2]), data[4:]
+			var size int
+			switch family {
+			case 1:
+				size = 4
+			case 2:
+				size = 16
+			default:
+				bad = true
+				return
+			}
+			if bits > size*8 || len(addr) != (bits+7)/8 {
+				bad = true
+				return
+			}
+			full := make([]byte, size)
+			copy(full, addr)
+			a, _ := netip.AddrFromSlice(full)
+			p = netip.PrefixFrom(a, bits)
+			if p.Masked() != p { // bits beyond the prefix length must be zero
+				bad = true
+			}
+		})
+	})
+	if err != nil || bad {
+		return netip.Prefix{}, false, ErrMalformed
+	}
+	return p, found, nil
 }

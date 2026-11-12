@@ -4,8 +4,11 @@
 #   curl -fsSL https://raw.githubusercontent.com/harryheros/dnsnova/main/install.sh | sh
 #
 # Installs or upgrades dnsnova, or removes it (--uninstall). With no options
-# it asks nothing: it installs dnsnova, starts the web interface on port 7000
-# and prints its address; everything else is set up in the browser. Run with
+# it asks nothing: it installs dnsnova for the internet, starts the web
+# interface on port 7000 of this server only (reach it through an SSH tunnel)
+# and prints how to open it; everything else is set up in the browser. With
+# --lan it installs for a home or office network instead, and the web
+# interface opens directly from that network. Run with
 # --help for the options that configure everything here instead.
 # Run by sh (curl ... | sh): fetch the script again and run it with bash.
 if [ -z "${BASH_VERSION:-}" ]; then
@@ -39,7 +42,7 @@ USER_NAME="dnsnova"
 SKIP_SYSTEMD="${DNSNOVA_SKIP_SYSTEMD:-0}"     # tests only
 
 # ── options ──
-YES=0 FORCE=0 UNINSTALL=0 PURGE=0 DOH_PROXY=0 IP_CERT=1
+YES=0 FORCE=0 UNINSTALL=0 PURGE=0 DOH_PROXY=0 IP_CERT=1 LAN=0
 MODE="" VERSION="" DOMAIN="" EMAIL="" CERT_FILE="" KEY_FILE="" ADMIN="" ADMIN_PORT=7000
 LISTEN=() UPSTREAMS=() FALLBACKS=() ALLOW=()
 
@@ -47,11 +50,16 @@ usage() {
     cat <<'EOF'
 Usage: install.sh [options]
 
-With no options: install, start the web interface on port 7000 and print
-its address. Choose addresses, upstreams and everything else in the browser.
+With no options: install a server for the internet, start the web
+interface on port 7000 of this server only and print how to open it through
+an SSH tunnel. Choose addresses, upstreams and everything else in the browser.
 
+  --lan                   install for a home or office network: DNS answers private
+                          networks only, and the web interface opens directly from
+                          them (http://<this server>:7000, no setup code)
   --admin-port PORT       port for the web interface (default 7000)
-  --admin local           web interface only from this server (SSH tunnel)
+  --admin public          (without --lan) also open the web interface to other
+                          machines, over HTTPS once a domain's certificate is ready
   --version vX.Y.Z        install this release instead of the latest
 
 Configure here instead of in the browser (for scripts):
@@ -74,9 +82,11 @@ Configure here instead of in the browser (for scripts):
   --key-file PATH         its private key
   --admin local|public|off
                           admin API and web interface on port 7000: local = only
-                          from this server, through an SSH tunnel (more secure; the
-                          default with --yes); public = from anywhere, password
-                          protected (less secure); off = not at all
+                          from this server, through an SSH tunnel (the default for
+                          the internet); public = also from other machines: from the
+                          allowed private networks directly in private mode (the
+                          default with --lan), otherwise over HTTPS only, once a
+                          certificate exists; off = not at all
   --yes                   accepted for compatibility (the installer asks nothing)
   --force                 continue even if another program uses port 53
 
@@ -94,6 +104,7 @@ while [ $# -gt 0 ]; do
         --fallback)  FALLBACKS+=("${2:-}"); shift ;;
         --allow)     ALLOW+=("${2:-}"); shift ;;
         --doh-proxy) DOH_PROXY=1 ;;
+        --lan)       LAN=1 ;;
         --domain)    DOMAIN="${2:-}"; shift ;;
         --email)     EMAIL="${2:-}"; shift ;;
         --no-ip-cert) IP_CERT=0 ;;
@@ -271,25 +282,10 @@ primary_ip() {
     printf '%s' "$a"
 }
 
-# ssh_clients prints the addresses of the SSH sessions open on this machine:
-# the person running the installer is almost certainly one of them, so the
-# setup page opened from there needs no code.
-ssh_clients() {
-    { [ -z "${SSH_CLIENT:-}" ] || echo "${SSH_CLIENT%% *}"
-      have ss && ss -Htnp state established 2>/dev/null | awk '/"sshd/ {print $4}' |
-          sed -E 's/^\[?([^]]*)\]?:[0-9]+$/\1/; s/^::ffff://'
-    } | grep -v -e '^$' -e '^127\.' -e '^::1$' | sort -u || true
-}
-
-write_setup_trust() {
-    local ips
-    ips="$(ssh_clients)"
-    [ -n "$ips" ] || return 0
-    install -d -m 700 "$VAR/secrets"
-    printf '%s\n' "$ips" > "$VAR/secrets/setup-trust"
-    chmod 600 "$VAR/secrets/setup-trust"
-    if [ -z "$ROOT" ]; then chown -R "$USER_NAME:$USER_NAME" "$VAR/secrets"; fi
-}
+# LAN_NETS are the networks a home or office install serves (as the setup
+# wizard's "My network"): private, shared (CGNAT, VPNs such as Tailscale)
+# and unique local IPv6 addresses, none of them routed on the internet.
+LAN_NETS=(10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7)
 
 # simple: no DNS options given, so DNS is set up in the browser
 simple() {
@@ -300,9 +296,11 @@ simple() {
 configure_simple() {
     step "Configuring"
     case "$ADMIN_PORT" in ''|*[!0-9]*) die "--admin-port must be a number" ;; esac
-    case "${ADMIN:-public}" in
+    local def=local mode=public
+    [ "$LAN" -eq 0 ] || def=public mode=private
+    case "${ADMIN:-$def}" in
+        local)  ADMIN=local ;;
         public) ADMIN=public ;;
-        local)  ;;
         *) die "--admin off needs the DNS options (--listen, --upstream, ...): there would be nothing to set it up with" ;;
     esac
     mkdir -p "$TMP/cfg"
@@ -315,9 +313,16 @@ configure_simple() {
         echo "# DNS starts once setup is finished in the web interface."
         echo
         echo "[server]"
-        echo 'mode = "public"'
+        echo "mode = \"$mode\""
         echo "listen = []"
         echo
+        if [ "$mode" = private ]; then
+            echo "[access]"
+            echo "# a home or office network: DNS, and the web interface over plain HTTP,"
+            echo "# for these networks only"
+            echo "allow = $(toml_list "${LAN_NETS[@]}")"
+            echo
+        fi
         echo "[upstream]"
         echo "primary = []"
         echo
@@ -356,6 +361,11 @@ configure() {
     [ ${#LISTEN[@]} -gt 0 ] || die "no listen address: pass --listen 203.0.113.10:53"
 
     # mode
+    if [ "$LAN" -eq 1 ]; then
+        [ "${MODE:-private}" = private ] || die "--lan installs for a private network: it cannot be combined with --mode $MODE"
+        MODE=private
+        [ ${#ALLOW[@]} -gt 0 ] || ALLOW=("${LAN_NETS[@]}")
+    fi
     if [ -z "$MODE" ]; then
         if [ -n "$TTY" ]; then
             echo "  Who may use this DNS server?"
@@ -418,14 +428,19 @@ configure() {
             KEY_FILE="$REPLY"
         fi
     fi
-    # admin interface: there is no default; --yes picks the safer one
+    # admin interface: without a terminal, the safer one
     case "$ADMIN_PORT" in ''|*[!0-9]*) die "--admin-port must be a number" ;; esac
     [ "$ADMIN_PORT" -ge 1 ] && [ "$ADMIN_PORT" -le 65535 ] || die "--admin-port must be 1 to 65535"
+    [ -n "$ADMIN" ] || [ "$LAN" -eq 0 ] || ADMIN=public
     while [ -z "$ADMIN" ]; do
         if [ -z "$TTY" ]; then ADMIN=local; break; fi
         echo "  How should the admin interface (port $ADMIN_PORT) be reached?"
         echo "    1) only from this server, through an SSH tunnel (more secure)"
-        echo "    2) from anywhere, protected by a password and lockout ${B}(less secure than 1)${N}"
+        if [ "$MODE" = private ]; then
+            echo "    2) also directly from the allowed networks, with a password"
+        else
+            echo "    2) also from other machines, over HTTPS with a password ${B}(needs a certificate: --domain or --cert-file)${N}"
+        fi
         ask "Choose 1 or 2" ""
         case "$REPLY" in 1) ADMIN=local ;; 2) ADMIN=public ;; esac
     done
@@ -495,7 +510,11 @@ configure() {
         echo 'listen = "127.0.0.1:9153"'
         case "$ADMIN" in
             local)  printf '\n[admin]\nlisten = "127.0.0.1:%s"   # reach it through an SSH tunnel\n' "$ADMIN_PORT" ;;
-            public) printf '\n[admin]\nlisten = ":%s"   # reachable from anywhere; password protected\n' "$ADMIN_PORT" ;;
+            public) if [ "$MODE" = private ]; then
+                        printf '\n[admin]\nlisten = ":%s"   # this server and the allowed private networks\n' "$ADMIN_PORT"
+                    else
+                        printf '\n[admin]\nlisten = ":%s"   # other machines over HTTPS only; plain HTTP on this server alone\n' "$ADMIN_PORT"
+                    fi ;;
         esac
     } > "$f"
 
@@ -561,7 +580,6 @@ fresh_install() {
                 *) warn "stop it before you finish setup, or choose other addresses there" ;; esac
         fi
         install_files
-        write_setup_trust
         systemd daemon-reload
         systemd enable --now dnsnova
         if healthy; then ok "dnsnova is running"; else
@@ -577,7 +595,6 @@ fresh_install() {
     [ "$ADMIN" = off ] || ports+=("$ADMIN_PORT")
     check_ports "${ports[@]}"
     install_files
-    write_setup_trust
     systemd daemon-reload
     systemd enable --now dnsnova
     if healthy; then ok "dnsnova is running"; else
@@ -653,7 +670,7 @@ summary() {
     local open="53 (UDP and TCP)"
     [ ${#DOT_LISTEN[@]} -eq 0 ] || open="$open, 853 (TCP and UDP)"
     [ ${#HTTPS_LISTEN[@]} -eq 0 ] || open="$open, 443 (TCP and UDP)"
-    [ "$ADMIN" != public ] || open="$open, $ADMIN_PORT (TCP)"
+    if [ "$ADMIN" = public ] && { [ "$MODE" = private ] || has_cert; }; then open="$open, $ADMIN_PORT (TCP)"; fi
     echo "  Remember to open port $open in your firewall."
     admin_summary
 }
@@ -667,30 +684,53 @@ setup_code() { # waits for the service to write the code
     done
 }
 
+# tunnel_hint prints the SSH command that brings the web interface to the
+# computer the installer is used from.
+tunnel_hint() {
+    local host
+    host="$(primary_ip)"
+    printf 'ssh -L %s:127.0.0.1:%s %s@%s' "$ADMIN_PORT" "$ADMIN_PORT" "${SUDO_USER:-root}" "${host:-<this server>}"
+}
+
+# has_cert: a certificate is configured, so other machines can use HTTPS
+has_cert() { [ -n "$DOMAIN" ] || [ -n "$CERT_FILE" ]; }
+
+# lan_urls prints http://ADDR:PORT for this host's private addresses.
+lan_urls() {
+    local a
+    while read -r a; do
+        case "$a" in
+            10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*|100.6[4-9].*|100.[7-9][0-9].*|100.1[01][0-9].*|100.12[0-7].*) echo "http://$a:$ADMIN_PORT" ;;
+            fc*|fd*) echo "http://[$a]:$ADMIN_PORT" ;;
+        esac
+    done < <(public_addrs) | awk '!seen[$0]++'
+}
+
 summary_simple() {
-    local code a urls=()
-    code="$(setup_code)"
-    if [ "$ADMIN" = local ]; then
-        urls=("http://127.0.0.1:$ADMIN_PORT")
-    else
-        while read -r a; do
-            [ -n "$a" ] || continue
-            case "$a" in *:*) a="[$a]" ;; esac
-            urls+=("http://$a:$ADMIN_PORT")
-        done < <(primary_ip | tr -d '[]'; echo; public_addrs; echo 127.0.0.1)
-    fi
     echo
     echo "${B}DNSNova is installed and running.${N}"
-    echo "Open one of these addresses and follow the setup wizard:"
-    printf '%s\n' "${urls[@]}" | awk '!seen[$0]++ { print "  " $0 }'
-    if [ "$ADMIN" = local ]; then
-        echo "(first, on your computer: ssh -L $ADMIN_PORT:127.0.0.1:$ADMIN_PORT ${SUDO_USER:-root}@$(primary_ip))"
+    if [ "$LAN" -eq 1 ] && [ "$ADMIN" = public ]; then
+        echo "Open one of these addresses from a device on your network and follow the setup wizard:"
+        { lan_urls; echo "http://127.0.0.1:$ADMIN_PORT"; } | sed 's/^/  /'
+        echo "If a firewall is on, open TCP port $ADMIN_PORT to your network."
+    else
+        echo "The web interface is not encrypted yet, so it opens only on this server."
+        echo "On your computer, open a tunnel:"
+        echo "  $(tunnel_hint)"
+        echo "then open http://127.0.0.1:$ADMIN_PORT/ and follow the setup wizard."
+        if [ "$ADMIN" = public ]; then
+            echo "Once a domain is set up there, other machines can also open it over HTTPS on"
+            echo "port $ADMIN_PORT (open TCP $ADMIN_PORT in the firewall)."
+        fi
+        if [ "$LAN" -eq 0 ] && [ -n "$(lan_urls)" ] && [ "$(public_addrs | sort -u | wc -l)" -eq "$(lan_urls | wc -l)" ]; then
+            echo
+            echo "This server has only private addresses. For a home or office network, install"
+            echo "with --lan instead, and the web interface opens directly from that network:"
+            echo "  curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | sh -s -- -u --purge"
+            echo "  curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | sh -s -- --lan"
+        fi
     fi
     echo
-    if [ -n "$code" ] && [ "$ADMIN" != local ]; then
-        echo "Opened from outside your network, setup asks for this code: $code"
-    fi
-    [ "$ADMIN" = local ] || echo "If a firewall is on, open TCP port $ADMIN_PORT."
     echo "Control the service: systemctl start|stop|restart|status dnsnova"
     echo "Uninstall:           curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | sh -s -- -u"
     echo "Forgot the password: dnsnova -reset-admin"
@@ -698,7 +738,7 @@ summary_simple() {
 
 admin_summary() {
     [ "$ADMIN" = off ] && return 0
-    local code="" i host
+    local code="" i
     for i in $(seq 1 10); do # the service writes the code when it starts
         if [ -r "$VAR/secrets/setup-code" ]; then code="$(tr -d '[:space:]' < "$VAR/secrets/setup-code")"; break; fi
         [ "$SKIP_SYSTEMD" = "1" ] && break
@@ -706,22 +746,25 @@ admin_summary() {
     done
     echo
     echo "${B}Admin interface${N}"
-    if [ "$ADMIN" = local ]; then
-        host="127.0.0.1"
-        echo "  From your computer:  ssh -L $ADMIN_PORT:127.0.0.1:$ADMIN_PORT ${SUDO_USER:-root}@<this server>"
-    else
-        host="$(public_listen_ips | awk '{print $1}')"
-        [ -n "$host" ] || host="$(primary_ip)"
-        host="${host:-<this server>}"
-        case "$host" in \[*) ;; *:*) host="[$host]" ;; esac
-        echo "  The connection is not encrypted until a domain and certificate are set up."
+    if [ "$ADMIN" = public ] && [ "$MODE" = private ]; then
+        echo "  From the allowed networks (no setup code needed there):"
+        { lan_urls; echo "http://127.0.0.1:$ADMIN_PORT"; } | sed 's/^/    /'
+        return 0
     fi
-    if [ -n "$code" ]; then
-        echo "  Finish setup in the browser:  http://$host:$ADMIN_PORT/"
-        echo "  Opened from outside your network, it asks for this setup code: $code"
-    else
-        echo "  Open http://$host:$ADMIN_PORT/ and enter the one-time setup code from"
-        echo "  $VAR/secrets/setup-code (written when dnsnova first starts)."
+    echo "  On this server, or from your computer through a tunnel:"
+    echo "    $(tunnel_hint)"
+    echo "    then http://127.0.0.1:$ADMIN_PORT/ (no setup code needed)"
+    if [ "$ADMIN" = public ]; then
+        if [ -n "$DOMAIN" ]; then
+            echo "  From other machines, once the certificate is issued: https://$DOMAIN:$ADMIN_PORT/"
+        elif [ -n "$CERT_FILE" ]; then
+            echo "  From other machines: https://<a name on $CERT_FILE>:$ADMIN_PORT/"
+        else
+            warn "no certificate: other machines are refused until one is set up (plain HTTP is answered only on this server)"
+        fi
+        if has_cert && [ -n "$code" ]; then
+            echo "  Setup from another machine asks for this code: $code"
+        fi
     fi
 }
 

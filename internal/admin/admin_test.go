@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/harryheros/dnsnova/internal/alert"
 	"io"
 	"log/slog"
 	"net/http"
@@ -24,6 +25,7 @@ import (
 	"github.com/harryheros/dnsnova/internal/events"
 	"github.com/harryheros/dnsnova/internal/filter"
 	"github.com/harryheros/dnsnova/internal/insight"
+	"github.com/harryheros/dnsnova/internal/recursor"
 	"github.com/harryheros/dnsnova/internal/stats"
 	"github.com/harryheros/dnsnova/internal/tlsmgr"
 )
@@ -41,6 +43,7 @@ type fake struct {
 	failApply error
 	cleared   int
 	qlog      *insight.QueryLog
+	alerts    alert.Secrets
 }
 
 func (f *fake) Version() string                   { return "test" }
@@ -77,7 +80,31 @@ func (f *fake) FilterStatus() filter.Status { return filter.Status{Enabled: true
 func (f *fake) FilterWhy(name string) filter.Why {
 	return filter.Why{Enabled: true, Blocked: name == "\x03ads\x04test", BlockedBy: []string{"list"}}
 }
-func (f *fake) RecursionStatus() Recursion   { return Recursion{Cache: map[string]int{}} }
+func (f *fake) RecursionStatus() Recursion { return Recursion{Cache: map[string]int{}} }
+func (f *fake) Cluster() Cluster           { return Cluster{Name: "test"} }
+func (f *fake) Trace(_ context.Context, name string, qt uint16) *recursor.TraceResult {
+	return &recursor.TraceResult{Name: fmt.Sprintf("%q", name), Type: fmt.Sprint(qt), Rcode: "NOERROR"}
+}
+func (f *fake) DNSSEC() DNSSEC       { return DNSSEC{Recursion: true, Enabled: true, Bogus: 1} }
+func (f *fake) ClearDNSSECFailures() {}
+func (f *fake) Alerts() Alerts {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return Alerts{Enabled: true, Destinations: f.alerts.Show(), Channels: []string{}, Active: []alert.Active{}, History: []alert.Sent{}}
+}
+func (f *fake) SetAlertDestination(name string, fields map[string]string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.alerts.Set(name, fields)
+}
+func (f *fake) TestAlerts(context.Context) (map[string]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.alerts.Channels()) == 0 {
+		return nil, errors.New("no destination is set up")
+	}
+	return map[string]string{"slack": "ok"}, nil
+}
 func (f *fake) UpdateFilter(context.Context) { f.mu.Lock(); f.cleared += 100; f.mu.Unlock() }
 func (f *fake) Snapshot() *config.Snapshot   { f.mu.Lock(); defer f.mu.Unlock(); return f.snap }
 func (f *fake) ApplyConfig(src []byte, expected string) (*config.Snapshot, error) {
@@ -635,25 +662,134 @@ func TestSetupCodeForgivingAndCapped(t *testing.T) {
 	}
 }
 
-func TestSetupTrustedWithoutCode(t *testing.T) {
+// On a public server only the server itself (loopback, an SSH tunnel) may
+// create the administrator without the setup code: not a private network,
+// where the address says nothing about who is behind it (a cloud network),
+// and not the SSH client address that earlier installers wrote to
+// setup-trust, which a NAT may share with many people.
+func TestSetupTrustedPublicOnlyFromLoopback(t *testing.T) {
 	e := newEnv(t)
 	if r := e.do(e.c, "GET", "/api/v1/setup", nil); r.body["code_required"] != false {
 		t.Fatalf("code required from the server itself: %s", r.raw)
 	}
-	pub := netip.MustParseAddr("203.0.113.7")
-	if e.a.sec.setupTrusted(pub) || !e.a.sec.setupTrusted(netip.MustParseAddr("192.168.1.20")) || !e.a.sec.setupTrusted(netip.MustParseAddr("fd00::5")) {
-		t.Fatal("trust rules")
+	for _, ip := range []string{"127.0.0.1", "::1", "::ffff:127.0.0.1"} {
+		if !e.a.sec.setupTrusted(netip.MustParseAddr(ip)) {
+			t.Errorf("%s: loopback not trusted", ip)
+		}
 	}
-	os.WriteFile(filepath.Join(e.dir, "secrets", "setup-trust"), []byte("203.0.113.7\n"), 0o600)
-	if !e.a.sec.setupTrusted(pub) {
-		t.Fatal("the installer's SSH address is not trusted")
+	for _, ip := range []string{"192.168.1.20", "10.0.0.5", "172.16.3.4", "fd00::5", "fe80::1", "169.254.1.1", "100.64.0.1", "203.0.113.7"} {
+		if e.a.sec.setupTrusted(netip.MustParseAddr(ip)) {
+			t.Errorf("%s: trusted without the setup code", ip)
+		}
+	}
+	// A setup-trust file is no longer honoured, and is removed on start.
+	trust := filepath.Join(e.dir, "secrets", "setup-trust")
+	os.WriteFile(trust, []byte("203.0.113.7\n"), 0o600)
+	if e.a.sec.setupTrusted(netip.MustParseAddr("203.0.113.7")) {
+		t.Fatal("the address in setup-trust is trusted")
+	}
+	var logged bytes.Buffer
+	if _, err := New(e.b, e.dir, slog.New(slog.NewTextHandler(&logged, nil))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(trust); !os.IsNotExist(err) {
+		t.Fatal("setup-trust left behind after a restart")
+	}
+	if !strings.Contains(logged.String(), "setup-trust") {
+		t.Fatalf("removing setup-trust was not logged: %s", logged.String())
 	}
 	r := e.do(e.c, "POST", "/api/v1/setup", map[string]string{"username": "ops", "password": "correct horse battery"})
 	if r.code != 201 {
+		t.Fatalf("setup without code from loopback: %d %s", r.code, r.raw)
+	}
+}
+
+// On a server installed for a home or office network (private mode), the
+// administrator can be created from that network without the code, as
+// from the server itself; in public mode only from the server itself.
+func TestSetupTrustedOnLAN(t *testing.T) {
+	e := newEnv(t)
+	src := strings.ReplaceAll(testConfig, `mode = "public"`, `mode = "private"`) +
+		"\n[access]\nallow = [\"192.168.0.0/16\", \"100.64.0.0/10\", \"fc00::/7\", \"198.51.100.0/24\"]\n"
+	os.WriteFile(e.b.store.Path, []byte(strings.ReplaceAll(src, "%DIR%", e.dir)), 0o640)
+	snap, err := e.b.store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.b.snap = snap
+	trusted := func(ip string, proxied bool) bool {
+		return e.a.trusted(&call{ip: netip.MustParseAddr(ip), proxied: proxied})
+	}
+	for ip, want := range map[string]bool{
+		"127.0.0.1": true, "192.168.1.20": true, "::ffff:192.168.1.20": true, "100.101.2.3": true, "fd00::5": true,
+		"10.0.0.5":     false, // private, but not this network
+		"198.51.100.7": false, // allowed, but an internet address
+		"203.0.113.7":  false,
+	} {
+		if got := trusted(ip, false); got != want {
+			t.Errorf("private mode, %s: trusted = %v, want %v", ip, got, want)
+		}
+	}
+	if trusted("192.168.1.20", true) {
+		t.Error("private mode: a proxied request is trusted")
+	}
+	if r := e.do(e.c, "POST", "/api/v1/setup", map[string]string{"username": "ops", "password": "correct horse battery"}); r.code != 201 {
 		t.Fatalf("setup without code: %d %s", r.code, r.raw)
 	}
-	if _, err := os.Stat(filepath.Join(e.dir, "secrets", "setup-trust")); !os.IsNotExist(err) {
-		t.Fatal("setup-trust left behind")
+	e.b.snap = nil // no configuration: nothing but loopback
+	if trusted("192.168.1.20", false) {
+		t.Error("trusted without a configuration")
+	}
+}
+
+// A reverse proxy on this machine that says the visitor used HTTPS makes
+// the session cookie Secure; the same header from anywhere else, or a proxy
+// saying http, does not.
+func TestForwardedHTTPS(t *testing.T) {
+	req := func(remote string, hdr ...string) *http.Request {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.RemoteAddr = remote
+		for i := 0; i+1 < len(hdr); i += 2 {
+			r.Header.Add(hdr[i], hdr[i+1])
+		}
+		return r
+	}
+	for _, c := range []struct {
+		r    *http.Request
+		want bool
+	}{
+		{req("127.0.0.1:5000", "X-Forwarded-Proto", "https"), true},
+		{req("[::1]:5000", "X-Forwarded-Proto", "HTTPS"), true},
+		{req("127.0.0.1:5000", "Forwarded", `for=203.0.113.9;proto=https`), true},
+		{req("127.0.0.1:5000", "Forwarded", `for=a;proto=http, for=b;proto="https"`), true},
+		{req("127.0.0.1:5000", "X-Forwarded-Proto", "https, http"), false},
+		{req("127.0.0.1:5000", "X-Forwarded-Proto", "http"), false},
+		{req("127.0.0.1:5000", "X-Forwarded-Proto", "https", "Forwarded", "proto=http"), false},
+		{req("127.0.0.1:5000", "X-Forwarded-For", "203.0.113.9"), false},
+		{req("127.0.0.1:5000"), false},
+		{req("203.0.113.9:5000", "X-Forwarded-Proto", "https"), false},
+		{req("192.168.1.9:5000", "Forwarded", "proto=https"), false},
+	} {
+		if got := ForwardedHTTPS(c.r); got != c.want {
+			t.Errorf("%s %v: ForwardedHTTPS = %v, want %v", c.r.RemoteAddr, c.r.Header, got, c.want)
+		}
+	}
+	if Local(req("127.0.0.1:5000", "X-Forwarded-Proto", "https")) || !Local(req("127.0.0.1:5000")) || Local(req("192.168.1.9:5000")) {
+		t.Error("Local")
+	}
+
+	e := newEnv(t)
+	body := map[string]string{"code": e.a.SetupCode(), "username": "ops", "password": "correct horse battery"}
+	r := e.do(e.c, "POST", "/api/v1/setup", body, "X-Forwarded-Proto", "https")
+	if r.code != 201 {
+		t.Fatalf("setup: %d %s", r.code, r.raw)
+	}
+	if r.body["secure"] != true || !strings.Contains(strings.ToLower(r.hdr.Get("Set-Cookie")), "; secure") {
+		t.Fatalf("behind an HTTPS proxy the session is not marked secure: %v %q", r.body["secure"], r.hdr.Get("Set-Cookie"))
+	}
+	r = e.do(e.client(), "POST", "/api/v1/login", map[string]string{"username": "ops", "password": "correct horse battery"})
+	if r.code != 200 || r.body["secure"] != false || strings.Contains(strings.ToLower(r.hdr.Get("Set-Cookie")), "; secure") {
+		t.Fatalf("plain local login marked secure: %d %v %q", r.code, r.body["secure"], r.hdr.Get("Set-Cookie"))
 	}
 }
 
@@ -761,5 +897,107 @@ func TestLockoutTableBounded(t *testing.T) {
 	}
 	if l.locked(locked, now) == 0 {
 		t.Fatal("a locked address was forgotten")
+	}
+}
+
+// [cluster] and [anycast] are changed only in the file on the server: one
+// decides where the node takes its settings from, the other runs commands.
+// Other changes to a file that has them still work.
+func TestFileOnlySettings(t *testing.T) {
+	e := newEnv(t)
+	e.setup()
+	hash := func() string { return e.do(e.c, "GET", "/api/v1/config", nil).body["hash"].(string) }
+	for _, set := range []map[string]any{
+		{"anycast.announce": []string{"sh", "-c", "id"}},
+		{"anycast.enabled": true},
+		{"cluster.role": "follower"},
+		{"cluster.primary": "203.0.113.9:7001"},
+	} {
+		r := e.do(e.c, "PATCH", "/api/v1/config", map[string]any{"hash": hash(), "set": set})
+		if r.code != http.StatusForbidden || !strings.Contains(r.raw, "configuration file on the server") {
+			t.Fatalf("%v: %d %s", set, r.code, r.raw)
+		}
+	}
+	file := e.do(e.c, "GET", "/api/v1/config/file", nil).body["content"].(string)
+	withCluster := file + "\n[cluster]\nrole = \"primary\"\nlisten = \"127.0.0.1:7001\"\n"
+	if r := e.do(e.c, "PUT", "/api/v1/config/file", map[string]any{"hash": hash(), "content": withCluster}); r.code != http.StatusForbidden {
+		t.Fatalf("adding [cluster] through the API: %d %s", r.code, r.raw)
+	}
+	// put [anycast] in the file by hand, then edit something else
+	os.WriteFile(e.b.store.Path, []byte(strings.ReplaceAll(testConfig, "%DIR%", e.dir)+"\n[anycast]\nannounce = [\"true\"]\nwithdraw = [\"true\"]\n"), 0o640)
+	snap, err := e.b.store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.b.mu.Lock()
+	e.b.snap = snap
+	e.b.mu.Unlock()
+	if r := e.do(e.c, "PATCH", "/api/v1/config", map[string]any{"hash": snap.Hash, "set": map[string]any{"cache.size": 777}}); r.code != 200 {
+		t.Fatalf("other change in a file with [anycast]: %d %s", r.code, r.raw)
+	}
+	if strings.Count(string(e.b.snap.Doc.Src), "announce = [\"true\"]") != 1 {
+		t.Fatal("[anycast] lost by an unrelated change")
+	}
+}
+
+func TestTraceAndDNSSECEndpoints(t *testing.T) {
+	e := newEnv(t)
+	e.setup()
+	r := e.do(e.c, "POST", "/api/v1/tools/trace", map[string]string{"name": "Example.COM.", "type": "aaaa"})
+	if r.code != 200 || r.body["rcode"] != "NOERROR" || r.body["name"] != fmt.Sprintf("%q", "\x07example\x03com") || r.body["type"] != "28" {
+		t.Fatalf("trace: %d %s", r.code, r.raw)
+	}
+	for _, bad := range []map[string]string{{"name": ""}, {"name": "a..b"}, {"name": "example.com", "type": "BOGUS"}} {
+		if r := e.do(e.c, "POST", "/api/v1/tools/trace", bad); r.code != 400 {
+			t.Errorf("%v: %d", bad, r.code)
+		}
+	}
+	// one trace at a time
+	e.a.traceMu.Lock()
+	if r := e.do(e.c, "POST", "/api/v1/tools/trace", map[string]string{"name": "example.com"}); r.code != http.StatusTooManyRequests {
+		t.Errorf("second trace while one runs: %d", r.code)
+	}
+	e.a.traceMu.Unlock()
+	if r := e.do(e.c, "GET", "/api/v1/dnssec", nil); r.code != 200 || r.body["bogus"] != float64(1) {
+		t.Fatalf("dnssec: %d %s", r.code, r.raw)
+	}
+	if r := e.do(e.c, "DELETE", "/api/v1/dnssec/failures", nil); r.code != 200 {
+		t.Fatalf("clear: %d %s", r.code, r.raw)
+	}
+	// signed out: nothing
+	if r := e.do(e.client(), "POST", "/api/v1/tools/trace", map[string]string{"name": "example.com"}); r.code != 401 {
+		t.Fatalf("trace without a session: %d", r.code)
+	}
+}
+
+// Alert destinations are write-only: set, they show as set with a hint,
+// never the address or token; the test needs one set up.
+func TestAlertDestinations(t *testing.T) {
+	e := newEnv(t)
+	e.setup()
+	if r := e.do(e.c, "POST", "/api/v1/alerts/test", nil); r.code != 409 {
+		t.Fatalf("test with nothing set up: %d %s", r.code, r.raw)
+	}
+	if r := e.do(e.c, "PUT", "/api/v1/alerts/destinations/slack", map[string]string{"url": "ftp://x"}); r.code != 400 {
+		t.Fatalf("bad address: %d %s", r.code, r.raw)
+	}
+	if r := e.do(e.c, "PUT", "/api/v1/alerts/destinations/pager", map[string]string{"url": "https://x"}); r.code != 404 {
+		t.Fatalf("unknown destination: %d", r.code)
+	}
+	r := e.do(e.c, "PUT", "/api/v1/alerts/destinations/slack", map[string]string{"url": "https://hooks.slack.com/services/T0/B0/TOPSECRET"})
+	if r.code != 200 || strings.Contains(r.raw, "TOPSECRET") || !strings.Contains(r.raw, `"hint": "https://hooks.slack.com/…"`) {
+		t.Fatalf("set: %d %s", r.code, r.raw)
+	}
+	if r := e.do(e.c, "GET", "/api/v1/alerts", nil); r.code != 200 || strings.Contains(r.raw, "TOPSECRET") {
+		t.Fatalf("get: %d %s", r.code, r.raw)
+	}
+	if r := e.do(e.c, "POST", "/api/v1/alerts/test", nil); r.code != 200 || !strings.Contains(r.raw, `"slack": "ok"`) {
+		t.Fatalf("test: %d %s", r.code, r.raw)
+	}
+	if r := e.do(e.client(), "PUT", "/api/v1/alerts/destinations/slack", map[string]string{"url": "https://evil.example/"}); r.code != 401 {
+		t.Fatalf("signed out: %d", r.code)
+	}
+	if r := e.do(e.c, "PUT", "/api/v1/alerts/destinations/slack", map[string]string{"url": ""}); r.code != 200 || strings.Contains(r.raw, "hooks.slack.com") {
+		t.Fatalf("remove: %d %s", r.code, r.raw)
 	}
 }

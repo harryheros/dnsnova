@@ -100,3 +100,18 @@ taskset -c 0 ./load -s 127.0.0.1:5300 -names blocked.txt
 the "new names" test: DNSNova allows at most `limits.zone_concurrency`
 (50) upstream queries in flight per domain, so that a flood of random
 names under one domain cannot tie up the upstreams. `-unique` does this.
+
+## Profiling
+
+To see where the time goes, build with the profiler and take a CPU profile
+while `load` runs:
+
+```sh
+go build -tags pprof -o dnsnova-pprof ./cmd/dnsnova
+taskset -c 1 ./dnsnova-pprof -c bench.toml &   # profiler on 127.0.0.1:6060
+taskset -c 0 ./load -s 127.0.0.1:5300 -d 30s &
+go tool pprof -top http://127.0.0.1:6060/debug/pprof/profile?seconds=20
+```
+
+`DNSNOVA_PPROF=addr:port` moves the profiler. Release builds never include it.
+

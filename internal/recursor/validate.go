@@ -3,6 +3,8 @@ package recursor
 import (
 	"context"
 	"errors"
+	"fmt"
+	"math"
 	"slices"
 	"time"
 
@@ -49,6 +51,23 @@ func signerOf(set *rrset, zone string) (string, bool) {
 
 // validateSet returns a copy of cs with its DNSSEC status.
 func (r *Recursor) validateSet(ctx context.Context, t *task, cs *cachedSet) (*cachedSet, error) {
+	var v *cachedSet
+	var err error
+	if d, ok := r.underNTA(cs.set.name); ok && !cs.synth {
+		c := *cs
+		c.sec, c.ede, c.why = secInsecure, 0, ntaWhy(d)
+		v = &c
+	} else if v, err = r.checkSet(ctx, t, cs); err != nil {
+		return nil, err
+	}
+	if t.trace != nil && !cs.synth {
+		t.trace.add(t, TraceStep{Kind: "validate", Zone: zoneName(cs.zone), Name: m.NameString(cs.set.name), Type: m.TypeString(cs.set.typ),
+			Result: fmt.Sprintf("%d record%s: %s", len(cs.set.data), plural(len(cs.set.data)), v.sec), Sec: v.sec.String(), Why: v.why})
+	}
+	return v, nil
+}
+
+func (r *Recursor) checkSet(ctx context.Context, t *task, cs *cachedSet) (*cachedSet, error) {
 	v := *cs
 	if cs.synth {
 		return &v, nil
@@ -84,15 +103,18 @@ func (r *Recursor) validateSet(ctx context.Context, t *task, cs *cachedSet) (*ca
 	v.orig = min(cs.orig, ttl)
 	v.sec = secSecure
 	if int(labels) < labelCount(cs.set.name) { // a wildcard expansion: the name itself must not exist
-		p := r.checkProof(cs.proof, signer, ke, t)
+		p, pttl := r.checkProof(cs.proof, signer, ke, t)
+		v.orig = min(v.orig, pttl) // the proof must not outlive its signatures either
 		if ns := nsecs(p); len(ns) > 0 && proveWildcardNSEC(ns, cs.set.name) {
 			// remembered for RFC 8198: the wildcard's RRset and the NSEC records
 			wild := "\x01*" + ancestorAt(cs.set.name, int(labels))
 			ws := *cs.set
 			ws.name = wild
 			now := r.now()
-			r.wilds.set(tkey(wild, cs.set.typ), &cachedSet{set: &ws, zone: cs.zone, sec: secSecure, orig: v.orig},
-				now.Add(time.Duration(v.orig)*time.Second))
+			if t.shared() {
+				r.wilds.set(tkey(wild, cs.set.typ), &cachedSet{set: &ws, zone: cs.zone, sec: secSecure, orig: v.orig},
+					now.Add(time.Duration(v.orig)*time.Second))
+			}
 			r.nsecs.add(signer, nil, p, v.orig, now)
 			return &v, nil
 		}
@@ -113,22 +135,29 @@ func (r *Recursor) validateSet(ctx context.Context, t *task, cs *cachedSet) (*ca
 	return &v, nil
 }
 
-// checkProof returns the proof RRsets that verify with the zone's keys.
-func (r *Recursor) checkProof(proof []*rrset, zone string, ke *keyEntry, t *task) []*rrset {
+// checkProof returns the proof RRsets that verify with the zone's keys, and
+// the shortest time any of them may still be trusted (TTL capped by the
+// signatures' expiry), so a cached proof never outlives its signatures.
+func (r *Recursor) checkProof(proof []*rrset, zone string, ke *keyEntry, t *task) ([]*rrset, uint32) {
 	var out []*rrset
+	least := uint32(math.MaxUint32)
 	now := r.now()
 	for _, p := range proof {
-		if _, _, err := verifySet(p, zone, ke.keys, now, &t.sigBudget); err == nil {
+		if ttl, _, err := verifySet(p, zone, ke.keys, now, &t.sigBudget); err == nil {
 			out = append(out, p)
+			least = min(least, ttl)
 		}
 	}
-	return out
+	return out, least
 }
 
 // unsignedStatus decides about data without signatures from zone: fine if
 // the zone is insecure, or if an insecure delegation lies between the zone
 // and owner (one server can serve a parent and its unsigned child).
 func (r *Recursor) unsignedStatus(ctx context.Context, t *task, owner, zone string) (security, uint16, string, error) {
+	if d, ok := r.underNTA(owner); ok {
+		return secInsecure, 0, ntaWhy(d), nil
+	}
 	ke, err := r.zoneKeys(ctx, t, zone)
 	if err != nil {
 		return 0, 0, "", err
@@ -157,6 +186,27 @@ func (r *Recursor) unsignedStatus(ctx context.Context, t *task, owner, zone stri
 
 // validateNeg returns a copy of ne with its DNSSEC status.
 func (r *Recursor) validateNeg(ctx context.Context, t *task, ne *negEntry, qname string, qtype uint16) (*negEntry, error) {
+	var v *negEntry
+	var err error
+	if d, ok := r.underNTA(qname); ok {
+		c := *ne
+		c.sec, c.ede, c.why = secInsecure, 0, ntaWhy(d)
+		v = &c
+	} else if v, err = r.checkNeg(ctx, t, ne, qname, qtype); err != nil {
+		return nil, err
+	}
+	if t.trace != nil {
+		what := "no records of this type"
+		if ne.rcode == m.RcodeNXDomain {
+			what = "the name does not exist"
+		}
+		t.trace.add(t, TraceStep{Kind: "validate", Zone: zoneName(ne.zone), Name: m.NameString(qname), Type: m.TypeString(qtype),
+			Result: what + ": " + v.sec.String(), Sec: v.sec.String(), Why: v.why})
+	}
+	return v, nil
+}
+
+func (r *Recursor) checkNeg(ctx context.Context, t *task, ne *negEntry, qname string, qtype uint16) (*negEntry, error) {
 	v := *ne
 	signer, signed := "", false
 	if ne.soa != nil {
@@ -201,7 +251,8 @@ func (r *Recursor) validateNeg(ctx context.Context, t *task, ne *negEntry, qname
 		}
 		v.orig = min(v.orig, ttl)
 	}
-	checked := r.checkProof(ne.proof, signer, ke, t)
+	checked, pttl := r.checkProof(ne.proof, signer, ke, t)
+	v.orig = min(v.orig, pttl)
 	bogus := func() (*negEntry, error) {
 		v.sec, v.ede, v.why = secBogus, edeNSECMissing, "no proof of non-existence for "+m.NameString(qname)
 		return &v, nil
@@ -248,7 +299,10 @@ func (r *Recursor) validateNeg(ctx context.Context, t *task, ne *negEntry, qname
 
 // zoneKeys returns the validated keys of zone, or that it is insecure or bogus.
 func (r *Recursor) zoneKeys(ctx context.Context, t *task, zone string) (*keyEntry, error) {
-	if ke, exp, ok := r.keys.get(zone); ok && r.now().Before(exp) {
+	if d, ok := r.underNTA(zone); ok {
+		return &keyEntry{sec: secInsecure, why: ntaWhy(d)}, nil
+	}
+	if ke, exp, ok := r.keys.get(zone); ok && r.now().Before(exp) && !t.fresh {
 		return ke, nil
 	}
 	key := "k" + zone
@@ -257,11 +311,32 @@ func (r *Recursor) zoneKeys(ctx context.Context, t *task, zone string) (*keyEntr
 	}
 	t.stack[key] = true
 	defer delete(t.stack, key)
-	v, err := r.fl.do(ctx, key, func() (any, error) { return r.fetchKeys(ctx, t, zone) })
-	if err != nil {
-		return nil, err
+	var ke *keyEntry
+	if t.fresh { // a trace sees its own queries, not another lookup's
+		var err error
+		if ke, err = r.fetchKeys(ctx, t, zone); err != nil {
+			return nil, err
+		}
+	} else {
+		v, err := r.fl.do(ctx, key, func() (any, error) { return r.fetchKeys(ctx, t, zone) })
+		if err != nil {
+			return nil, err
+		}
+		ke = v.(*keyEntry)
 	}
-	return v.(*keyEntry), nil
+	if t.trace != nil {
+		res := fmt.Sprintf("%d key%s", len(ke.keys), plural(len(ke.keys)))
+		switch ke.sec {
+		case secInsecure:
+			res = "not signed (no DS at the parent): answers from here are not checked"
+		case secBogus:
+			res = "keys cannot be trusted"
+		default:
+			res += " that match the parent's DS"
+		}
+		t.trace.add(t, TraceStep{Kind: "keys", Zone: zoneName(zone), Result: res, Sec: ke.sec.String(), Why: ke.why})
+	}
+	return ke, nil
 }
 
 func (r *Recursor) fetchKeys(ctx context.Context, t *task, zone string) (*keyEntry, error) {

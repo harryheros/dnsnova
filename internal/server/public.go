@@ -1,8 +1,10 @@
 package server
 
 import (
+	"fmt"
 	"net/http"
 	"net/netip"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -10,6 +12,7 @@ import (
 
 	"github.com/harryheros/dnsnova/internal/admin"
 	"github.com/harryheros/dnsnova/internal/config"
+	m "github.com/harryheros/dnsnova/internal/dnsmsg"
 	"github.com/harryheros/dnsnova/internal/resolver"
 )
 
@@ -79,25 +82,49 @@ func (p *probes) sweep(now time.Time) {
 }
 
 // resolve answers one query and notes check names for the status page.
-func (s *Server) resolve(msg []byte, udp bool, proto string, filtered bool) resolver.Result {
-	res := s.res.ResolveOpts(msg, resolveOpts(udp, proto, filtered))
+func (s *Server) resolve(msg []byte, ip netip.Addr, udp bool, proto string, filtered bool) (res resolver.Result) {
+	defer func() {
+		if v := recover(); v != nil {
+			s.queryPanicked(v, msg, proto, &res)
+		}
+	}()
+	res = s.res.ResolveOpts(msg, resolveOpts(ip, udp, proto, filtered))
 	s.noteProbe(res, proto)
 	return res
 }
 
+// queryPanicked turns a panic while answering one query into SERVFAIL for
+// that query, logged with its stack, instead of a crash of the whole server
+// (UDP and TCP) or a silently dropped request (DoH). One bad packet must
+// not take the service down for everyone.
+func (s *Server) queryPanicked(v any, msg []byte, proto string, res *resolver.Result) {
+	s.Log.Error("panic while answering a query; answered SERVFAIL", "proto", proto, "panic", fmt.Sprint(v), "stack", string(debug.Stack()))
+	*res = resolver.Result{Status: "error"}
+	if q, _, err := m.ParseQuery(msg); err == nil {
+		res.Q = q
+		res.Resp = m.ErrorResponse(msg, q, m.RcodeServFail)
+	}
+}
+
 // resolveCached answers a query only if no upstream needs to be asked (see
 // resolver.ResolveCached).
-func (s *Server) resolveCached(msg []byte, udp bool, proto string, filtered bool) (resolver.Result, bool) {
-	res, ok := s.res.ResolveCached(msg, resolveOpts(udp, proto, filtered))
+func (s *Server) resolveCached(msg []byte, ip netip.Addr, udp bool, proto string, filtered bool) (res resolver.Result, ok bool) {
+	defer func() {
+		if v := recover(); v != nil {
+			s.queryPanicked(v, msg, proto, &res)
+			ok = res.Resp != nil
+		}
+	}()
+	res, ok = s.res.ResolveCached(msg, resolveOpts(ip, udp, proto, filtered))
 	if ok {
 		s.noteProbe(res, proto)
 	}
 	return res, ok
 }
 
-func resolveOpts(udp bool, proto string, filtered bool) resolver.Opts {
+func resolveOpts(ip netip.Addr, udp bool, proto string, filtered bool) resolver.Opts {
 	encrypted := proto == "dot" || proto == "doh" || proto == "doh3" || proto == "doq"
-	return resolver.Opts{UDP: udp, Encrypted: encrypted, Filter: filtered}
+	return resolver.Opts{UDP: udp, Encrypted: encrypted, Filter: filtered, Client: ip}
 }
 
 func (s *Server) noteProbe(res resolver.Result, proto string) {
@@ -171,6 +198,11 @@ func (s *Server) PublicStatus() admin.PublicInfo {
 		if u.Role == "primary" && u.Healthy {
 			info.Healthy = true
 		}
+	}
+	// With recursion on, the server answers by itself: a working resolver
+	// is healthy even with no (or no healthy) upstreams, as in /healthz.
+	if c.Recursion.Enabled && s.Rec != nil && s.Rec.Healthy() {
+		info.Healthy = true
 	}
 	ql := s.QLog.State(time.Now())
 	info.QueryLog, info.QueryLogFullIP = ql.On, ql.On && ql.FullIP
