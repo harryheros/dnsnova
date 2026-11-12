@@ -110,3 +110,20 @@ func TestExchangeSubnet(t *testing.T) {
 		t.Fatalf("ordinary answer after a first subnet lookup: %v", got)
 	}
 }
+
+// A trace with WithSubnet asks name servers for that network.
+func TestTraceSubnet(t *testing.T) {
+	n := &geoNet{fakeNet: world()}
+	r := newTest(t, n.fakeNet, false)
+	r.send = n.send
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	tr := r.Trace(WithSubnet(ctx, m.ClientSubnet(cnNet)), "\x03www\x07example\x03com", m.TypeA)
+	if tr.Error != "" || len(tr.Answers) != 1 || !bytes.Contains([]byte(tr.Answers[0]), []byte("192.0.2.99")) {
+		t.Fatalf("trace for the network: %+v", tr)
+	}
+	tr = r.Trace(ctx, "\x03www\x07example\x03com", m.TypeA)
+	if len(tr.Answers) != 1 || !bytes.Contains([]byte(tr.Answers[0]), []byte("198.51.100.1")) {
+		t.Fatalf("ordinary trace: %+v", tr.Answers)
+	}
+}
