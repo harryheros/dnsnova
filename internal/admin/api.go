@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"net/netip"
 	"slices"
 	"sort"
 	"strconv"
@@ -15,7 +16,9 @@ import (
 	"time"
 
 	"github.com/harryheros/dnsnova/internal/config"
+	m "github.com/harryheros/dnsnova/internal/dnsmsg"
 	"github.com/harryheros/dnsnova/internal/insight"
+	"github.com/harryheros/dnsnova/internal/recursor"
 	"github.com/harryheros/dnsnova/internal/stats"
 )
 
@@ -428,11 +431,24 @@ func (a *Admin) lookup(w http.ResponseWriter, r *http.Request, c *call) {
 // at a time: a trace can send a hundred queries.
 func (a *Admin) trace(w http.ResponseWriter, r *http.Request, c *call) {
 	var req struct {
-		Name string `json:"name"`
-		Type string `json:"type"`
+		Name   string `json:"name"`
+		Type   string `json:"type"`
+		Subnet string `json:"subnet"` // optional: ask name servers for this network
 	}
 	if !decode(w, r, 8<<10, &req) {
 		return
+	}
+	var subnet netip.Prefix
+	if s := strings.TrimSpace(req.Subnet); s != "" {
+		var err error
+		if subnet, err = traceSubnet(s); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if !a.b.RecursionStatus().Enabled {
+			writeError(w, http.StatusBadRequest, "a client network needs recursion: with upstreams, they decide what name servers are told")
+			return
+		}
 	}
 	wire, err := wireName(req.Name)
 	if err != nil {
@@ -454,7 +470,34 @@ func (a *Admin) trace(w http.ResponseWriter, r *http.Request, c *call) {
 	defer a.traceMu.Unlock()
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
-	writeJSON(w, http.StatusOK, a.b.Trace(ctx, wire, qt))
+	if subnet.IsValid() {
+		ctx = recursor.WithSubnet(ctx, m.ClientSubnet(subnet))
+	}
+	res := a.b.Trace(ctx, wire, qt)
+	if subnet.IsValid() && res.Subnet == "" {
+		res.Subnet = subnet.String()
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// traceSubnet reads the network a trace asks for: an address stands for
+// its /24 (IPv4) or /56 (IPv6), and no more than that is sent.
+func traceSubnet(s string) (netip.Prefix, error) {
+	p, err := netip.ParsePrefix(s)
+	if err != nil {
+		a, aerr := netip.ParseAddr(s)
+		if aerr != nil {
+			return netip.Prefix{}, fmt.Errorf("%q is not a network such as 219.141.140.0/24 or an address", s)
+		}
+		a = a.Unmap()
+		p = netip.PrefixFrom(a, a.BitLen())
+	}
+	a := p.Addr().Unmap()
+	limit := 24
+	if a.Is6() {
+		limit = 56
+	}
+	return netip.PrefixFrom(a, min(p.Bits(), limit)).Masked(), nil
 }
 
 // wireName converts a dotted name to wire format (without the final zero).

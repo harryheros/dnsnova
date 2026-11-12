@@ -316,7 +316,14 @@ type subnetKey struct{}
 // it. It is for tools that measure how names resolve from a given network
 // (server ecs.client_path).
 func (r *Recursor) ExchangeSubnet(ctx context.Context, msg, ecs []byte) ([]byte, error) {
-	return r.answerQuery(context.WithValue(ctx, subnetKey{}, ecs), msg, true)
+	return r.answerQuery(WithSubnet(ctx, ecs), msg, true)
+}
+
+// WithSubnet returns ctx carrying ecs (an EDNS Client Subnet option): the
+// lookups made with it (Trace, ExchangeSubnet) ask name servers for that
+// network instead of Config.ECS.
+func WithSubnet(ctx context.Context, ecs []byte) context.Context {
+	return context.WithValue(ctx, subnetKey{}, ecs)
 }
 
 func (r *Recursor) answerQuery(ctx context.Context, msg []byte, private bool) ([]byte, error) {

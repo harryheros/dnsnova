@@ -44,6 +44,7 @@ type fake struct {
 	cleared   int
 	qlog      *insight.QueryLog
 	alerts    alert.Secrets
+	recursion bool
 }
 
 func (f *fake) Version() string                   { return "test" }
@@ -80,8 +81,10 @@ func (f *fake) FilterStatus() filter.Status { return filter.Status{Enabled: true
 func (f *fake) FilterWhy(name string) filter.Why {
 	return filter.Why{Enabled: true, Blocked: name == "\x03ads\x04test", BlockedBy: []string{"list"}}
 }
-func (f *fake) RecursionStatus() Recursion { return Recursion{Cache: map[string]int{}} }
-func (f *fake) Cluster() Cluster           { return Cluster{Name: "test"} }
+func (f *fake) RecursionStatus() Recursion {
+	return Recursion{Enabled: f.recursion, Cache: map[string]int{}}
+}
+func (f *fake) Cluster() Cluster { return Cluster{Name: "test"} }
 func (f *fake) Trace(_ context.Context, name string, qt uint16) *recursor.TraceResult {
 	return &recursor.TraceResult{Name: fmt.Sprintf("%q", name), Type: fmt.Sprint(qt), Rcode: "NOERROR"}
 }
@@ -999,5 +1002,30 @@ func TestAlertDestinations(t *testing.T) {
 	}
 	if r := e.do(e.c, "PUT", "/api/v1/alerts/destinations/slack", map[string]string{"url": ""}); r.code != 200 || strings.Contains(r.raw, "hooks.slack.com") {
 		t.Fatalf("remove: %d %s", r.code, r.raw)
+	}
+}
+
+// A trace can ask name servers for another network: an address stands for
+// its /24; only with recursion.
+func TestTraceSubnet(t *testing.T) {
+	e := newEnv(t)
+	e.setup()
+	if r := e.do(e.c, "POST", "/api/v1/tools/trace", map[string]string{"name": "example.com", "subnet": "219.141.140.0/24"}); r.code != 400 {
+		t.Fatalf("subnet without recursion: %d %s", r.code, r.raw)
+	}
+	e.b.mu.Lock()
+	e.b.recursion = true
+	e.b.mu.Unlock()
+	for in, want := range map[string]string{"219.141.140.77": "219.141.140.0/24", "219.141.140.0/16": "219.141.0.0/16", "2001:db8:1:2::1": "2001:db8:1::/56"} {
+		r := e.do(e.c, "POST", "/api/v1/tools/trace", map[string]string{"name": "example.com", "subnet": in})
+		if r.code != 200 || r.body["subnet"] != want {
+			t.Errorf("%s: %d %v, want %s", in, r.code, r.body["subnet"], want)
+		}
+	}
+	if r := e.do(e.c, "POST", "/api/v1/tools/trace", map[string]string{"name": "example.com", "subnet": "beijing"}); r.code != 400 {
+		t.Fatalf("bad subnet: %d", r.code)
+	}
+	if r := e.do(e.c, "POST", "/api/v1/tools/trace", map[string]string{"name": "example.com"}); r.code != 200 || r.body["subnet"] != nil {
+		t.Fatalf("no subnet: %d %s", r.code, r.raw)
 	}
 }
