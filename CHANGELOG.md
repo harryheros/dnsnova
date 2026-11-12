@@ -6,6 +6,16 @@ All notable changes are listed here. Versions follow
 
 ## Unreleased
 
+## 1.3.6 (2026-11-12)
+
+- Names in `local.records` are checked more strictly: a name with an
+  empty label (`nas..home`, or two dots at the end as in `nas.home..`)
+  or with a label that starts or ends with a hyphen (`-nas.home`) is
+  refused when the configuration loads, instead of being served as
+  written. Such a name was never a valid host name; if one is in your
+  configuration, correct it before upgrading. Found by the fuzz tests.
+- The fuzz tests run once a week instead of every night.
+
 ## 1.3.5 (2026-11-11)
 
 Two more causes of SERVFAIL found the same way as in 1.3.4:
