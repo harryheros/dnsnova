@@ -14,7 +14,7 @@ import (
 type PublicInfo struct {
 	Domain         string   `json:"domain"`
 	Mode           string   `json:"mode"`
-	Healthy        bool     `json:"healthy"`   // at least one primary upstream answers
+	Healthy        bool     `json:"healthy"`   // it can resolve: recursion works, or a primary upstream answers
 	Encrypted      bool     `json:"encrypted"` // the certificate is ready
 	DoH            string   `json:"doh,omitempty"`
 	HTTP3          bool     `json:"http3"`
@@ -24,6 +24,7 @@ type PublicInfo struct {
 	Check          bool     `json:"check"`
 	QueryLog       bool     `json:"query_log"`
 	QueryLogFullIP bool     `json:"query_log_full_ip"`
+	Recursion      bool     `json:"recursion"` // resolves from the root servers, not through upstreams
 	// Filtered lists the addresses of the filtered service, when it is on.
 	Filtered *Filtered `json:"filtered,omitempty"`
 }

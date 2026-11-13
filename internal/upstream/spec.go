@@ -18,7 +18,8 @@ import (
 //	udp://203.0.113.53:5353         the same with an explicit scheme and port
 //	tcp://203.0.113.53              DNS over TCP
 //	tls://dns.example               DNS over TLS, port 853
-//	https://dns.example/dns-query   DNS over HTTPS
+//	https://dns.example/dns-query   DNS over HTTPS (HTTP/2, or HTTP/1.1)
+//	h3://dns.example/dns-query      DNS over HTTPS over HTTP/3 (QUIC, UDP 443)
 //	quic://dns.example              DNS over QUIC (RFC 9250), port 853
 //
 // A hostname may be pinned to an address with a fragment, which skips the
@@ -28,10 +29,10 @@ import (
 //	https://dns.google/dns-query#8.8.8.8
 type Spec struct {
 	Raw    string
-	Scheme string // udp, tcp, tls, https, quic
+	Scheme string // udp, tcp, tls, https, h3, quic
 	Host   string // hostname or IP address, without brackets
 	Port   int
-	URL    string // https only: the request URL without the fragment
+	URL    string // https and h3: the request URL (https://) without the fragment
 	Pin    netip.Addr
 }
 
@@ -61,12 +62,12 @@ func ParseSpec(raw string) (Spec, error) {
 		s.Pin = pin.Unmap()
 		rest = rest[:i]
 	}
-	defPort := map[string]int{"udp": 53, "tcp": 53, "tls": 853, "https": 443, "quic": 853}
+	defPort := map[string]int{"udp": 53, "tcp": 53, "tls": 853, "https": 443, "h3": 443, "quic": 853}
 	port, ok := defPort[s.Scheme]
 	if !ok {
-		return s, fmt.Errorf("%q: unsupported scheme %q (use udp, tcp, tls, https or quic)", raw, s.Scheme)
+		return s, fmt.Errorf("%q: unsupported scheme %q (use udp, tcp, tls, https, h3 or quic)", raw, s.Scheme)
 	}
-	if s.Scheme == "https" {
+	if s.Scheme == "https" || s.Scheme == "h3" {
 		u, err := url.Parse("https://" + rest)
 		if err != nil || u.Host == "" {
 			return s, fmt.Errorf("%q: invalid URL", raw)

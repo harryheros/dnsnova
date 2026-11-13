@@ -171,7 +171,10 @@ type Recursion struct {
 	Insecure          int64          `json:"insecure"`
 	Bogus             int64          `json:"bogus"`
 	Fallbacks         int64          `json:"fallbacks"`
-	Spoofed           int64          `json:"spoofed"` // queries that drew forged answers and were asked again over TCP
+	Spoofed           int64          `json:"spoofed"`     // queries that drew forged answers and were asked again over TCP
+	Forged            int64          `json:"forged"`      // UDP answers dropped as forged by a censor on the path
+	Rewritten         int64          `json:"rewritten"`   // answers no name server sends: the network answers for them
+	Intercepted       bool           `json:"intercepted"` // the network answers DNS in place of the name servers now
 	Cache             map[string]int `json:"cache"`
 }
 

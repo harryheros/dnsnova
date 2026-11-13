@@ -83,25 +83,27 @@ const LINE = {
   book: [["path", { d: "M4 19.5V5a2 2 0 0 1 2-2h14v16H6.5A2.5 2.5 0 0 0 4 21.5zM4 19.5A2.5 2.5 0 0 1 6.5 17H20" }]],
 };
 
-// The DNSNova mark: a trident on a 100-unit grid, chrome at the tips
-// and deep blue at the grip. Colors come from CSS (--mk*), so the mark
-// follows the appearance; a light edge on the left and a shaded right side
-// give the blade its ridge.
-const MARK_PATH = "M50 -1L66 24L56.5 19.5V51H43.5V19.5L34 24Z" +
-  "M14 1L29 26L20.5 22V29C20.5 41.5 32 49.5 43.5 50.5H56.5C68 49.5 79.5 41.5 79.5 29V22L71 26L86 1L101 26L92.5 22V29C92.5 51.5 75.5 62.5 56.5 63.5V64H43.5V63.5C24.5 62.5 7.5 51.5 7.5 29V22L-1 26Z" +
-  "M43.5 64H56.5V86H43.5ZM33 66H67L61.5 74H38.5ZM50 81L58.5 90.5L50 101L41.5 90.5Z";
+// The DNSNova mark: a trident of silver plates with blue light in its
+// grooves (docs/design.md, Brand). Two drawings: the full metal one from
+// 48 px up, and a solid silhouette below, where the metal's detail would
+// blur. Each copy of the metal one gets its own ids, so several can share a
+// page.
+const MARK_METAL = "<defs><linearGradient id=\"\u00a7silver\" x1=\"0\" y1=\"0\" x2=\"1\" y2=\".28\"><stop stop-color=\"#eefaff\"/><stop offset=\".19\" stop-color=\"#9db6db\"/><stop offset=\".43\" stop-color=\"#fff\"/><stop offset=\".67\" stop-color=\"#a3b7d4\"/><stop offset=\"1\" stop-color=\"#35496d\"/></linearGradient><linearGradient id=\"\u00a7bladeL\" x1=\"0\" y1=\"0\" x2=\"1\" y2=\"1\"><stop stop-color=\"#fff\"/><stop offset=\".35\" stop-color=\"#f2f9ff\"/><stop offset=\".68\" stop-color=\"#9cb4d8\"/><stop offset=\"1\" stop-color=\"#e7f3ff\"/></linearGradient><linearGradient id=\"\u00a7bladeR\" x1=\"0\" y1=\"0\" x2=\"1\" y2=\"1\"><stop stop-color=\"#254777\"/><stop offset=\".46\" stop-color=\"#8ca9d0\"/><stop offset=\".78\" stop-color=\"#e5f2ff\"/><stop offset=\"1\" stop-color=\"#fff\"/></linearGradient><linearGradient id=\"\u00a7dark\" x1=\"0\" y1=\"0\" x2=\"1\" y2=\"1\"><stop stop-color=\"#10244d\"/><stop offset=\".5\" stop-color=\"#334e7c\"/><stop offset=\"1\" stop-color=\"#06132f\"/></linearGradient><linearGradient id=\"\u00a7cyan\" x1=\"0\" y1=\"0\" x2=\"1\" y2=\"0\"><stop stop-color=\"#075bff\"/><stop offset=\".4\" stop-color=\"#00e9ff\"/><stop offset=\".7\" stop-color=\"#0a78ff\"/><stop offset=\"1\" stop-color=\"#001e93\"/></linearGradient><linearGradient id=\"\u00a7shaftL\" x1=\"0\" y1=\"0\" x2=\"1\" y2=\"0\"><stop stop-color=\"#536b94\"/><stop offset=\".4\" stop-color=\"#fff\"/><stop offset=\"1\" stop-color=\"#b4c8e5\"/></linearGradient><linearGradient id=\"\u00a7shaftR\" x1=\"0\" y1=\"0\" x2=\"1\" y2=\"0\"><stop stop-color=\"#273c65\"/><stop offset=\".65\" stop-color=\"#819bc1\"/><stop offset=\"1\" stop-color=\"#e7f3ff\"/></linearGradient><linearGradient id=\"\u00a7armR\" x1=\"0\" y1=\"0\" x2=\"1\" y2=\".28\"><stop stop-color=\"#8ea6cc\"/><stop offset=\".5\" stop-color=\"#c9d7ec\"/><stop offset=\"1\" stop-color=\"#4f6790\"/></linearGradient><filter id=\"\u00a7glow\" x=\"-60%\" y=\"-60%\" width=\"220%\" height=\"220%\"><feGaussianBlur stdDeviation=\"7\"/></filter><filter id=\"\u00a7soft\" x=\"-40%\" y=\"-40%\" width=\"180%\" height=\"180%\"><feGaussianBlur stdDeviation=\"2.5\"/></filter></defs><g fill=\"none\" stroke=\"#007dff\" stroke-width=\"9\" opacity=\".85\" filter=\"url(#\u00a7glow)\"><path d=\"M500 46 L648 370 L581 369 Q557 379 557 408 L557 585 Q557 605 581 613 L626 613 L715 550 L715 225 L924 506 L859 510 L859 616 L763 704 L646 704 Q604 714 570 772 L500 834 L430 772 Q396 714 354 704 L237 704 L141 616 L141 510 L76 506 L285 225 L285 550 L374 613 L419 613 Q443 605 443 585 L443 408 Q443 379 419 369 L352 370 Z\"/><path d=\"M500 947 L407 805 L500 834 L593 805 Z\"/></g><path fill=\"url(#\u00a7dark)\" stroke=\"#007dff\" stroke-width=\"3\" d=\"M500 46 L648 370 L581 369 Q557 379 557 408 L557 585 Q557 605 581 613 L626 613 L715 550 L715 225 L924 506 L859 510 L859 616 L763 704 L646 704 Q604 714 570 772 L500 834 L430 772 Q396 714 354 704 L237 704 L141 616 L141 510 L76 506 L285 225 L285 550 L374 613 L419 613 Q443 605 443 585 L443 408 Q443 379 419 369 L352 370 Z\"/><path d=\"M141 510 L228 452 L272 503 L272 563 L353 632 L353 667 L256 667 L181 609 L181 528 Z\" fill=\"url(#\u00a7silver)\"/><path d=\"M859 510 L772 452 L728 503 L728 563 L647 632 L647 667 L744 667 L819 609 L819 528 Z\" fill=\"url(#\u00a7armR)\"/><path d=\"M353 640 L430 640 L469 615 L469 700 L500 742 L455 711 L358 654 Z\" fill=\"url(#\u00a7silver)\"/><path d=\"M647 640 L570 640 L531 615 L531 700 L500 742 L545 711 L642 654 Z\" fill=\"url(#\u00a7armR)\"/><path d=\"M285 515 L285 555 L371 626 L425 626 Q455 610 455 584 L455 408 Q455 373 407 363 M715 515 L715 555 L629 626 L575 626 Q545 610 545 584 L545 408 Q545 373 593 363\" fill=\"none\" stroke=\"url(#\u00a7cyan)\" stroke-width=\"10\" filter=\"url(#\u00a7soft)\"/><path d=\"M285 515 L285 555 L371 626 L425 626 Q455 610 455 584 L455 408 Q455 373 407 363 M715 515 L715 555 L629 626 L575 626 Q545 610 545 584 L545 408 Q545 373 593 363\" fill=\"none\" stroke=\"#04dcff\" stroke-width=\"3\"/><path d=\"M500 46 L352 370 L500 280 Z\" fill=\"url(#\u00a7bladeL)\"/><path d=\"M500 46 L648 370 L500 280 Z\" fill=\"url(#\u00a7bladeR)\"/><path d=\"M352 370 L500 280 L500 455 L421 355 Z\" fill=\"url(#\u00a7silver)\"/><path d=\"M648 370 L500 280 L500 455 L579 355 Z\" fill=\"url(#\u00a7dark)\"/><path d=\"M421 355 L453 390 Q469 400 469 427 L469 643 L500 692 L500 280 Z\" fill=\"url(#\u00a7shaftL)\"/><path d=\"M579 355 L547 390 Q531 400 531 427 L531 643 L500 692 L500 280 Z\" fill=\"url(#\u00a7shaftR)\"/><path d=\"M500 46 L500 822\" stroke=\"#e5f6ff\" stroke-width=\"2\" opacity=\".8\"/><g id=\"\u00a7leftBlade\"><path d=\"M76 506 L285 225 L285 485 L232 424 Z\" fill=\"url(#\u00a7bladeL)\"/><path d=\"M285 225 L285 485 L232 424 Z\" fill=\"url(#\u00a7bladeR)\"/><path d=\"M76 506 L232 424 L285 485 L285 516 L228 448 Z\" fill=\"url(#\u00a7dark)\"/><path d=\"M76 506 L232 424 L285 485\" fill=\"none\" stroke=\"#effaff\" stroke-width=\"2\"/></g><use href=\"#\u00a7leftBlade\" transform=\"translate(1000 0) scale(-1 1)\"/><path d=\"M141 510 L181 528 L181 609 L256 667 L358 667 Q410 672 455 726 L500 776 L500 834 L432 773 Q399 715 355 704 L237 704 L141 616 Z\" fill=\"url(#\u00a7silver)\"/><path d=\"M859 510 L819 528 L819 609 L744 667 L642 667 Q590 672 545 726 L500 776 L500 834 L568 773 Q601 715 645 704 L763 704 L859 616 Z\" fill=\"url(#\u00a7silver)\"/><path d=\"M181 609 L242 654 L358 654 Q410 657 455 711 L500 750 L500 776 L455 726 Q410 672 358 667 L256 667 Z\" fill=\"#f3faff\"/><path d=\"M819 609 L758 654 L642 654 Q590 657 545 711 L500 750 L500 776 L545 726 Q590 672 642 667 L744 667 Z\" fill=\"#b6cbe9\"/><path d=\"M141 616 L237 704 L355 704 Q399 715 432 773 L500 834 L500 865 L420 790 Q390 738 350 735 L228 735 L141 649 Z\" fill=\"url(#\u00a7dark)\"/><path d=\"M859 616 L763 704 L645 704 Q601 715 568 773 L500 834 L500 865 L580 790 Q610 738 650 735 L772 735 L859 649 Z\" fill=\"url(#\u00a7dark)\"/><path d=\"M158 647 L234 716 L353 716 Q398 723 427 783 L500 848 M842 647 L766 716 L647 716 Q602 723 573 783 L500 848\" fill=\"none\" stroke=\"#008bff\" stroke-width=\"9\" filter=\"url(#\u00a7soft)\"/><path d=\"M158 647 L234 716 L353 716 Q398 723 427 783 L500 848 M842 647 L766 716 L647 716 Q602 723 573 783 L500 848\" fill=\"none\" stroke=\"#03e6ff\" stroke-width=\"3\"/><path d=\"M163 544 L179 553 L179 610 L163 621 Z M837 544 L821 553 L821 610 L837 621 Z\" fill=\"#092453\" stroke=\"#bfdfff\" stroke-width=\"2\"/><path d=\"M168 558 L174 562 L174 603 L168 609 Z M832 558 L826 562 L826 603 L832 609 Z\" fill=\"#00dcff\" filter=\"url(#\u00a7soft)\"/><path d=\"M168 558 L174 562 L174 603 L168 609 Z M832 558 L826 562 L826 603 L832 609 Z\" fill=\"#9efbff\"/><path d=\"M195 655 L254 702 M805 655 L746 702\" stroke=\"#00cfff\" stroke-width=\"8\" filter=\"url(#\u00a7soft)\"/><path d=\"M195 655 L254 702 M805 655 L746 702\" stroke=\"#b7ffff\" stroke-width=\"3\"/><path d=\"M500 848 L408 803 L500 947 Z\" fill=\"url(#\u00a7bladeL)\"/><path d=\"M500 848 L592 803 L500 947 Z\" fill=\"url(#\u00a7bladeR)\"/><path d=\"M408 803 L500 834 L592 803 L500 865 Z\" fill=\"url(#\u00a7silver)\" stroke=\"#f1faff\" stroke-width=\"2\"/><path d=\"M500 865 L500 947\" stroke=\"#d7faff\" stroke-width=\"2\"/><path d=\"M408 803 L500 947 L592 803\" fill=\"none\" stroke=\"#00bfff\" stroke-width=\"3\" opacity=\".8\"/><path d=\"M76 506 L285 225 M352 370 L500 46 L648 370 M715 225 L924 506\" fill=\"none\" stroke=\"#e8f8ff\" stroke-width=\"2\"/>";
+const MARK_SMALL = "M500 46 L648 370 L581 369 Q557 379 557 408 L557 585 Q557 605 581 613 L626 613 L715 550 L715 225 L924 506 L859 510 L859 616 L763 704 L646 704 Q604 714 570 772 L500 834 L430 772 Q396 714 354 704 L237 704 L141 616 L141 510 L76 506 L285 225 L285 550 L374 613 L419 613 Q443 605 443 585 L443 408 Q443 379 419 369 L352 370 Z M500 947 L407 805 L500 812 L593 805 Z";
 let markSeq = 0;
 function stops(prefix, offsets) {
   return offsets.map((o, i) => s("stop", { offset: o, class: prefix + i }));
 }
 function brandMark(size = 28, glow = false) {
-  const id = "dnm" + ++markSeq;
-  const bevel = s("linearGradient", { id: id + "b", x1: 0, y1: 0, x2: 100, y2: 0, gradientUnits: "userSpaceOnUse" },
-    s("stop", { offset: 0, "stop-color": "#fff", "stop-opacity": 0.3 }), s("stop", { offset: 0.5, "stop-color": "#fff", "stop-opacity": 0 }),
-    s("stop", { offset: 0.5, "stop-color": "#001", "stop-opacity": 0.1 }), s("stop", { offset: 1, "stop-color": "#001", "stop-opacity": 0.2 }));
-  return s("svg", { width: size, height: size, viewBox: "-5 -3 110 106", "aria-hidden": "true", class: "mark" + (glow ? " glow" : "") },
-    s("defs", null, s("linearGradient", { id, x1: 0, y1: 0, x2: 0, y2: 100, gradientUnits: "userSpaceOnUse" }, stops("k", [0, 0.22, 0.45, 0.5, 0.8, 1])), bevel),
-    s("path", { d: MARK_PATH, fill: `url(#${id})` }), s("path", { d: MARK_PATH, fill: `url(#${id}b)` }));
+  if (size < 48) {
+    return s("svg", { width: size, height: size, viewBox: "60 30 880 930", "aria-hidden": "true", class: "mark small" },
+      s("path", { d: MARK_SMALL, fill: "#1478f5" }));
+  }
+  const id = "dnm" + ++markSeq + "-";
+  const doc = new DOMParser().parseFromString(`<svg xmlns="${SVGNS}">${MARK_METAL.replaceAll("\u00a7", id)}</svg>`, "image/svg+xml");
+  const el = s("svg", { width: size, height: size, viewBox: "30 20 940 950", "aria-hidden": "true", class: "mark" + (glow ? " glow" : "") });
+  for (const n of [...doc.documentElement.childNodes]) el.appendChild(document.importNode(n, true));
+  return el;
 }
 
 // The wordmark: "DNSN" and small capitals "OVA" set in Exo 2 ExtraBold
@@ -485,7 +487,7 @@ const WIZ_VIEWS = [
     // server: choosing the internet closes this page to this browser.
     const plainRemote = location.protocol !== "https:" && !/^(127\.|\[::1\]|localhost)/.test(location.hostname);
     const lockNote = h("p", { class: "notice warn small", style: { margin: 0 } },
-      "A server for the internet answers its web interface over plain HTTP only on the server itself. Once setup is finished, this page will no longer open from here: use an SSH tunnel (ssh -L port:127.0.0.1:port user@server) or, once a domain's certificate is ready, HTTPS.");
+      "On an internet server, plain HTTP is served only to the server itself. After setup, this page will not open from here: use an SSH tunnel (ssh -L port:127.0.0.1:port user@server), or HTTPS once the certificate is ready.");
     const lockSync = () => { lockNote.hidden = !(plainRemote && audience === "internet"); };
     const who = (value, title, help) => {
       const r = h("input", { type: "radio", name: "audience", value, checked: audience === value });
@@ -500,7 +502,7 @@ const WIZ_VIEWS = [
     port.style.maxWidth = "120px";
     // any port but 53 is unusable for most things: say so while it is typed
     const portNote = h("p", { class: "notice warn small", style: { margin: 0 } },
-      "Devices, routers (DHCP) and this machine's own resolver (/etc/resolv.conf) can only use port 53. Choose another port only when another DNS server on this machine answers on 53 and forwards to DNSNova.");
+      "Devices, routers (DHCP) and /etc/resolv.conf can only use port 53. Choose another port only if another DNS server here answers on 53 and forwards to DNSNova.");
     const portSync = () => { portNote.hidden = String(port.value).trim() === "53"; };
     port.addEventListener("input", portSync);
     portSync();
@@ -537,7 +539,7 @@ const WIZ_VIEWS = [
       wizNav(w, render, () => {
         const p = Number(port.value);
         if (!Number.isInteger(p) || p < 1 || p > 65535) throw new Error("The port must be a number from 1 to 65535.");
-        if (audience === "net" && mode === "local") throw new Error("With plain DNS only on this server, your network could not use it, and private mode refuses everyone else. Choose Anyone on the internet for an encrypted-only server, or let plain DNS answer on your network's address.");
+        if (audience === "net" && mode === "local") throw new Error("With plain DNS only on this server, your network cannot use it, and private mode refuses everyone else. For an encrypted-only server, choose Anyone on the internet; otherwise answer plain DNS on your network's address.");
         w.audience = audience;
         if (audience === "net") Object.assign(w.values, { "server.mode": "private", "access.allow": PRIVATE_NETS });
         else w.values["server.mode"] = "public";
@@ -562,14 +564,14 @@ const WIZ_VIEWS = [
     const rec = h("input", { type: "checkbox", checked: !!w.values["recursion.enabled"] });
     const primLabel = h("span");
     const sync = () => {
-      primLabel.textContent = rec.checked ? "Upstreams, asked only when a domain\u2019s name servers cannot be reached (optional)" : "Primary, one per line: https://…/dns-query, tls://host, quic://host or an IP address";
+      primLabel.textContent = rec.checked ? "Upstreams, asked only when a domain\u2019s name servers cannot be reached (optional)" : "Primary, one per line: https://…/dns-query, h3://…/dns-query, tls://host, quic://host or an IP address";
       fbLabel.hidden = rec.checked;
     };
     const fbLabel = h("label", { class: "block" }, "Fallback, used only if all primaries fail (optional)", fb);
     rec.addEventListener("change", sync);
     put(body, wizHead(w, "Resolution", "Where answers come from when they are not cached."),
       h("label", { class: "check" }, rec, h("span", null, h("strong", null, "Resolve names itself"),
-        h("span", { class: "small muted", style: { display: "block" } }, "Ask the root servers and each domain\u2019s own name servers, with DNSSEC checks. No third party sees the queries. Otherwise the upstreams below answer: Cloudflare and Quad9 are filled in, over encrypted DNS."))),
+        h("span", { class: "small muted", style: { display: "block" } }, "Ask the root servers and each domain\u2019s own name servers, with DNSSEC checks, so no third party sees the queries. Otherwise the upstreams below answer (Cloudflare and Quad9, encrypted, preset)."))),
       h("div", { class: "chips" }, h("span", { class: "small muted" }, "Add:"), presets.map(([n, list]) =>
         h("button", { type: "button", class: "btn small", onclick: () => { prim.value = [...new Set([...lines(prim.value), list[0]])].join("\n"); } }, n))),
       h("label", { class: "block" }, primLabel, prim),
@@ -617,7 +619,7 @@ const WIZ_VIEWS = [
       doorBox,
       h("label", { class: "check" }, all, h("span", null, h("strong", null, "Filter everyone"),
         h("span", { class: "small muted", style: { display: "block" } }, "Every address blocks, with no unfiltered way in. For a home or office server."))),
-      h("p", { class: "small muted", style: { margin: 0 } }, "Blocking uses ShieldNova's list, chosen to block very little by mistake, and free to use in DNSNova, commercial deployments included. A wrongly blocked site is allowed again with one click in the query log."),
+      h("p", { class: "small muted", style: { margin: 0 } }, "Blocking uses the ShieldNova list: few false positives, free to use in DNSNova, commercially too. A wrongly blocked site is allowed again with one click in the query log."),
       wizNav(w, render, () => {
         w.filterSeen = true;
         const on = all.checked || (!!doorBox && door.checked);
@@ -741,6 +743,7 @@ function route() {
 function health(st, ups) {
   const rec = st && st.recursion && st.recursion.enabled ? st.recursion : null;
   if (st && st.serves_dns === false) return ["warn", "Not serving DNS"];
+  if (rec && rec.intercepted) return ["err", "DNS intercepted by the network"];
   if (rec) return rec.healthy ? ["ok", "System Online"] : ["err", "Name servers unreachable"];
   const states = ups.map((u) => upState(u, ups).cls);
   const failing = states.filter((x) => x === "err").length, slow = states.filter((x) => x === "warn").length;
@@ -770,9 +773,14 @@ async function showApp() {
   const nav = h("nav", { class: "nav", "aria-label": "Main" });
   const ver = h("div", { class: "ver" }, "DNSNova");
   const menu = h("button", { type: "button", class: "btn small menu", "aria-expanded": "false", "aria-controls": "sidebody" }, "Menu");
+  // the brand goes home, as on routers and firewalls; on the overview it
+  // shows the overview afresh rather than doing nothing
+  const home = (e) => { if (route() === "overview") { e.preventDefault(); window.onhashchange(); } };
   const side = h("aside", { class: "side" },
-    h("a", { class: "railbrand", href: "#/overview", "aria-label": "DNSNova overview", style: { textDecoration: "none" } }, brandMark(96, true), wordmark("rail"), h("div", { class: "tagline" }, TAGLINE)),
-    h("div", { class: "railtop" }, brandMark(28, true), wordmark("rail"), menu),
+    h("a", { class: "railbrand", href: "#/overview", title: "Overview", "aria-label": "DNSNova: go to the overview", onclick: home, style: { textDecoration: "none" } }, brandMark(96, true), wordmark("rail"), h("div", { class: "tagline" }, TAGLINE)),
+    h("div", { class: "railtop" },
+      h("a", { class: "railhome", href: "#/overview", title: "Overview", "aria-label": "DNSNova: go to the overview", onclick: home }, brandMark(28, true), wordmark("rail")),
+      menu),
     h("div", { class: "sidebody", id: "sidebody" }, nav, h("div", { class: "sidefoot" }, ver)));
   const setMenu = (open) => { side.classList.toggle("open", open); menu.setAttribute("aria-expanded", String(open)); menu.textContent = open ? "Close" : "Menu"; };
   menu.addEventListener("click", () => setMenu(!side.classList.contains("open")));
@@ -1333,6 +1341,8 @@ function recCard(rec) {
     ["cyan", "Queries to name servers", fmt.short(rec.queries), rec.queries ? `${fmt.pct(rec.timeouts / rec.queries)} timed out` : "since start"],
   ];
   if (rec.fallback) rows.push(["idle", "Answered by upstreams", fmt.short(rec.fallbacks), "when no name server answered"]);
+  if (rec.intercepted) rows.unshift(["err", "Network answers for name servers", fmt.short(rec.rewritten), "port 53 intercepted: use your own DNSNova elsewhere as upstream"]);
+  if (rec.forged) rows.push(["warn", "Forged answers dropped", fmt.short(rec.forged), "a censor on the path; the genuine answers were used"]);
   if (rec.spoofed) rows.push(["warn", "Forged answers stopped", fmt.short(rec.spoofed), "someone sent fake answers; asked again over TCP"]);
   return card("s4", "Resolution", "network", more("#/settings/dns", "Settings"),
     h("ul", { class: "slots" }, rows.slice(0, SLOTS).map(([cls, name, value, note]) => h("li", { class: "slot tall", style: { minHeight: "44px" } },
@@ -1366,7 +1376,7 @@ function flowCard(st, stats, ups, total, open, rec, nowRate) {
   const ins = PROTOS.filter(([k]) => open.includes(k) || stats.queries[k]);
   const inList = ins.length ? ins : PROTOS.slice(0, 2);
   const outs = rec
-    ? [{ name: "Root & authoritative", sub: `${fmt.short(rec.cache.servers)} servers`, cls: rec.healthy ? "ok" : "err", w: Math.max(1, rec.queries - (rec.fallbacks || 0)) },
+    ? [{ name: "Root & authoritative", sub: `${fmt.short(rec.cache.servers)} servers`, cls: rec.healthy && !rec.intercepted ? "ok" : "err", w: Math.max(1, rec.queries - (rec.fallbacks || 0)) },
       ...(rec.fallback ? ups.slice(0, 3).map((u) => ({ name: upName(u.address), sub: "fallback", cls: "idle", w: rec.fallbacks || 0 })) : [])]
     : ups.slice(0, 6).map((u) => { const us = upState(u, ups); return { name: upName(u.address), sub: `${u.latency_ms ? fmt.ms(u.latency_ms) + " ms" : "–"} · ${u.role}`, cls: us.cls, w: u.queries }; });
   const outTotal = Math.max(1, sum(outs.map((o) => o.w)));
@@ -1597,7 +1607,7 @@ function traceView(r) {
         h("thead", null, h("tr", null, ["At", "Step", "Server", "Question", "Outcome", "Time"].map((t, i) => h("th", { scope: "col", class: i === 0 || i === 5 ? "r" : "" }, t)))),
         h("tbody", null, rows))),
       r.truncated ? h("p", { class: "small muted" }, "Only the first steps are shown.") : null,
-      h("p", { class: "small muted" }, "Indented steps were needed on the way: addresses of name servers, and the DS and DNSKEY records of each zone. Each zone's keys are trusted when they match the DS record its parent signed; a failed check stops there."))];
+      h("p", { class: "small muted" }, "Indented steps were needed on the way: name server addresses, and each zone's DS and DNSKEY records. A zone's keys are trusted when they match the DS record signed by its parent; a failed check stops there."))];
 }
 
 // setList changes one list setting through the normal path (preview, history).
@@ -1668,7 +1678,7 @@ function dnssecPage(main) {
                 h("td", null, h("button", { type: "button", class: "btn small", onclick: () => editor(f, row) }, "Stop validating…")));
               return row;
             })))) : h("p", { class: "muted", style: { margin: 0 } }, "None since the server started (or since the list was cleared)."),
-          h("p", { class: "small muted" }, "A name is listed when its answer failed the DNSSEC check and clients got SERVFAIL instead. Usually the domain's owner broke it (expired signatures, a key rollover gone wrong); a few at once for unrelated domains can mean something is tampering with answers on the way. No client addresses are kept.")),
+          h("p", { class: "small muted" }, "Names whose answers failed the DNSSEC check (clients got SERVFAIL). Usually the owner broke it: expired signatures, a failed key rollover. Several unrelated domains at once can mean answers are tampered with on the way. No client addresses are kept.")),
         h("section", { class: "card" }, h("h2", null, "Domains not validated"),
           d.negative_trust_anchors.length ? h("div", { class: "tablewrap" }, h("table", null, h("tbody", null, d.negative_trust_anchors.map((n) => h("tr", null,
             h("td", { class: "mono" }, n),
@@ -1736,7 +1746,7 @@ function nodesPage(main) {
             h("td", { class: "mono small" + (versions.length > 1 && n.version !== nodes[0].version ? " warn" : ""), "data-label": "Version" }, n.version),
             h("td", { "data-label": "Certificate" }, certCell(n.cert_until)),
             h("td", { class: "muted", "data-label": "Last seen" }, n.self ? "now" : fmt.ago(n.last_seen)))))))),
-        h("p", { class: "small muted" }, "Followers sync every few seconds and count as offline after three missed syncs. Settings changed here reach every node; what a node sets in its own file stays its own. Behind: the node has not taken the current settings yet; Refused: they do not work on that node (hover for why), and it keeps the last ones that did."));
+        h("p", { class: "small muted" }, "Followers sync every few seconds and are offline after three missed syncs. Settings changed here reach every node; settings in a node's own file stay its own. Behind: not yet on the current settings. Refused: they do not work on that node (hover for why); it keeps the last working ones."));
     } catch (e) { if (e.status !== 401) fill(body, errorBox(e)); }
   };
   load();
@@ -1893,13 +1903,13 @@ const SETTINGS = {
         { key: "recursion.qname_minimisation", label: "Minimal names", type: "bool", help: "Each server is told only the part of the name it needs: the root sees \u201ccom\u201d, not the whole name.", show: (v) => v["recursion.enabled"] },
         { key: "recursion.fallback", label: "Fall back to upstreams", type: "bool", help: "When no name server of a domain can be reached, ask the upstreams below. Never after a failed DNSSEC check.", show: (v) => v["recursion.enabled"] },
         { key: "recursion.ipv6", label: "Use IPv6", type: "bool", help: "Also reach name servers over IPv6, when this server has it.", show: (v) => v["recursion.enabled"] },
-        { key: "recursion.cookies", adv: true, label: "DNS Cookies with name servers", type: "bool", help: "Send each name server a cookie and check the one it returns (RFC 7873): an answer with the wrong cookie, or without one from a server that always sends it, is forged and the question goes again over TCP.", show: (v) => v["recursion.enabled"] },
-        { key: "recursion.negative_trust_anchors", adv: true, label: "Domains not validated", type: "list", help: "Negative trust anchors (RFC 7646): domains whose answers skip the DNSSEC check, for a domain whose owner broke DNSSEC. Remove each once it is fixed. The DNSSEC page lists names that fail.", show: (v) => v["recursion.enabled"] && v["recursion.dnssec"] },
+        { key: "recursion.cookies", adv: true, label: "DNS Cookies with name servers", type: "bool", help: "Send each name server a cookie and check the one it returns (RFC 7873). A UDP answer with the wrong cookie, or none from a server that always sends one, is dropped as forged.", show: (v) => v["recursion.enabled"] },
+        { key: "recursion.negative_trust_anchors", adv: true, label: "Domains not validated", type: "list", help: "Negative trust anchors (RFC 7646): domains with broken DNSSEC, answered without validation. Remove each once fixed. The DNSSEC page lists failures.", show: (v) => v["recursion.enabled"] && v["recursion.dnssec"] },
         { key: "recursion.allow_networks", label: "Private networks to query", type: "list", help: "Networks with your own name servers, such as 10.0.0.0/8. A public server otherwise never sends queries into private networks.", show: (v) => v["recursion.enabled"] },
         { key: "ecs.address", label: "Answer as if from (client subnet)", type: "text", placeholder: "off", help: "A public IP address or network. Name servers answer as they would for it (EDNS Client Subnet); your clients\u2019 addresses are never sent. Empty: off." },
       ] },
       { title: "Upstreams", fields: [
-        { key: "upstream.primary", label: "Primary upstreams", type: "list", help: "Asked first, in parallel; the fastest answer wins. https://…/dns-query, tls://host, quic://host, udp://IP or an IP address. With recursion, only used as a fallback.", show: upShown },
+        { key: "upstream.primary", label: "Primary upstreams", type: "list", help: "Asked in parallel; the fastest answer wins. https://…/dns-query, h3://…/dns-query (HTTP/3), tls://host, quic://host, udp://IP or an IP address. With recursion, a fallback only.", show: upShown },
         { key: "upstream.fallback", label: "Fallback upstreams", type: "list", help: "Used only when every primary fails or is slow.", show: upShown },
         { key: "upstream.bootstrap", adv: true, label: "Bootstrap servers", type: "list", help: "Plain DNS servers (IP addresses) used only to find the upstreams' own addresses.", show: upShown },
         { key: "upstream.parallel", adv: true, label: "Ask at once", type: "number", help: "How many primaries to ask in parallel.", show: upShown },
@@ -1909,14 +1919,14 @@ const SETTINGS = {
       { title: "Cache", action: ["Clear cache", async () => { await api("POST", "/cache/clear"); toast("Cache cleared"); }], fields: [
         { key: "cache.size", label: "Size", type: "number", help: "Most answers kept." },
         { key: "cache.prefetch", adv: true, label: "Prefetch", type: "bool", help: "Refresh popular answers shortly before they expire." },
-        { key: "cache.persist", adv: true, label: "Keep across restarts", type: "select", options: [["auto", "Automatic: yes for a public server, no for a home or office network"], ["on", "Yes"], ["off", "No"]], help: "Save the cache to disk every 10 minutes and on shutdown, and load it at start, so answers are fast right after a restart. The file shows which names were looked up (never by whom): with few users, as at home, that is close to their browsing history. It is deleted when this is off." },
+        { key: "cache.persist", adv: true, label: "Keep across restarts", type: "select", options: [["auto", "Automatic: yes for a public server, no for a home or office network"], ["on", "Yes"], ["off", "No"]], help: "Save the cache every 10 minutes and on shutdown, and load it at start, so answers stay fast after a restart. The file lists names looked up, never by whom; with few users, as at home, that is close to their browsing history. Deleted when off." },
         { key: "cache.serve_stale", adv: true, label: "Serve stale", type: "text", help: "Keep answering from expired entries this long when upstreams fail (0s = off)." },
         { key: "cache.min_ttl", adv: true, label: "Minimum TTL", type: "text", help: "Answers are kept at least this long." },
         { key: "cache.max_ttl", adv: true, label: "Maximum TTL", type: "text", help: "Answers are kept at most this long." },
         { key: "cache.max_negative_ttl", adv: true, label: "Maximum negative TTL", type: "text", help: "Longest time to remember that a name does not exist." },
       ] },
       { title: "Local names", fields: [
-        { key: "local.records", label: "Names answered here", type: "list", help: "One per line: a name and an address, such as \u201cnas.home 192.168.1.5\u201d. \u201c*.dev.home 192.168.1.9\u201d covers every name under dev.home. Give a name both an IPv4 and an IPv6 address on two lines. 0.0.0.0 makes a name unreachable." },
+        { key: "local.records", label: "Names answered here", type: "list", help: "One per line: a name and an address, such as \u201cnas.home 192.168.1.5\u201d. \u201c*.dev.home\u201d covers every name under dev.home. For IPv4 and IPv6, use two lines. 0.0.0.0 blocks a name." },
       ] },
       { title: "Clients", fields: [
         { key: "ddr.enabled", label: "Discovery (DDR)", type: "bool", help: "Devices asking over plain DNS learn the encrypted addresses and switch automatically." },
@@ -1935,7 +1945,7 @@ const SETTINGS = {
         { key: "filter.all", label: "Filter every address", type: "bool", help: "For a home or office server where everyone should be filtered.", show: (v) => v["filter.enabled"] },
       ] },
       { title: "Lists", action: ["Update now", async () => { const st = await api("POST", "/filter/update"); toast(`${st.rules.toLocaleString()} rules in force`); }], fields: [
-        { key: "filter.lists", label: "Block lists", type: "list", help: "Addresses of lists to download, one per line (adblock domain rules, hosts files or plain domains). ShieldNova's list is preset: it blocks very little by mistake, and DNSNova may use it free of charge, commercially too (other uses of the list need its own license).", show: (v) => v["filter.enabled"] },
+        { key: "filter.lists", label: "Block lists", type: "list", help: "List URLs, one per line: adblock domain rules, hosts files or plain domains. Preset: ShieldNova, with few false positives, free to use in DNSNova, commercially too (other uses need its license).", show: (v) => v["filter.enabled"] },
         { key: "filter.update_interval", adv: true, label: "Update every", type: "text", help: "Such as 24h. A failed or much shorter download keeps the copy in use.", show: (v) => v["filter.enabled"] },
       ] },
       { title: "Your rules", fields: [
@@ -1949,7 +1959,7 @@ const SETTINGS = {
     certificate: true,
     sections: [
       { title: "Domain & certificate", fields: [
-        { key: "tls.domains", label: "Domain", type: "list", placeholder: "dns.example.com", help: "A name pointing to this server (its A or AAAA record), such as dns.example.com. Devices use it for DNS over HTTPS, TLS and QUIC. One per line; the first is shown to clients. Leave empty for no encrypted DNS.",
+        { key: "tls.domains", label: "Domain", type: "list", placeholder: "dns.example.com", help: "Names whose A or AAAA record points here, such as dns.example.com, for DNS over HTTPS, TLS and QUIC. One per line; the first is shown to clients. Empty: no encrypted DNS.",
           then: (v) => {
             if (v["tls.domains"].length && v["tls.certificate"] === "off") v["tls.certificate"] = "acme";
             // a domain with no encrypted protocol on would do nothing: turn them on
@@ -1959,19 +1969,19 @@ const SETTINGS = {
           } },
         { key: "tls.certificate", label: "Certificate", type: "select", options: [["acme", "Let's Encrypt (automatic, free)"], ["files", "My own certificate files"], ["off", "None (no encrypted DNS)"]], help: "Where the certificate for the domain comes from. One certificate serves DNS over HTTPS, TLS and QUIC." },
         { key: "tls.email", label: "Email", type: "text", help: "Let's Encrypt writes here before a certificate expires (optional).", show: (v) => v["tls.certificate"] === "acme" },
-        { key: "tls.challenge", label: "Domain check", type: "select", options: [["", "Automatic (recommended)"], ["tls-alpn-01", "Through port 443"], ["http-01", "Through port 80"]], help: "Let's Encrypt connects to this server to confirm the domain points here, when the certificate is issued and every renewal. Automatic uses port 443 when DNS over HTTPS is on it, otherwise port 80. That port must be open to the internet.", show: (v) => v["tls.certificate"] === "acme" },
+        { key: "tls.challenge", label: "Domain check", type: "select", options: [["", "Automatic (recommended)"], ["tls-alpn-01", "Through port 443"], ["http-01", "Through port 80"]], help: "How Let's Encrypt confirms the domain at each issue and renewal. Automatic: port 443 when DNS over HTTPS uses it, otherwise port 80. The port must be open to the internet.", show: (v) => v["tls.certificate"] === "acme" },
         { key: "tls.ip_addresses", adv: true, label: "Include IP addresses", type: "bool", help: "Lets clients switch to encrypted DNS automatically. Such certificates are renewed every few days.", show: (v) => v["tls.certificate"] === "acme" },
         { key: "tls.cert_file", label: "Certificate file", type: "text", help: "PEM file with the full chain; reloaded when it changes.", show: (v) => v["tls.certificate"] === "files" },
         { key: "tls.key_file", label: "Key file", type: "text", help: "Its private key. DNSNova must be able to read it.", show: (v) => v["tls.certificate"] === "files" },
       ] },
       { title: "Protocols", fields: [
-        { key: "server.listen", label: "Plain DNS", type: "list", help: "UDP and TCP on port 53: devices, routers and this machine's own resolver cannot use another port. List each address rather than 0.0.0.0, and keep 127.0.0.1:53 for programs on this machine. To offer only encrypted DNS, use 127.0.0.1:53 alone." },
+        { key: "server.listen", label: "Plain DNS", type: "list", help: "UDP and TCP, port 53 (devices and routers cannot use another). List each address rather than 0.0.0.0, and keep 127.0.0.1:53 for this machine. For encrypted DNS only, use 127.0.0.1:53 alone." },
         { key: "dot.listen", label: "DNS over TLS", type: "listen", port: 853, help: "Android Private DNS, iOS and most routers. TCP 853." },
         { key: "doq.listen", label: "DNS over QUIC", type: "listen", port: 853, help: "Faster on mobile networks; fewer clients support it. UDP 853." },
         { key: "doh.https_listen", label: "DNS over HTTPS", type: "listen", port: 443, help: "Browsers, Windows and iOS profiles. TCP 443." },
         { key: "doh.http3", label: "HTTP/3 for DNS over HTTPS", type: "bool", help: "Faster on mobile networks and patchy Wi-Fi. Uses UDP 443 on the same addresses; where that is blocked, clients use HTTP/2 instead.", show: (v) => v["doh.https_listen"].length > 0 },
         { key: "doh.path", adv: true, label: "DoH path", type: "text", help: "Usually /dns-query." },
-        { key: "status.enabled", label: "Public status page", type: "bool", help: "A page at the domain's address (https://domain/) with the addresses, setup steps for each kind of device, what this server keeps, and a check that a device is using it. It shows no statistics." },
+        { key: "status.enabled", label: "Public status page", type: "bool", help: "A page at https://domain/: addresses, setup steps per device, what this server keeps, and a check that a device uses it. No statistics." },
         { key: "doh.listen", adv: true, label: "Behind a reverse proxy", type: "text", help: "Plain HTTP for nginx or Caddy, such as 127.0.0.1:8053. Leave empty if unused." },
       ] },
     ],
@@ -1991,8 +2001,8 @@ const SETTINGS = {
         { key: "limits.prefix_qps", adv: true, label: "Per network", type: "number", help: "Queries a second from one IPv4 /24 or IPv6 /48 (0 = no limit)." },
         { key: "limits.global_qps", adv: true, label: "Whole server", type: "number", help: "Queries a second in total (0 = no limit)." },
         { key: "limits.rrl_rate", adv: true, label: "Response rate limiting", type: "number", help: "Identical answers a second to one network; stops reflection attacks (0 = off)." },
-        { key: "server.proxy_protocol", adv: true, label: "Load balancers (PROXY protocol)", type: "list", help: "Addresses of load balancers that send the PROXY protocol header, one per line (e.g. 10.0.0.5/32). Their header gives each client's real address; from them it is required. Not for DoQ or HTTP/3." },
-        { key: "server.cookies", adv: true, label: "DNS Cookies", type: "bool", help: "Clients that send back the server's cookie have shown their address is real, so response rate limiting leaves them alone (RFC 7873). Nodes sharing one address need the same secrets/cookie-secret file." },
+        { key: "server.proxy_protocol", adv: true, label: "Load balancers (PROXY protocol)", type: "list", help: "Load balancers that send the PROXY protocol header, one per line (e.g. 10.0.0.5/32), so clients' real addresses are seen. Required from them. Not for DoQ or HTTP/3." },
+        { key: "server.cookies", adv: true, label: "DNS Cookies", type: "bool", help: "Clients that return a valid cookie are exempt from response rate limiting (RFC 7873). Nodes sharing one address need the same secrets/cookie-secret file." },
         { key: "limits.block_any", adv: true, label: "Refuse ANY queries", type: "bool", help: "They are mostly used for amplification." },
         { key: "limits.tcp_connections", adv: true, label: "TCP connections", type: "number", help: "Open TCP, DoT and DoH connections at most; each phone using DoT keeps one open. About 25 KB of memory each." },
         { key: "limits.client_connections", adv: true, label: "Connections per address", type: "number", help: "Open connections from one address (IPv4, or IPv6 /56) at most, over every protocol, so one address cannot take them all. 0: no limit." },
@@ -2011,7 +2021,7 @@ const SETTINGS = {
         { key: "alerts.nodes", label: "Alerts from every node", type: "bool", help: "This primary also notifies about its followers: their own alerts, and a node that stops checking in. Off: each node's problems show only on its own pages.", show: (v) => v["alerts.enabled"] && state.cluster && state.cluster.role === "primary" },
       ] },
       { title: "When to alert", fields: [
-        { key: "alerts.upstream_down_for", label: "Every upstream failing for", type: "text", help: "Queries not in the cache get no answer. Critical. Such as 30s.", show: (v) => v["alerts.enabled"] && !v["recursion.enabled"] },
+        { key: "alerts.upstream_down_for", label: "Nothing answering for", type: "text", help: "Every upstream failing, or with recursion no name server answering (or the network intercepting DNS). Critical. Such as 30s.", show: (v) => v["alerts.enabled"] },
         { key: "alerts.upstream_failing_for", label: "One upstream failing for", type: "text", help: "At least half of its queries fail while others answer. Such as 5m.", show: (v) => v["alerts.enabled"] && !v["recursion.enabled"] },
         { key: "alerts.servfail_ratio", label: "SERVFAIL share", type: "number", help: "Alert when this share of answers over five minutes is SERVFAIL, such as 0.05 for 5% (0: off). DNSSEC failures are counted apart.", show: (v) => v["alerts.enabled"] },
         { key: "alerts.servfail_min_queries", adv: true, label: "SERVFAIL: at least", type: "number", help: "Answers in five minutes before the share counts, so a quiet server does not alert on a handful.", show: (v) => v["alerts.enabled"] },
@@ -2032,7 +2042,7 @@ const SETTINGS = {
         { key: "stats.retention", label: "Keep statistics for", type: "select", options: [["24h", "24 hours"], ["7d", "7 days"], ["30d", "30 days"]], help: "Kept in memory only, so a restart starts them again. Counts and response times, and the domain lists; never client addresses." },
       ] },
       { title: "Access", fields: [
-        { key: "admin.listen", label: "Admin address", type: "text", help: "127.0.0.1:7000 = only through an SSH tunnel (more secure); :7000 = also from other machines, with a password: directly from your own network on a home or office server (private mode), over HTTPS only on a public one." },
+        { key: "admin.listen", label: "Admin address", type: "text", help: "127.0.0.1:7000: through an SSH tunnel only (safest). :7000: also from other machines, with a password: from your own network in private mode, over HTTPS only on a public server." },
         { key: "metrics.listen", label: "Metrics address", type: "text", help: "Prometheus metrics and the health check. Keep it on a private address." },
       ] },
     ],
@@ -2380,9 +2390,9 @@ const DESTINATIONS = [
   { id: "slack", name: "Slack", fields: [["url", "Webhook URL", "https://hooks.slack.com/services/…", true]],
     help: "An Incoming Webhook of a Slack app, for the channel to post in." },
   { id: "webhook", name: "Webhook (JSON)", fields: [["url", "URL", "https://alerts.example.com/dnsnova", true], ["secret", "Signing secret (optional)", "a long random string", true]],
-    help: "Each alert is POSTed as JSON (docs/alerts.md). With a secret, X-DNSNova-Signature is its HMAC-SHA256, so the receiver can check it is from this server. For PagerDuty, Opsgenie, ntfy, n8n or your own." },
+    help: "Each alert is POSTed as JSON (docs/alerts.md). With a secret, X-DNSNova-Signature carries its HMAC-SHA256 for the receiver to verify. For PagerDuty, Opsgenie, ntfy, n8n or your own." },
   { id: "heartbeat", name: "Heartbeat", fields: [["url", "Check URL", "https://hc-ping.com/…", true]],
-    help: "Requested every minute while alerts are on. A monitor such as Healthchecks.io or Uptime Kuma alerts you when the requests stop: the one problem this server cannot report itself is being down." },
+    help: "Requested every minute while alerts are on. A monitor such as Healthchecks.io or Uptime Kuma alerts you when the requests stop, which covers the one problem this server cannot report: being down." },
 ];
 
 const SEVERITY = { critical: ["err", "Critical"], warning: ["warn", "Warning"] };

@@ -1,27 +1,29 @@
 # Privacy
 
-DNSNova runs on your server. This page describes what the software itself
-does with data. If you operate a DNSNova server for other people, you are
-responsible for telling them how you run it.
+DNSNova runs on your server. This page describes what the software does
+with data. If you run DNSNova for other people, telling them how you run it
+is your responsibility.
 
 ## What DNSNova never does
 
-- It never writes queries or client addresses to disk. Everything about
-  queries is held in memory and is gone after a restart. The one exception
-  is the answer cache of a public server: it is saved (names and their
-  records, never who asked or when) so it survives a restart. With many
-  users, a cached name says nothing about any one of them. A server for a
-  home or office network (private mode), where it would, does not save it.
-  `cache.persist` changes either; see the table below.
-- It sends no telemetry, usage statistics or crash reports, to anyone.
-- It does not forward client IP addresses to upstream resolvers. Upstreams
-  see your server's address only. EDNS Client Subnet is off by default; if
-  you set `ecs.address`, that one address of your choosing is sent with
-  every query, never a client's.
-- It does not forward the EDNS options that clients send, such as cookies
-  or padding.
-- It does not send reverse lookups of private addresses (10.0.0.0/8,
-  192.168.0.0/16, fd00::/8 and similar) upstream.
+- It never writes queries or client addresses to disk; they live in memory
+  and are gone after a restart. One exception: a public server saves its
+  answer cache (names and records, never who asked or when) to survive
+  restarts. With many users, a cached name reveals nothing about any one of
+  them. In private mode (home or office), where it would, the cache is not
+  saved. `cache.persist` overrides either default; see the table below.
+- It sends no telemetry, usage statistics or crash reports.
+- It never sends client addresses to upstreams or, with recursion, to name
+  servers: they see only your server's address. EDNS Client Subnet is off
+  by default. With `ecs.address`, the one network you choose is sent, never
+  a client's. On `ecs.client_path`, a secret DoH path for measurement
+  tools, the subnet each query carries itself is passed on (cut to /24 or
+  /56), never the client's address; those answers are never cached or
+  shared.
+- It does not forward the EDNS options clients send, such as cookies or
+  padding.
+- It never sends reverse lookups of private addresses (10.0.0.0/8,
+  192.168.0.0/16, fd00::/8 and similar) beyond the server.
 
 ## What is kept, where, and for how long
 
@@ -47,14 +49,13 @@ responsible for telling them how you run it.
 
 The service log records start-up, errors, configuration changes (with the
 administrator who made them) and admin logins, including failed ones with
-the client address. It does not record queries.
+their address. It never records queries.
 
-The web interface is served from the binary itself. It loads no fonts,
-scripts or images from other sites, and its Content Security Policy forbids
-it to. It keeps the appearance (dark, light or auto) in the browser's local
-storage. For as long as the tab is open it also keeps the chart's range and
-view, and the upstreams' response times it has seen, to draw their trend;
-nothing about clients or queries.
+The web interface is served from the binary. It loads nothing from other
+sites, which its Content Security Policy enforces. It stores the appearance
+(dark, light or auto) in the browser; while the tab is open it also keeps
+the chart's range and view and the upstream response times it has seen.
+Nothing about clients or queries.
 
 ## Domain lists
 
@@ -63,22 +64,20 @@ not exist. Names are reduced to the domain they belong to
 (`mail.example.com` counts as `example.com`), and reverse lookups are
 counted together. No client addresses are kept for these lists.
 
-A domain that only a few people visit could still say something about
-them, so a domain is listed only once at least five different networks
-(IPv4 /24, IPv6 /48) asked for it within one hour. To check this without
-storing addresses, each domain carries a 64-bit sketch: a network sets one
-bit, chosen by a hash with a random key. The key is replaced every hour and
-never stored, so the sketch cannot be turned back into addresses, and it is
-discarded with the hour.
+A domain few people visit could still identify them, so a domain is listed
+only after at least five different networks (IPv4 /24, IPv6 /48) asked for
+it within one hour. This is counted without storing addresses: each domain
+carries a 64-bit sketch in which a network sets one bit, chosen by a hash
+with a random key. The key changes every hour and is never stored, so the
+sketch cannot be turned back into addresses; it is discarded with the hour.
 
 ## Status page check
 
-The public status page (off by default) can tell a visitor whether their
-device uses this server. The page makes the browser look up a random,
-one-time name under `check.<domain>`. If that query reaches DNSNova, it
-keeps the name and the protocol it arrived over, in memory, for five
-minutes, so the page can ask about it. It does not keep the address it came
-from. Queries for these names are answered locally and never sent upstream.
+The public status page (off by default) can tell visitors whether their
+device uses this server. The browser looks up a random one-time name under
+`check.<domain>`; if the query reaches DNSNova, it keeps the name and the
+protocol, in memory, for five minutes, so the page can ask. The source
+address is not kept. These names are answered locally, never sent on.
 
 ## Query log
 
@@ -109,9 +108,9 @@ servers you configured, so keep it on a private address.
 ## Alerts
 
 Alerts are off unless you turn them on, and go only to the destinations you
-set up (docs/alerts.md). They describe the server: upstreams, error rates,
-response times, the certificate, configuration errors. They carry no client
-addresses. One alert names domains: DNSSEC failures lists the names whose
-answers failed validation, as the DNSSEC page does, without who asked for
-them. The service you send alerts to (Telegram, Discord, Slack, your
-webhook) receives that text.
+set up (docs/alerts.md). They describe the server (upstreams, name servers,
+error rates, response times, the certificate, configuration errors) and
+carry no client addresses. One alert names domains: DNSSEC failures lists
+the names that failed validation, as the DNSSEC page does, without who
+asked. The receiving service (Telegram, Discord, Slack, your webhook) sees
+that text.

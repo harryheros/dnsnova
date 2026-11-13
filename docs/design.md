@@ -83,12 +83,18 @@ actions are blue (not green): green means *healthy*.
 
 ## Brand
 
-- **Mark**: a trident on a 100-unit grid: three barbed prongs, a crescent,
-  a guard and a diamond pommel. Filled, not outlined, with clean sides (no
-  fins). Chrome at the tips going to deep blue at the grip, with a light
-  left half and a shaded right half for the ridge (`--mk0`…`--mk5`). On
-  dark brand surfaces it carries a soft blue glow. `logo.svg` is the
-  favicon on a navy tile.
+- **Mark**: a mechanised trident on a 1000-unit grid: a faceted spearhead
+  and two side blades, silver arms and an angular crossbar, and an
+  arrowhead pommel, with blue light in the grooves and two lit windows.
+  Silver lit from the left, shaded on the right. Two drawings:
+  - **metal** (48 px and up: the rail, sign-in): the full drawing, with its
+    own soft glow. Each copy on a page gets its own ids.
+  - **small** (below 48 px: the phone rail, wizard, status page,
+    favicon): a solid `#1478f5` silhouette of the same outline, which
+    stays legible at 16 px on light and dark backgrounds.
+  Both are defined in `app.js` and `status.js`; `logo.svg` (the favicon)
+  is the small one. The source files, for use elsewhere, are in
+  `docs/brand/`.
 - **Wordmark**: "DNSN" in capitals and "OVA" in small capitals (76% of the
   cap height, one weight heavier so the strokes match), set in **Exo 2
   ExtraBold** with the font's own kerning. Exo 2 is by Natanael Gama under

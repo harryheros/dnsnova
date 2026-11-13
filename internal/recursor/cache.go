@@ -176,6 +176,9 @@ type keyEntry struct {
 type delegation struct {
 	zone string
 	ns   []nsHost
+	// signed: the referral to it came with DS records, so its own answers
+	// carry signatures (used to tell forged UDP answers, which have none)
+	signed bool
 }
 
 type nsHost struct {
@@ -200,6 +203,10 @@ type server struct {
 	cookieRun  int
 	noCookie   time.Time
 	looseUntil time.Time
+	// plainUntil: its genuine (TCP) answers look like forged ones would
+	// over UDP (no EDNS, no AA), so until then its UDP answers are not
+	// doubted for that
+	plainUntil time.Time
 }
 
 type infra struct {
@@ -377,6 +384,20 @@ func (in *infra) setNoCookie(a netip.Addr, now time.Time) {
 }
 
 const cookieTrust = 3
+
+// setPlain: a's genuine answers are unusual in a way that would make its
+// UDP answers doubted (see Recursor.doubt); stop doubting them for a while.
+func (in *infra) setPlain(a netip.Addr, now time.Time) {
+	in.mu.Lock()
+	in.get(a).plainUntil = now.Add(time.Hour)
+	in.mu.Unlock()
+}
+
+func (in *infra) plain(a netip.Addr, now time.Time) bool {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	return now.Before(in.get(a).plainUntil)
+}
 
 func (in *infra) size() int {
 	in.mu.Lock()

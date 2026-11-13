@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -172,6 +173,7 @@ func (r *Recursor) iterateOnce(ctx context.Context, t *task, qname string, qtype
 			if qtype == typeDS && child.zone == qname {
 				return nil, ErrUnreachable // the parent must answer DS itself
 			}
+			child.signed = slices.ContainsFunc(msg.authority, func(a rr) bool { return a.typ == typeDS && a.name == child.zone })
 			r.storeDeleg(child, ttl)
 			r.storeReferralDS(msg, child.zone, d.zone)
 			d, known = child, child.zone
@@ -366,7 +368,7 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 		tried++
 		asked = append(asked, a)
 		start := time.Now()
-		msg, err := r.ask(ctx, a, name, qtype)
+		msg, err := r.ask(ctx, a, d, name, qtype)
 		rtt := time.Since(start)
 		if err != nil {
 			if t.trace != nil {
@@ -375,9 +377,17 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
-			if errors.Is(err, context.DeadlineExceeded) || isTimeout(err) {
+			var rw *rewritten
+			switch {
+			case errors.Is(err, context.DeadlineExceeded) || isTimeout(err):
 				note(a, "timed out")
-			} else {
+			case errors.As(err, &rw):
+				note(a, "answer rewritten on the way: "+rw.why)
+				if r.Intercepted() {
+					// the other servers' answers go the same way
+					return nil, &unreachable{zone: d.zone, name: name, qtype: qtype, servers: len(d.ns), why: why}
+				}
+			default:
 				note(a, err.Error())
 			}
 			continue
@@ -612,18 +622,22 @@ func (r *Recursor) v6Result(a netip.Addr, err error, now time.Time) {
 	}
 }
 
-// ask sends one question to one server: over UDP, then TCP if the answer
-// was truncated or looks forged; without EDNS for servers that do not
-// support it.
+// ask sends one question to one server of d: over UDP, then TCP if the
+// answer was truncated or looks forged; without EDNS for servers that do
+// not support it.
 //
 // With DNS Cookies (RFC 7873) each question carries a client cookie made
 // for this server, and the server cookie it gave last time. A UDP answer
-// with another client cookie cannot be the server's: it is forged, and the
-// question goes again over TCP. A server that has always sent cookies but
-// answers over UDP without one is asked again over TCP too; if its genuine
-// TCP answer has no cookie either (anycast instances that differ), cookies
-// are not insisted on for that server for an hour.
-func (r *Recursor) ask(ctx context.Context, a netip.Addr, name string, qtype uint16) (*message, error) {
+// with another client cookie cannot be the server's: it is forged. A
+// server that has always sent cookies but answers over UDP without one is
+// doubted too; if its genuine TCP answer has no cookie either (anycast
+// instances that differ), cookies are not insisted on for that server for
+// an hour.
+//
+// Each UDP answer is judged as it arrives (see pick): forged ones are
+// dropped while the genuine one, which a censor on the path cannot stop,
+// is waited for. Only when none comes is the question asked over TCP.
+func (r *Recursor) ask(ctx context.Context, a netip.Addr, d *delegation, name string, qtype uint16) (*message, error) {
 	now := r.now()
 	cfg := r.cfg.Load()
 	edns := r.infra.useEDNS(a, now)
@@ -637,6 +651,10 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, name string, qtype uin
 			ecs = v
 		}
 	}
+	plain := r.infra.plain(a, now)
+	// on a network that answers in the servers' place, nothing better
+	// than an impossible answer is coming
+	intercepted := r.Intercepted()
 	cookies, badRetried := cfg.Cookies, false
 	for attempt := 0; attempt < 5; attempt++ {
 		opts, cc := ecs, []byte(nil)
@@ -647,6 +665,28 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, name string, qtype uin
 			}
 		}
 		q := buildQuery(uint16(rand.Uint32()), name, qtype, edns, opts)
+		sentEDNS, sentCookie := edns, cc
+		var sawImpossible atomic.Value // why the last UDP answer could not be the server's
+		judge := func(resp []byte) verdict {
+			msg, err := parseMessage(resp)
+			if err != nil || msg.tc() {
+				return vAccept // broken answers are dealt with below; truncated ones go to TCP anyway
+			}
+			v := vAccept
+			if why := impossible(msg, d.zone, name, qtype); why != "" {
+				sawImpossible.Store(why)
+				v = vForged
+				if intercepted {
+					v = vGiveUp
+				}
+			} else if !plain {
+				v, _ = r.doubt(msg, a, d, name, qtype, sentEDNS, sentCookie, now)
+			}
+			if v != vAccept {
+				r.Stats.Forged.Add(1)
+			}
+			return v
+		}
 		overTCP := func() (*message, error) {
 			c, cancel := context.WithTimeout(ctx, 2*r.infra.timeout(a)+time.Second)
 			resp, err := r.send(c, ap, q, true)
@@ -659,14 +699,20 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, name string, qtype uin
 			return parseMessage(resp)
 		}
 		start := time.Now()
-		c, cancel := context.WithTimeout(ctx, r.infra.timeout(a))
+		c, cancel := context.WithTimeout(withJudge(ctx, judge), r.infra.timeout(a))
 		resp, err := r.send(c, ap, q, false)
 		cancel()
 		r.Stats.Queries.Add(1)
-		tcp := false
-		if errors.Is(err, ErrSpoofed) {
+		tcp, doubted := false, false
+		switch {
+		case errors.Is(err, ErrSpoofed):
 			// Someone is guessing answers to this query: ask over TCP.
 			r.Stats.Spoofed.Add(1)
+			fallthrough
+		case errors.Is(err, ErrForged):
+			// Only forged or doubtful answers came: ask over TCP, where
+			// nothing can be forged from the path (a censor resets, at most).
+			doubted = errors.Is(err, ErrForged)
 			c, cancel := context.WithTimeout(ctx, 2*r.infra.timeout(a)+time.Second)
 			resp, err = r.send(c, ap, q, true)
 			cancel()
@@ -674,6 +720,13 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, name string, qtype uin
 			tcp = true
 		}
 		if err != nil {
+			if why, ok := sawImpossible.Load().(string); ok && tcp && ctx.Err() == nil {
+				// UDP answered by someone else, and TCP blocked: the network
+				// has taken over port 53 just the same
+				r.noteRewritten(a, why, now)
+				r.failRun.Add(1)
+				return nil, &rewritten{why: why}
+			}
 			if errors.Is(err, context.DeadlineExceeded) || isTimeout(err) {
 				r.Stats.Timeouts.Add(1)
 			}
@@ -682,20 +735,38 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, name string, qtype uin
 			r.failRun.Add(1)
 			return nil, err
 		}
+		msg, perr := parseMessage(resp)
+		if perr == nil {
+			if why := impossible(msg, d.zone, name, qtype); why != "" {
+				// not from the server at all: someone in between answers
+				// for it, over TCP too (or the answer would have been
+				// dropped above)
+				r.noteRewritten(a, why, now)
+				r.failRun.Add(1)
+				return nil, &rewritten{why: why}
+			}
+		}
 		r.infra.ok(a, time.Since(start), now)
 		r.v6Result(a, nil, now)
 		r.lastOK.Store(now.UnixNano())
 		r.failRun.Store(0)
-		msg, err := parseMessage(resp)
-		if err != nil {
+		if perr != nil {
 			r.infra.setLame(a, "", now)
-			return nil, err
+			return nil, perr
 		}
 		if msg.tc() && !tcp {
 			if msg, err = overTCP(); err != nil {
 				return nil, err
 			}
 			tcp = true
+		}
+		if doubted && !plain {
+			// The genuine answer, over TCP, looks just like the doubted ones
+			// did: that is how this server answers. Stop doubting it.
+			if v, _ := r.doubt(msg, a, d, name, qtype, sentEDNS, nil, now); v != vAccept {
+				r.infra.setPlain(a, now)
+				plain = true
+			}
 		}
 		if cc != nil {
 			switch r.checkCookie(a, cc, msg, tcp, badRetried, now) {
@@ -726,6 +797,114 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, name string, qtype uin
 		return msg, nil
 	}
 	return nil, ErrUnreachable
+}
+
+// rewritten is an answer that cannot have come from the server asked: the
+// network answers in its place.
+type rewritten struct{ why string }
+
+func (e *rewritten) Error() string { return "answer rewritten on the way: " + e.why }
+
+// rootServed are the zones that the root servers serve besides the root.
+var rootServed = []string{m.WireName("arpa"), m.WireName("root-servers", "net")}
+
+// impossible says why msg, an answer from a server of zone to name/qtype,
+// cannot be that server's over any transport, or "" when it can be. Only
+// what no genuine server sends counts here: these are what networks that
+// take over port 53 give themselves away by.
+func impossible(msg *message, zone, name string, qtype uint16) string {
+	if msg.rcode != m.RcodeNoError && msg.rcode != m.RcodeNXDomain {
+		return ""
+	}
+	if qtype != typeANY {
+		for _, a := range msg.answer {
+			if a.name == name && a.typ != qtype && a.typ != m.TypeCNAME && a.typ != typeDNAME && a.typ != typeRRSIG {
+				return fmt.Sprintf("a %s record in answer to a question for %s", m.TypeString(a.typ), m.TypeString(qtype))
+			}
+		}
+	}
+	if zone != "" || slices.ContainsFunc(rootServed, func(z string) bool { return isSub(name, z) }) {
+		return ""
+	}
+	// The root servers are authoritative for the root and refer every other
+	// name to its top-level domain (RIPE Labs, "Detecting DNS root
+	// manipulation", 2022).
+	for _, a := range msg.answer {
+		if a.name != "" && (a.typ == m.TypeA || a.typ == m.TypeAAAA || a.typ == m.TypeCNAME) {
+			return "a root server answered " + m.NameString(a.name) + " with an address"
+		}
+	}
+	if !msg.aa() {
+		if child, _ := referral(msg, zone, name); child == nil {
+			return "a root server answered " + m.NameString(name) + " without authority"
+		}
+	}
+	return ""
+}
+
+// doubt judges a UDP answer by what a censor's forged answers look like
+// and genuine ones from this server do not: vForged when it cannot be the
+// server's, vSuspect when it is merely unlike it. The reason is for the
+// trace. The same checks on a genuine (TCP) answer show whether the server
+// simply answers that way (infra.setPlain).
+func (r *Recursor) doubt(msg *message, a netip.Addr, d *delegation, name string, qtype uint16, edns bool, cc []byte, now time.Time) (verdict, string) {
+	if msg.rcode != m.RcodeNoError && msg.rcode != m.RcodeNXDomain {
+		return vAccept, ""
+	}
+	if cc != nil {
+		switch valid := len(msg.cookie) >= 8 && bytes.Equal(msg.cookie[:8], cc); {
+		case msg.cookie != nil && !valid:
+			return vForged, "another client's cookie"
+		case msg.cookie == nil && r.infra.cookieExpected(a, now):
+			return vForged, "no cookie from a server that always sends one"
+		}
+	}
+	if qtype == m.TypeAAAA {
+		for _, x := range msg.answer {
+			if x.name == name && x.typ == m.TypeAAAA && len(x.data) == 16 && x.data[0] == 0x20 && x.data[1] == 0x01 && x.data[2] == 0 && x.data[3] == 0 {
+				return vForged, "an address in 2001::/32 (Teredo), which censors answer with"
+			}
+		}
+	}
+	answers := len(msg.answer) > 0
+	unsigned := !slices.ContainsFunc(msg.answer, func(x rr) bool { return x.typ == typeRRSIG })
+	isReferral := false
+	if child, _ := referral(msg, d.zone, name); child != nil {
+		isReferral = true
+	}
+	switch {
+	case !isReferral && !msg.aa() && labelCount(d.zone) <= 1:
+		// top-level domains (and the root) always answer with authority
+		return vForged, "an answer without authority from a server of a top-level domain"
+	case answers && unsigned && d.signed && edns && name != d.zone:
+		// a signed zone signs its answers; a censor cannot
+		return vForged, "an unsigned answer from a signed zone"
+	case edns && !msg.edns:
+		return vSuspect, "no EDNS in the answer"
+	case answers && !msg.aa():
+		return vSuspect, "an answer without authority"
+	}
+	return vAccept, ""
+}
+
+// noteRewritten counts an answer rewritten on the way, and says once in a
+// while what it means.
+func (r *Recursor) noteRewritten(a netip.Addr, why string, now time.Time) {
+	r.Stats.Rewritten.Add(1)
+	r.rewrittenAt.Store(now.UnixNano())
+	if last := r.rewriteWarned.Load(); last != 0 && now.Sub(time.Unix(0, last)) < 10*time.Minute {
+		return
+	}
+	r.rewriteWarned.Store(now.UnixNano())
+	r.log.Warn("recursion: port 53 is intercepted by the network, so names cannot be resolved privately here; "+
+		"use your own DNSNova elsewhere as an encrypted upstream (docs/restricted-networks.md)", "server", a.String(), "seen", why)
+}
+
+// Intercepted reports whether answers from name servers have been
+// rewritten on the way lately: the network takes over port 53.
+func (r *Recursor) Intercepted() bool {
+	at := r.rewrittenAt.Load()
+	return at != 0 && r.now().Sub(time.Unix(0, at)) < 5*time.Minute && at >= r.lastOK.Load()
 }
 
 // What to do after looking at an answer's cookie.

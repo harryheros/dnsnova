@@ -11,8 +11,12 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"net/netip"
 	"sync"
 	"time"
+
+	"github.com/quic-go/quic-go"
+	"github.com/quic-go/quic-go/http3"
 
 	"github.com/harryheros/dnsnova/internal/dnsmsg"
 )
@@ -48,6 +52,15 @@ func New(s Spec, d *Dialer, tlsConf *tls.Config) (Upstream, error) {
 			IdleConnTimeout:     90 * time.Second,
 			TLSHandshakeTimeout: 5 * time.Second,
 			Proxy:               nil, // never send DNS through an HTTP proxy from the environment
+		}
+		return &dohUpstream{spec: s, tr: tr, client: &http.Client{Transport: tr, CheckRedirect: noRedirect}}, nil
+	case "h3":
+		conf := tlsConfig(tlsConf)
+		conf.ServerName = s.Host
+		tr := &http3.Transport{
+			TLSClientConfig: conf,
+			QUICConfig:      &quic.Config{HandshakeIdleTimeout: 5 * time.Second, MaxIdleTimeout: 30 * time.Second},
+			Dial:            h3Dial(s, d),
 		}
 		return &dohUpstream{spec: s, tr: tr, client: &http.Client{Transport: tr, CheckRedirect: noRedirect}}, nil
 	case "quic":
@@ -277,16 +290,55 @@ func (u *dotUpstream) Exchange(ctx context.Context, msg []byte) ([]byte, error) 
 	return nil, errors.New("dot: retry failed")
 }
 
-// ---- DNS over HTTPS (HTTP/2 when the server offers it) ----
+// ---- DNS over HTTPS (HTTP/2 when the server offers it, or HTTP/3) ----
 
 type dohUpstream struct {
 	spec   Spec
-	tr     *http.Transport
+	tr     interface{ CloseIdleConnections() }
 	client *http.Client
 }
 
 func (u *dohUpstream) String() string { return u.spec.Raw }
-func (u *dohUpstream) Close()         { u.tr.CloseIdleConnections() }
+func (u *dohUpstream) Close() {
+	u.tr.CloseIdleConnections()
+	if c, ok := u.tr.(io.Closer); ok { // HTTP/3: its UDP sockets
+		c.Close()
+	}
+}
+
+// h3Dial connects to an HTTP/3 upstream: its addresses come from the
+// bootstrap (or the pin), as for the other transports, and each connection
+// has its own UDP socket, so a random source port.
+func h3Dial(s Spec, d *Dialer) func(ctx context.Context, _ string, conf *tls.Config, qconf *quic.Config) (*quic.Conn, error) {
+	return func(ctx context.Context, _ string, conf *tls.Config, qconf *quic.Config) (*quic.Conn, error) {
+		addrs, err := d.Resolve(ctx, s.Host, s.Pin)
+		if err != nil {
+			return nil, err
+		}
+		if len(addrs) == 0 {
+			return nil, fmt.Errorf("%s: no address", s.Host)
+		}
+		for _, a := range addrs {
+			pc, lerr := net.ListenUDP("udp", nil)
+			if lerr != nil {
+				return nil, lerr
+			}
+			tr := &quic.Transport{Conn: pc}
+			var c *quic.Conn
+			c, err = tr.Dial(ctx, net.UDPAddrFromAddrPort(netip.AddrPortFrom(a, uint16(s.Port))), conf, qconf)
+			if err == nil {
+				context.AfterFunc(c.Context(), func() { tr.Close(); pc.Close() })
+				return c, nil
+			}
+			tr.Close()
+			pc.Close()
+			if ctx.Err() != nil {
+				break
+			}
+		}
+		return nil, err
+	}
+}
 
 func (u *dohUpstream) Exchange(ctx context.Context, msg []byte) ([]byte, error) {
 	q := dnsmsg.WithID(msg, 0) // RFC 8484 4.1

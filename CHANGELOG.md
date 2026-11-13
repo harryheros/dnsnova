@@ -6,6 +6,62 @@ All notable changes are listed here. Versions follow
 
 ## Unreleased
 
+## 1.4.0 (2026-11-13)
+
+Recursion without upstreams on networks that tamper with DNS
+([docs/restricted-networks.md](./docs/restricted-networks.md)):
+
+- **Forged answers from censors on the path are dropped and the genuine
+  answer is used.** Censors such as the Great Firewall answer for the names
+  they block, from the name server's address and ahead of it, and reset
+  TCP. The first matching answer was taken: for signed zones it failed
+  validation (SERVFAIL); for unsigned zones the forged address was used and
+  cached. Each UDP answer is now judged on arrival. Dropped: an address from
+  a root server, no authority from a root or top-level-domain server, an
+  unsigned answer from a signed zone, a record of another type than asked,
+  an AAAA address in 2001::/32, a wrong or missing DNS Cookie. The socket
+  stays open for the genuine answer (up to 500 ms more, within the query's
+  timeout), then the question goes to TCP. Answers that pass are used at
+  once.
+- An answer without EDNS to a question with it, or without authority from a
+  zone's own server, is used only if nothing better arrives. A server whose
+  genuine TCP answers look like that (some load balancers) is trusted over
+  UDP for an hour; its first lookup takes up to 500 ms longer than before.
+- **Networks that intercept port 53 are detected.** Their answers were
+  taken as the name servers': an NXDOMAIN with an SOA could be cached for a
+  whole top-level domain, and recursion reported itself healthy while every
+  lookup failed. Now nothing from them is used, recursion is unhealthy
+  (`/healthz`, the status page), the top bar shows *DNS intercepted by the
+  network*, the log explains it, and lookups fail at once instead of trying
+  every root server.
+- While recursion cannot work (name servers unreachable or intercepted),
+  queries go straight to the upstreams instead of waiting for their own
+  lookup to fail; one lookup at a time keeps probing the name servers, so
+  recursion resumes as soon as they answer.
+- **New alerts**: *No name server answers* and *DNS intercepted*, both
+  critical, after `alerts.upstream_down_for`. Before, a server using
+  recursion sent no alert when it could not resolve.
+- New metrics: `dnsnova_recursion_forged_total`,
+  `dnsnova_recursion_rewritten_total`, `dnsnova_recursion_intercepted`. The
+  API's recursion status has `forged`, `rewritten` and `intercepted`;
+  `status.json` has `recursion`.
+
+Also:
+
+- **DNS over HTTP/3 upstreams**: `h3://1.1.1.1/dns-query`, or pinned as
+  for the other transports: `h3://dns.google/dns-query#8.8.8.8`.
+- **A new mark**: a mechanised trident in silver with blue light, drawn in
+  full from 48 px up and as a solid silhouette below (the favicon among
+  them). Sources in `docs/brand/`.
+- In the light appearance, the *Menu* button of the narrow layout could
+  not be read; it now keeps the dark rail's colors.
+- The DNSNova logo in the web interface goes to the overview, also in the
+  narrow layout, and refreshes it when already there.
+- The status page says, with recursion, that queries go to each domain's
+  name servers, not upstreams.
+- Documentation, settings help and the privacy page were tightened; the
+  privacy page now covers name servers and `ecs.client_path`.
+
 ## 1.3.6 (2026-11-12)
 
 - Names in `local.records` are checked more strictly: a name with an

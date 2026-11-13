@@ -42,7 +42,6 @@
           radial-gradient(900px 600px at 105% 105%, rgba(57, 208, 242, 0.04), transparent 60%),
           linear-gradient(180deg, #050d20 0%, #040a18 100%);
   /* brand: mark (--mk*) and wordmark (--wm*) gradients */
-  --mk0: #ffffff; --mk1: #dcebff; --mk2: #79adff; --mk3: #3576f0; --mk4: #2459d6; --mk5: #3f7ff5;
   --wm0: #ffffff; --wm1: #e8f0fc; --wm2: #9fb8e4; --wm3: #8aa6d9; --wm4: #dbe7fb; --wm-edge: #0a1838;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -68,7 +67,6 @@
   --soft: #e8f0fd;
   --grad-bar: linear-gradient(90deg, #22b8d8, #2f6fe8);
   --glow: 0 0 0 1px rgba(31, 111, 235, 0.25);
-  --mk0: #6fa2f7; --mk1: #4f87ee; --mk2: #2a68e4; --mk3: #1d55cf; --mk4: #173f9e; --mk5: #1f4fbf;
   --wm0: #2a4f8f; --wm1: #1d3b70; --wm2: #15305e; --wm3: #132a52; --wm4: #0e1a33; --wm-edge: transparent;
   --go: #1f6feb; --go-hover: #1a5fd0;
   --ok: #15803d; --warn: #b45309; --err: #c0392b; --idle: #64748b; --off: #c6d1e1;
@@ -86,7 +84,6 @@
 /* The brand rail is always dark. */
 .side, .rail-dark {
   --text: #ecf2fd; --muted: #a0b2d0; --faint: #6f83a6; --accent: #4b93ff;
-  --mk0: #ffffff; --mk1: #dcebff; --mk2: #79adff; --mk3: #3576f0; --mk4: #2459d6; --mk5: #3f7ff5;
   --wm0: #ffffff; --wm1: #e8f0fc; --wm2: #9fb8e4; --wm3: #8aa6d9; --wm4: #dbe7fb; --wm-edge: #0a1838;
   --border: rgba(96, 150, 255, 0.15); --raised: rgba(70, 120, 210, 0.14); --soft: rgba(75, 147, 255, 0.14);
   --solid: #0b1833;
@@ -118,8 +115,6 @@ h2 { margin: 0; font-size: 15px; font-weight: 600; }
 .wordmark .w0 { stop-color: var(--wm0); } .wordmark .w1 { stop-color: var(--wm1); } .wordmark .w2 { stop-color: var(--wm2); }
 .wordmark .w3 { stop-color: var(--wm3); } .wordmark .w4 { stop-color: var(--wm4); }
 .wordmark .wm-edge { stroke: var(--wm-edge); stroke-width: 2.5; paint-order: stroke; }
-.mark .k0 { stop-color: var(--mk0); } .mark .k1 { stop-color: var(--mk1); } .mark .k2 { stop-color: var(--mk2); }
-.mark .k3 { stop-color: var(--mk3); } .mark .k4 { stop-color: var(--mk4); } .mark .k5 { stop-color: var(--mk5); }
 .tagline { font-style: italic; font-weight: 400; color: var(--muted); letter-spacing: 0.01em; }
 .mark { flex: none; display: block; }
 /* brand is the one place light is used freely */
@@ -533,7 +528,11 @@ details summary { cursor: pointer; color: var(--accent); font-size: 13px; }
 p.err:empty, div.err:empty, .problem:empty { display: none; }
 
 .sidebody { display: flex; flex-direction: column; gap: 20px; flex: 1; }
-.railtop .menu { margin-left: auto; }
+.railtop .menu { margin-left: auto; background: rgba(255, 255, 255, 0.06); border-color: rgba(142, 162, 196, 0.35); color: #e8effc; } /* the rail stays dark in both appearances */
+.railtop .menu:hover { background: rgba(255, 255, 255, 0.12); }
+.railhome { display: flex; align-items: center; gap: 10px; text-decoration: none; color: inherit; border-radius: 10px; }
+.railbrand, .railhome { cursor: pointer; }
+.railbrand:focus-visible, .railhome:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
 @media (min-width: 801px) { .side { position: sticky; top: 0; height: 100vh; overflow-y: auto; } }
 @media (max-height: 820px) and (min-width: 801px) {
   .railbrand .mark { width: 76px; height: 76px; }

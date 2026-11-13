@@ -71,6 +71,12 @@ type Stats struct {
 	// another client cookie, or none from a server that always sends one
 	CookieMismatch atomic.Int64
 	CookieMissing  atomic.Int64
+	// UDP answers dropped as forged or doubtful while the genuine one was
+	// waited for (a censor on the path, see pick)
+	Forged atomic.Int64
+	// answers that no name server sends, over UDP and TCP alike: the
+	// network answers in the servers' place (port 53 intercepted)
+	Rewritten atomic.Int64
 }
 
 // Recursor is safe for concurrent use.
@@ -106,7 +112,11 @@ type Recursor struct {
 	v6Checked atomic.Int64
 	v6Host    atomic.Bool
 	lastOK    atomic.Int64 // unix nanos of the last answer from any server
-	failRun   atomic.Int64 // queries without an answer since then
+	// unix nanos of the last rewritten answer (Intercepted), and of the
+	// last warning about it in the log
+	rewrittenAt   atomic.Int64
+	rewriteWarned atomic.Int64
+	failRun       atomic.Int64 // queries without an answer since then
 	// send is replaced by tests.
 	send func(ctx context.Context, addr netip.AddrPort, q []byte, tcp bool) ([]byte, error)
 }
