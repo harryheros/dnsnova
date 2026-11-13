@@ -124,7 +124,7 @@ on the DNS-over-HTTPS addresses, without sign-in. In private mode they are
 | Method and path | Result |
 | --- | --- |
 | `GET /` | The page. |
-| `GET /status.json` | `{"domain", "mode", "healthy", "encrypted", "doh", "http3", "dot", "doq", "plain", "check", "query_log", "query_log_full_ip", "filtered"}`. `plain` lists public port-53 addresses in public mode; `filtered` (only while filtering is on) holds the filtered service's `doh`, `dot`, `doq`, `plain` and `rules`. |
+| `GET /status.json` | `{"domain", "mode", "healthy", "encrypted", "doh", "http3", "dot", "doq", "plain", "check", "query_log", "query_log_full_ip", "recursion", "filtered"}`. `recursion`: names are resolved from the root servers rather than through upstreams. `plain` lists public port-53 addresses in public mode; `filtered` (only while filtering is on) holds the filtered service's `doh`, `dot`, `doq`, `plain` and `rules`. |
 | `GET /check/{token}` | `{"seen", "proto"}`: whether a query for `{token}.check.<domain>` reached this server in the last five minutes, and over `udp`, `tcp`, `dot`, `doh`, `doh3` or `doq`. Tokens are 16 to 40 letters and digits. |
 | `GET /dnsnova.mobileconfig?p=doh` | An Apple configuration profile for DNS over HTTPS (`p=dot`: DNS over TLS, only when it listens on port 853; `p=doh-filtered` and `p=dot-filtered`: the filtered service, installed next to the unfiltered one). |
 

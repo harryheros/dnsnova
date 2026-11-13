@@ -28,6 +28,7 @@ const (
 	typeDNSKEY = 48
 	typeNSEC3  = 50
 	typeNSEC3P = 51
+	typeANY    = 255
 )
 
 var errFormat = errors.New("malformed response")

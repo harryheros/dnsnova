@@ -59,6 +59,15 @@ func TestEvaluate(t *testing.T) {
 			in.recursion = true
 			in.upstreams = []upstreamWindow{{addr: "a", queries: 50, errors: 50}}
 		}, nil},
+		{"recursion: name servers unreachable", func(in *alertInput) {
+			in.recursion, in.recState = true, "unreachable"
+		}, []string{"recursion_down=critical"}},
+		{"recursion: port 53 intercepted", func(in *alertInput) {
+			in.recursion, in.recState, in.fallback = true, "intercepted", true
+		}, []string{"recursion_intercepted=critical"}},
+		{"recursion healthy", func(in *alertInput) {
+			in.recursion = true
+		}, nil},
 		{"one upstream failing", func(in *alertInput) {
 			in.upstreams = []upstreamWindow{{addr: "a", healthy: true, queries: 100, errors: 60}, {addr: "b", healthy: true, queries: 100},
 				{addr: "c", queries: 10, errors: 10}} // too few queries to say
