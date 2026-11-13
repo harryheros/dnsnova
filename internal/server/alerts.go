@@ -73,6 +73,10 @@ type alertInput struct {
 	counts    stats.Counts  // over span
 	bogus     int64         // answers refused for DNSSEC, over span
 	recursion bool
+	// with recursion: "unreachable" (no name server answers) or
+	// "intercepted" (the network answers in their place), "" when fine
+	recState  string
+	fallback  bool // upstreams answer meanwhile
 	upstreams []upstreamWindow
 	failures  []recursor.Failure
 	certMode  string
@@ -122,6 +126,24 @@ func evaluate(in alertInput) []alert.Condition {
 						Details: []string{fmt.Sprintf("%d of %d queries failed in the last %s; the others answer instead", u.errors, u.queries, mins)}})
 				}
 			}
+		}
+	}
+
+	// recursion: the name servers, when they answer the queries
+	if in.recursion && in.recState != "" {
+		then := "Queries not in the cache get no answer."
+		if in.fallback {
+			then = "The upstreams answer meanwhile."
+		}
+		if in.recState == "intercepted" {
+			add(alert.Condition{Key: "recursion_intercepted", Severity: alert.Critical, For: a.UpstreamDownFor,
+				Summary: "The network intercepts DNS: name servers cannot be reached privately",
+				Details: []string{"Answers come from the network, not the name servers (port 53 intercepted). " + then,
+					"See docs/restricted-networks.md: use your own DNSNova elsewhere as an encrypted upstream."}})
+		} else {
+			add(alert.Condition{Key: "recursion_down", Severity: alert.Critical, For: a.UpstreamDownFor,
+				Summary: "No name server answers: recursion cannot resolve",
+				Details: []string{"Every recent question to the root and authoritative servers went unanswered. " + then}})
 		}
 	}
 
@@ -320,6 +342,15 @@ func (s *Server) alertTick(now time.Time) {
 	}
 	if in.bogus > 0 {
 		in.failures = s.Rec.Failures()
+	}
+	if in.recursion {
+		switch {
+		case s.Rec.Intercepted():
+			in.recState = "intercepted"
+		case !s.Rec.Healthy():
+			in.recState = "unreachable"
+		}
+		in.fallback = cfg.Recursion.Fallback && len(cfg.Upstream.Primary) > 0
 	}
 	if s.Certs != nil {
 		in.cert = s.Certs.Status()

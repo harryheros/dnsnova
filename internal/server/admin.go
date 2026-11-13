@@ -168,7 +168,7 @@ func proxied(r *http.Request) bool {
 // plainRefusal says how to reach the admin interface instead.
 func plainRefusal(r *http.Request, port string, certNames []string) string {
 	if proxied(r) {
-		return "The admin interface needs HTTPS. This request came through a reverse proxy that did not say the visitor used HTTPS: serve the interface over HTTPS there and send X-Forwarded-Proto: https."
+		return "The admin interface needs HTTPS. This request came through a reverse proxy without X-Forwarded-Proto: https; serve HTTPS there and send that header."
 	}
 	host := r.Host
 	if h, _, err := net.SplitHostPort(host); err == nil {
@@ -191,7 +191,7 @@ func plainRefusal(r *http.Request, port string, certNames []string) string {
 			return "The admin interface is not served over plain HTTP from other machines. Open https://" + n + ":" + port + "/ or use an SSH tunnel: " + tunnel + "." + lanHint
 		}
 	}
-	return "The admin interface has no certificate yet, so it is not served to other machines: plain HTTP would send the password in the clear. From your computer, open an SSH tunnel: " + tunnel + ". Once a domain is set up (Settings > Encrypted DNS), it also opens over HTTPS on this port." + lanHint
+	return "The admin interface has no certificate yet, so other machines cannot open it: plain HTTP would expose the password. From your computer, open an SSH tunnel: " + tunnel + ". Once a domain is set up (Settings > Encrypted DNS), it also opens over HTTPS on this port." + lanHint
 }
 
 // certCovers reports whether a certificate for names is valid for the host

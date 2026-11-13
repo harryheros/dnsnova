@@ -1,35 +1,30 @@
 # dnsnova configuration
 #
-# Changes are applied automatically when this file is saved (or on
-# `systemctl reload dnsnova`). Check a file with: dnsnova -t -c <file>
-# Durations accept "500ms", "3s", "24h", or a plain number of seconds.
+# Changes apply when this file is saved (or on `systemctl reload dnsnova`).
+# Check a file with: dnsnova -t -c <file>
+# Durations: "500ms", "3s", "24h", or a number of seconds.
 
 [server]
-# "public":  anyone may query; abuse is handled by the [limits] below.
-# "private": only the networks in [access] allow may query.
+# "public":  anyone may query, within [limits].
+# "private": only the networks in access.allow may query.
 mode = "public"
 
-# Addresses for plain DNS (UDP and TCP). On hosts with several IP addresses,
-# list each one rather than ":53", so UDP replies leave from the address the
-# query was sent to.
+# Plain DNS (UDP and TCP). On hosts with several addresses, list each one
+# rather than ":53", so UDP replies leave from the address queried.
 listen = ["203.0.113.10:53", "[2001:db8::10]:53"]
 
 # Certificates, the ACME account and other state.
 data_dir = "/var/lib/dnsnova"
 
-# DNS Cookies (RFC 7873, with the server cookie of RFC 9018 that BIND, Knot
-# and Unbound share): a client that sends its cookie back has shown its
-# address is not forged, so response rate limiting leaves it alone. The
-# secret is in data_dir/secrets/cookie-secret; copy that file to every node
-# behind one anycast address so they accept each other's cookies.
+# DNS Cookies (RFC 7873, server cookies as in RFC 9018): clients that return
+# a valid cookie are exempt from response rate limiting. Behind one anycast
+# address, copy data_dir/secrets/cookie-secret to every node.
 cookies = true
 
-# Load balancers in front of this server (HAProxy, dnsdist, a cloud network
-# load balancer) that send the PROXY protocol header, so the server sees each
-# client's address instead of the balancer's: version 1 or 2 on TCP, DoT and
-# DoH over HTTPS, version 2 on UDP (as dnsdist sends it). From these
-# addresses the header is required; from anyone else it is never read.
-# DoQ and HTTP/3 have no PROXY protocol.
+# Load balancers that send the PROXY protocol header (HAProxy, dnsdist, cloud
+# load balancers), so clients' real addresses are seen: v1 or v2 on TCP, DoT
+# and DoH over HTTPS, v2 on UDP. Required from these addresses, ignored from
+# all others. Not available for DoQ and HTTP/3.
 proxy_protocol = []     # e.g. ["10.0.0.5/32"]
 
 [dot]
@@ -37,42 +32,36 @@ proxy_protocol = []     # e.g. ["10.0.0.5/32"]
 listen = ["203.0.113.10:853", "[2001:db8::10]:853"]
 
 [doq]
-# DNS over QUIC (RFC 9250, UDP). Needs a certificate. Usually the same
-# addresses as [dot]: DoT uses TCP 853 and DoQ UDP 853.
+# DNS over QUIC (RFC 9250). Needs a certificate. Usually the same addresses
+# as [dot]: DoT uses TCP 853, DoQ UDP 853.
 listen = ["203.0.113.10:853", "[2001:db8::10]:853"]
 
 [doh]
-# DNS over HTTPS, built in: HTTP/1.1 and HTTP/2 over TCP. Needs a certificate.
+# DNS over HTTPS: HTTP/1.1 and HTTP/2. Needs a certificate.
 https_listen = ["203.0.113.10:443", "[2001:db8::10]:443"]
-# Also serve HTTP/3 on the same addresses and ports over UDP (443/UDP for the
-# addresses above). HTTP/1.1 and HTTP/2 responses then tell clients about it
-# with an Alt-Svc header.
+# Also HTTP/3 on the same addresses over UDP, advertised with Alt-Svc.
 http3 = true
-# Or behind a reverse proxy such as nginx, which then handles TLS, HTTP/2 and
-# HTTP/3: plain HTTP on a local address. Leave empty to disable.
+# Or plain HTTP on a local address, behind a reverse proxy such as nginx that
+# handles TLS. Empty: off.
 listen = ""
 path = "/dns-query"
-# The client address is taken from X-Real-IP only when the request comes
-# from one of these proxies.
+# X-Real-IP is trusted only from these proxies.
 trusted_proxies = ["127.0.0.1/32", "::1/128"]
 
 [tls]
-# Where the certificate for DoT, DoQ and DoH comes from:
-#   "acme"  obtain and renew one automatically from Let's Encrypt
-#   "files" use files another program manages (e.g. nginx or certbot);
-#           they are reloaded when they change
+# The certificate for DoT, DoQ and DoH:
+#   "acme"  obtained and renewed from Let's Encrypt
+#   "files" managed by another program (certbot, for one); reloaded on change
 #   "off"   no encrypted DNS
 certificate = "acme"
 domains = ["dns.example.com"]   # must point to this server
-# Also certify the public addresses in server.listen. Clients such as
-# Windows 11, iOS and macOS then upgrade from port 53 to encrypted DNS by
-# themselves (DDR). Such certificates last about 6 days and are renewed
-# automatically.
+# Also certify the public addresses in server.listen, so Windows 11, iOS and
+# macOS upgrade to encrypted DNS by themselves (DDR). These certificates last
+# about 6 days and renew automatically.
 ip_addresses = true
 email = ""                      # optional contact for Let's Encrypt
-# How Let's Encrypt checks that you control the names. Chosen automatically:
-# "tls-alpn-01" when DoH or DoT listens on port 443, otherwise "http-01",
-# which needs port 80 (http_challenge_listen) during issuance.
+# Domain validation, chosen automatically: "tls-alpn-01" when DoH or DoT
+# listens on 443, otherwise "http-01" on port 80 (http_challenge_listen).
 # challenge = "tls-alpn-01"
 # http_challenge_listen = ":80"
 # acme_directory = "https://acme-v02.api.letsencrypt.org/directory"
@@ -81,79 +70,74 @@ email = ""                      # optional contact for Let's Encrypt
 # key_file = "/etc/letsencrypt/live/dns.example.com/privkey.pem"
 
 [ddr]
-# Answer _dns.resolver.arpa so clients can discover the encrypted endpoints
-# (RFC 9462): DoT, DoH (with h3 when http3 is on) and DoQ. Uses the first
-# name in tls.domains.
+# Answer _dns.resolver.arpa (RFC 9462) so clients discover DoT, DoH and DoQ.
+# Uses the first name in tls.domains.
 enabled = true
 
 [upstream]
-# Where queries are forwarded. Formats:
+# Where queries are forwarded:
 #   1.1.1.1                          plain DNS (UDP, TCP when truncated)
 #   tcp://1.1.1.1                    plain DNS over TCP
 #   tls://one.one.one.one            DNS over TLS
 #   https://cloudflare-dns.com/dns-query    DNS over HTTPS
+#   h3://cloudflare-dns.com/dns-query       DNS over HTTPS, HTTP/3
 #   quic://dns.example                DNS over QUIC (port 853)
-# A host name can be pinned to an address to skip the bootstrap lookup:
+# Pin a host name to an address to skip the bootstrap lookup:
 #   https://dns.google/dns-query#8.8.8.8
 primary = ["https://1.1.1.1/dns-query", "https://1.0.0.1/dns-query"]
 
-# Used only when every primary upstream fails or has not answered within
-# fallback_delay.
+# Used only when every primary fails or none answers within fallback_delay.
 fallback = ["https://dns.google/dns-query#8.8.8.8"]
 
-# Resolve upstream host names through these IP addresses (plain or encrypted).
+# Resolve upstream host names through these addresses.
 bootstrap = ["1.1.1.1:53", "8.8.8.8:53"]
 
-# Query the fastest N primaries at once and take the first good answer.
-# 0 = all of them.
+# Ask the fastest N primaries at once; the first good answer wins. 0: all.
 parallel = 2
 timeout = "3s"
 fallback_delay = "1.5s"
 
 [recursion]
-# Resolve names itself, from the root servers down, instead of forwarding
-# to the upstreams above: no third party sees the queries. Answers are
-# checked with DNSSEC (the root keys KSK-2017 and KSK-2024 are built in).
+# Resolve names from the root servers instead of forwarding, so no third
+# party sees the queries. DNSSEC validated (root keys KSK-2017 and KSK-2024
+# built in).
 enabled = false
 dnssec = true
-# Each server is sent only the part of the name it needs (RFC 9156): the
-# root sees "com", not "www.example.com".
+# Send each server only the part of the name it needs (RFC 9156): the root
+# sees "com", not "www.example.com".
 qname_minimisation = true
-# Also reach name servers over IPv6 (skipped automatically while it fails).
+# Also use IPv6 (skipped automatically while it fails).
 ipv6 = true
-# When no name server of a domain can be reached, ask the upstreams above.
-# Never after a failed DNSSEC check.
+# Ask the upstreams when a domain's name servers cannot be reached; never
+# after a failed DNSSEC check. Where the network intercepts port 53, set the
+# upstreams to your own DNSNova elsewhere (docs/restricted-networks.md).
 fallback = true
-# A public server never sends queries into private networks; list networks
-# with your own name servers here, e.g. ["10.0.0.0/8"]. This also opens
-# 127.0.0.0/8 and link-local addresses when listed, nothing else.
+# A public server never queries private networks. List networks with your own
+# name servers, e.g. ["10.0.0.0/8"]; 127.0.0.0/8 and link-local addresses
+# open only when listed.
 # allow_networks = []
-# Negative trust anchors (RFC 7646): domains whose answers are passed on
-# without the DNSSEC check, for a domain whose owner broke its DNSSEC (the
-# DNSSEC page of the web interface lists names that fail, and adds them
-# here). Remove each once it validates again: meanwhile a forged answer for
-# it would get through too.
+# Negative trust anchors (RFC 7646): domains with broken DNSSEC, answered
+# without validation (the DNSSEC page lists failures and adds them here).
+# Remove each once it validates: until then, forgeries for it pass too.
 # negative_trust_anchors = ["broken.example"]
-# DNS Cookies with name servers (RFC 7873): each question carries a cookie
-# made for that server; an answer with the wrong one, or without one from a
-# server that always sends it, is forged, and the question goes again over
-# TCP. Servers that cannot take the option are asked without it.
+# DNS Cookies with name servers (RFC 7873): a UDP answer with the wrong
+# cookie, or none from a server that always sends one, is dropped as forged.
+# Servers that reject the option are asked without it.
 cookies = true
 
 [cache]
-size = 100000           # entries, about 1 to 2 KB each; 0 disables the answer
-                        # cache (recursion keeps its own working cache)
+size = 100000           # entries, 1 to 2 KB each; 0: no answer cache
+                        # (recursion keeps its own)
 min_ttl = 0             # raise short TTLs to at least this
 max_ttl = "24h"
 max_negative_ttl = "1h" # NXDOMAIN and "no records"
-serve_stale = "24h"     # answer from an expired entry while refreshing it
+serve_stale = "24h"     # serve expired entries while refreshing them
 prefetch = true         # refresh popular entries before they expire
-persist = "auto"        # keep answers across restarts in data_dir/cache.bin (saved
-                        # every 10 minutes and on shutdown): "on", "off", or "auto"
-                        # = on in public mode, off in private mode. The file shows
-                        # which names were looked up (never by whom), which with a
-                        # few users, as at home, is close to their browsing; it is
-                        # deleted whenever this is off
+persist = "auto"        # keep the cache across restarts (data_dir/cache.bin,
+                        # saved every 10 minutes and on shutdown). "auto": on in
+                        # public mode, off in private mode. The file lists names
+                        # looked up, never by whom; with few users, as at home,
+                        # that is close to their browsing. Deleted when off
 
 [access]
 # Private mode only.
@@ -162,37 +146,32 @@ allow = ["198.51.100.0/24", "2001:db8:1000::/48"]
 deny = []
 
 [local]
-# Names DNSNova answers itself, without asking upstream: "name address".
-# "*.name" covers every name below it. A name listed here answers only the
-# addresses given (A and AAAA); 0.0.0.0 makes it unreachable.
+# Names answered locally: "name address". "*.name" covers every name below
+# it. Listed names answer only the given A and AAAA; 0.0.0.0 blocks one.
 records = [
   # "nas.home 192.168.1.5",
   # "*.lab.home 192.168.1.9",
 ]
 
 [ecs]
-# Answer as if from another network (EDNS Client Subnet): this public
-# address or network is sent with every query, and name servers that
-# support it answer as they would for it. An address stands for its /24
-# (IPv4) or /56 (IPv6). Your clients' addresses are never sent. With
-# upstreams, they must support it too. Changing it clears the cache.
-# Empty: off.
+# EDNS Client Subnet: send this network (an address stands for its /24 or
+# /56) with every query, so name servers answer as they would for it.
+# Clients' addresses are never sent. Upstreams must support it. Changing it
+# clears the cache. Empty: off.
 address = ""
-# For measurement tools (DomainNova, for one): a secret DNS over HTTPS path
-# on which each query's own client subnet is sent to the domains' name
-# servers, so the tool sees how names resolve for that network. Those
-# answers come straight from resolving, never from or into the cache, and
-# reach no other client. Needs recursion. Keep the path secret; anyone with
-# it can make this server ask name servers on any network's behalf.
+# For measurement tools such as DomainNova: a secret DoH path that sends each
+# query's own client subnet to name servers. Its answers bypass the cache.
+# Needs recursion. Keep it secret: anyone with it can query on behalf of any
+# network.
 # client_path = "/ecs-<24 or more random letters and digits>"
 
 [stats]
-# How far back the overview goes: "24h", "7d" or "30d". In memory only.
+# Overview history: "24h", "7d" or "30d". In memory only.
 retention = "7d"
 
 [limits]
-# Mobile carriers put many people behind one IPv4 address, so these are
-# per address, not per person; abuse of UDP is limited further by rrl_rate.
+# Per address, not per person: mobile carriers put many people behind one
+# IPv4 address. UDP abuse is also limited by rrl_rate.
 client_qps = 100            # per IPv4 address or IPv6 /56
 client_burst = 400
 prefix_qps = 1000           # per IPv4 /24 or IPv6 /48
@@ -200,9 +179,8 @@ prefix_burst = 4000
 global_qps = 50000          # whole server; 0 = no limit
 upstream_concurrency = 2000 # upstream queries in flight
 zone_concurrency = 50       # upstream queries in flight per domain
-# Phones keep a DoT or DoQ connection open while in use, so each one is
-# roughly one device online. An idle connection takes about 25 KB (TCP, DoT)
-# or 70 KB (DoQ): the defaults need at most about 250 and 210 MB.
+# Roughly one connection per active phone. Idle, each takes about 25 KB (TCP,
+# DoT) or 70 KB (DoQ): at most about 250 and 210 MB with the defaults.
 tcp_connections = 10000     # TCP, DoT and DoH
 quic_connections = 3000     # DoQ and HTTP/3; above half of it, new clients
                             # must first prove their address (QUIC Retry)
@@ -220,29 +198,25 @@ block_any = true            # answer ANY queries with NOTIMP
 listen = "127.0.0.1:9153"
 
 [admin]
-# The web interface and its API (docs/api.md). Leave it on 127.0.0.1 and
-# reach it through an SSH tunnel (ssh -L 7000:127.0.0.1:7000 you@server),
-# or listen on ":7000" to reach it from other machines too, protected by a
-# password, login lockout and optional two-step verification. Other machines
-# get it over HTTPS on the same port once a certificate exists. Plain HTTP
-# is answered on this server (or for a reverse proxy here that sends
-# X-Forwarded-Proto: https) and, in private mode, to the private networks in
-# access.allow: a home or office network opens it directly. Leave empty to
-# turn it off.
+# The web interface and its API (docs/api.md). On 127.0.0.1, reach it with
+# ssh -L 7000:127.0.0.1:7000 you@server. On ":7000", other machines get it
+# over HTTPS once a certificate exists, behind a password, login lockout and
+# optional two-step verification. Plain HTTP is served only to this server,
+# a local reverse proxy sending X-Forwarded-Proto: https, and, in private
+# mode, the networks in access.allow. Empty: off.
 listen = "127.0.0.1:7000"
 
 [status]
-# A public page at the DoH address (https://your-domain/): the addresses,
-# setup steps for Android, iPhone and Mac (a profile to download), Windows,
-# browsers and routers, what the server keeps, and a check that shows a
-# visitor whether their device is using this server. No statistics. In
-# private mode only allowed networks can open it.
+# A public page at https://your-domain/: addresses, setup steps per device
+# (with a profile for iPhone and Mac), what the server keeps, and a check
+# that shows visitors whether they use it. No statistics. In private mode,
+# allowed networks only.
 enabled = false
 
 [filter]
-# A second, filtered service on the same server: ads, trackers and malware
-# are answered with "blocked" (NXDOMAIN, Extended DNS Error 15). The usual
-# addresses stay unfiltered; clients choose by the address they use:
+# A second, filtered service: ads, trackers and malware get NXDOMAIN
+# (Extended DNS Error 15: blocked). The usual addresses stay unfiltered;
+# clients choose by address:
 #   plain DNS  the addresses in listen below
 #   DoT, DoQ   the names in names (add them to DNS and to the certificate;
 #              with certificate = "acme" they are added for you)
@@ -257,15 +231,13 @@ enabled = false
 # names = ["filtered.dns.example.com"]
 # listen = ["203.0.113.10:5353"]
 
-# There is no setting to log queries. DNSNova writes no queries or client
-# addresses to disk; for troubleshooting, start the query log in the admin
-# interface: it is kept in memory, hides the last part of client addresses
-# unless asked not to, and stops by itself.
+# There is no setting to log queries: none are written to disk. For
+# troubleshooting, the query log in the web interface runs in memory, masks
+# client addresses by default, and stops by itself.
 
 [cluster]
-# Several servers sharing one configuration: see docs/cluster.md. Without a
-# role this server stands alone. Changed only in this file (not in the web
-# interface); takes effect after a restart.
+# Several servers sharing one configuration (docs/cluster.md). No role: a
+# standalone server. Set only in this file; applies after a restart.
 # role = "primary"            # or "follower"
 # name = "ams-1"              # default: the host name
 # region = "Amsterdam"
@@ -274,8 +246,8 @@ enabled = false
 # interval = "10s"            # follower: how often it syncs
 
 [anycast]
-# Announce or withdraw this server's anycast route as its health changes,
-# with your own commands (no shell; see docs/cluster.md). Only in this file.
+# Announce or withdraw the anycast route as health changes, with your own
+# commands, run without a shell (docs/cluster.md). Only in this file.
 enabled = false
 # announce = ["birdc", "enable", "anycast"]
 # withdraw = ["birdc", "disable", "anycast"]
@@ -285,14 +257,14 @@ enabled = false
 # drain = "5s"                # at shutdown: withdraw, then keep answering this long
 
 [alerts]
-# Notifications when something is wrong, and when it is fixed, to Telegram,
-# Discord, Slack or a JSON webhook (see docs/alerts.md). Where they go is set
-# in the web interface (Settings > Alerts) and kept in
-# data_dir/secrets/alerts.json, not here. A threshold of 0 turns its check off.
+# Notifications on problems and recoveries, to Telegram, Discord, Slack or a
+# webhook (docs/alerts.md). Destinations are set in Settings > Alerts and kept
+# in data_dir/secrets/alerts.json. A threshold of 0 turns its check off.
 enabled = false
 # repeat = "4h"                  # remind while a problem lasts (0s: once)
 # nodes = true                   # cluster primary: also notify about the followers
-# upstream_down_for = "30s"      # every upstream failing (critical)
+# upstream_down_for = "30s"      # every upstream failing, or with recursion no
+#                                # name server answering or DNS intercepted (critical)
 # upstream_failing_for = "5m"    # one upstream failing half its queries
 # servfail_ratio = 0.05          # SERVFAIL share over five minutes, DNSSEC aside
 # servfail_min_queries = 500

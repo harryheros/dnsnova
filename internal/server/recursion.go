@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/harryheros/dnsnova/internal/admin"
@@ -18,12 +19,43 @@ import (
 // the authoritative servers itself, and the upstreams only when none of
 // them could be reached (never after a DNSSEC failure: the answer would be
 // just as wrong there).
+//
+// While recursion cannot work at all (no name server has answered for a
+// while, or the network answers in their place), waiting for each lookup
+// to fail before asking the upstreams would add that wait to every query.
+// Then the upstreams answer at once, and one lookup at a time still goes
+// to the name servers, in the background, so that recursion is used again
+// as soon as they answer.
 type recursive struct {
-	s  *Server
-	up resolver.Exchanger // nil: no fallback
+	s       *Server
+	rec     recursorAPI
+	up      resolver.Exchanger // nil: no fallback
+	probing atomic.Bool
 }
 
+type recursorAPI interface {
+	resolver.Exchanger
+	Healthy() bool
+	Intercepted() bool
+}
+
+// probeTimeout bounds a background lookup made while recursion is down.
+const probeTimeout = 5 * time.Second
+
 func (x *recursive) Exchange(ctx context.Context, msg []byte) ([]byte, error) {
+	if x.up != nil && (!x.rec.Healthy() || x.rec.Intercepted()) {
+		if x.probing.CompareAndSwap(false, true) {
+			q := append([]byte(nil), msg...)
+			go func() {
+				defer x.probing.Store(false)
+				pctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+				defer cancel()
+				x.rec.Exchange(pctx, q)
+			}()
+		}
+		x.s.recFallbacks.Add(1)
+		return x.up.Exchange(ctx, msg)
+	}
 	rctx := ctx
 	if x.up != nil {
 		if dl, ok := ctx.Deadline(); ok { // leave the upstreams time to answer
@@ -32,7 +64,7 @@ func (x *recursive) Exchange(ctx context.Context, msg []byte) ([]byte, error) {
 			defer cancel()
 		}
 	}
-	resp, err := x.s.Rec.Exchange(rctx, msg)
+	resp, err := x.rec.Exchange(rctx, msg)
 	if err == nil || x.up == nil || ctx.Err() != nil {
 		return resp, err
 	}
@@ -74,7 +106,7 @@ func (s *Server) exchanger(c *config.Config, st *state) resolver.Exchanger {
 	if !c.Recursion.Enabled {
 		return st.group
 	}
-	x := &recursive{s: s}
+	x := &recursive{s: s, rec: s.Rec}
 	if c.Recursion.Fallback && len(c.Upstream.Primary) > 0 {
 		x.up = st.group
 	}
@@ -92,6 +124,7 @@ func (s *Server) RecursionStatus() admin.Recursion {
 		Queries: r.Stats.Queries.Load(), Timeouts: r.Stats.Timeouts.Load(), TCP: r.Stats.TCP.Load(),
 		Secure: r.Stats.Secure.Load(), Insecure: r.Stats.Insecure.Load(), Bogus: r.Stats.Bogus.Load(),
 		Fallbacks: s.recFallbacks.Load(), Spoofed: r.Stats.Spoofed.Load(),
+		Forged: r.Stats.Forged.Load(), Rewritten: r.Stats.Rewritten.Load(), Intercepted: r.Intercepted(),
 		Cache: map[string]int{"rrsets": sets, "negative": negs, "zones": keys, "delegations": delegs, "servers": servers},
 	}
 }
@@ -105,6 +138,13 @@ func (s *Server) writeRecursionMetrics(w io.Writer) {
 	fmt.Fprintf(w, "dnsnova_recursion_cookie_rejected_total{reason=\"mismatch\"} %d\n", r.Stats.CookieMismatch.Load())
 	fmt.Fprintf(w, "dnsnova_recursion_cookie_rejected_total{reason=\"missing\"} %d\n", r.Stats.CookieMissing.Load())
 	fmt.Fprintf(w, "# TYPE dnsnova_recursion_spoofed_total counter\ndnsnova_recursion_spoofed_total %d\n", r.Stats.Spoofed.Load())
+	fmt.Fprintf(w, "# HELP dnsnova_recursion_forged_total UDP answers from the path dropped as forged while the genuine answer was waited for.\n# TYPE dnsnova_recursion_forged_total counter\ndnsnova_recursion_forged_total %d\n", r.Stats.Forged.Load())
+	fmt.Fprintf(w, "# HELP dnsnova_recursion_rewritten_total Answers no name server sends, over UDP and TCP: the network answers in their place.\n# TYPE dnsnova_recursion_rewritten_total counter\ndnsnova_recursion_rewritten_total %d\n", r.Stats.Rewritten.Load())
+	intercepted := 0
+	if r.Intercepted() {
+		intercepted = 1
+	}
+	fmt.Fprintf(w, "# HELP dnsnova_recursion_intercepted 1 while the network answers DNS questions in place of the name servers.\n# TYPE dnsnova_recursion_intercepted gauge\ndnsnova_recursion_intercepted %d\n", intercepted)
 	fmt.Fprintf(w, "# TYPE dnsnova_dnssec_answers_total counter\n")
 	fmt.Fprintf(w, "dnsnova_dnssec_answers_total{result=\"secure\"} %d\n", r.Stats.Secure.Load())
 	fmt.Fprintf(w, "dnsnova_dnssec_answers_total{result=\"insecure\"} %d\n", r.Stats.Insecure.Load())
