@@ -50,9 +50,9 @@ Also:
 
 - **DNS over HTTP/3 upstreams**: `h3://1.1.1.1/dns-query`, or pinned as
   for the other transports: `h3://dns.google/dns-query#8.8.8.8`.
-- **A new mark**: a mechanised trident in silver with blue light, drawn in
+- **A new mark**: a mechanised trident in silver with blue light, shown in
   full from 48 px up and as a solid silhouette below (the favicon among
-  them). Sources in `docs/brand/`.
+  them). A vector drawing is in `docs/brand/`.
 - In the light appearance, the *Menu* button of the narrow layout could
   not be read; it now keeps the dark rail's colors.
 - The DNSNova logo in the web interface goes to the overview, also in the

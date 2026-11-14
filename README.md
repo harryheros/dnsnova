@@ -12,7 +12,7 @@ DNSNova resolves names itself, from the root servers with DNSSEC, or forwards th
 
 **At home or in an office**: a private resolver with optional ad and tracker blocking, set up in minutes. **On the internet**: a public resolver built to be exposed, with rate limits, DNS Cookies, a security self-check, multi-node clusters behind anycast, and alerts.
 
-![The DNSNova web interface: key figures, DNS traffic, how queries flow through the server, top domains, upstreams and recent activity](./docs/images/overview.webp)
+![The DNSNova web interface](./docs/images/overview.webp)
 
 ## New in 1.4
 
@@ -32,28 +32,12 @@ On Linux with systemd (amd64 or arm64), as root:
 curl -fsSL https://raw.githubusercontent.com/harryheros/dnsnova/main/install.sh | sh
 ```
 
-Without root it uses sudo; where there is no sudo (common on Debian), run `su -` first.
+Without root it uses sudo (or run `su -` first where there is none). The installer prints where to open the setup wizard:
 
-For a home or office network, add `--lan` (`| sh -s -- --lan`): DNS answers your private networks only, and the web interface opens directly from them:
+- **Home or office**: add `--lan` (`| sh -s -- --lan`). DNS answers your private networks only, and the wizard opens directly from them at `http://<server>:7000`.
+- **Internet**: until it has a certificate, the web interface opens only on the server itself. Reach it with `ssh -L 7000:127.0.0.1:7000 root@<server>`, then `http://127.0.0.1:7000`.
 
-```
-DNSNova is installed and running.
-Open one of these addresses from a device on your network and follow the setup wizard:
-  http://192.168.1.10:7000
-  http://127.0.0.1:7000
-```
-
-Without it, the server is set up for the internet. Until it has a certificate, the web interface opens only on the server itself; reach it through an SSH tunnel:
-
-```
-DNSNova is installed and running.
-The web interface is not encrypted yet, so it opens only on this server.
-On your computer, open a tunnel:
-  ssh -L 7000:127.0.0.1:7000 root@203.0.113.10
-then open http://127.0.0.1:7000/ and follow the setup wizard.
-```
-
-The wizard asks for an administrator password, who the server is for, recursion or upstreams, an optional domain for encrypted DNS, and filtering. DNS starts when you finish, and the last page shows what to set on your router or devices. The same choices can be given on the command line: `install.sh --help`.
+The wizard sets the administrator, who the server is for, recursion or upstreams, a domain for encrypted DNS and filtering, then shows what to set on your router or devices. Every choice is also a command-line option: `install.sh --help`.
 
 - **Upgrade**: run the install command again. The configuration is kept; if the new version fails to start, the previous one is restored.
 - **Uninstall**: add `-u` (`| sh -s -- -u`). The configuration stays in `/etc/dnsnova` unless you add `--purge`.
@@ -66,24 +50,19 @@ The wizard asks for an administrator password, who the server is for, recursion 
 - **Plain and encrypted DNS**: UDP and TCP on port 53, DNS over TLS, DNS over QUIC and DNS over HTTPS (HTTP/2 and HTTP/3), with an automatic Let's Encrypt certificate.
 - **Recursion or forwarding**: resolve from the root servers with DNSSEC validation and minimal names, so no third party sees the queries; or forward to upstreams such as Cloudflare or Quad9 over DoH (HTTP/2 or HTTP/3), DoT or DoQ. With both, upstreams are used only when a domain's own servers cannot be reached.
 - **Opt-in filtering**: the usual addresses answer everything; a second address, name or DoH path blocks ads, trackers, malware and CNAME-cloaked trackers. The default list is [ShieldNova](https://github.com/harryheros/shieldnova) (free to use in DNSNova, commercially too); AdGuard-style, hosts and domain lists also work. A broken list update never replaces a working list, *Check a domain* shows which list blocks a name, and one click allows it again.
-- **Local names** such as `nas.home`, and blocked clients.
-- **EDNS Client Subnet**: name servers answer as they would for a network you choose, never for your clients' own addresses. For measurement tools, a secret DoH path passes each query's own network instead.
+- **Local names** such as `nas.home`, blocked clients, and EDNS Client Subnet for a network you choose (never your clients' addresses).
 
 ### On the internet
 
-- **Public or private**: open to everyone with rate limits that stop abuse, or only to the networks you list.
+- **Public or private**: open to everyone within rate limits, or only to the networks you list; behind load balancers, PROXY protocol v1 and v2 from the ones you list.
 - **Hard to poison**: random ports and IDs, answers checked against the server and question asked, and DNS Cookies. Forged answers, including those from censors on the path, are dropped and the genuine one is used; an attack in progress moves the question to TCP. A network that answers port 53 itself is detected, never cached ([details](./docs/restricted-networks.md)).
-- **Hard to abuse**: per-client and per-network limits, response rate limiting against reflection, and DNS Cookies that exempt real clients. ANY queries can be refused.
-- **Secure by default**: the web interface stays on the server itself until it has HTTPS; two-step verification is available. A self-check at startup and after every change reports weaknesses, such as secrets other users can read or metrics open to the internet.
-- **Behind load balancers**: PROXY protocol v1 and v2, accepted only from the balancers you list.
+- **Hard to abuse**: per-client and per-network limits, response rate limiting against reflection, and DNS Cookies that exempt real clients.
+- **Secure by default**: the web interface stays on the server itself until it has HTTPS; two-step verification; a self-check at startup and after every change reports weaknesses.
 
 ### Many servers
 
-- **One configuration for a fleet**: a primary sends its settings to followers over an encrypted, authenticated channel. Node-specific settings stay in each node's own file; a node that cannot apply a new configuration keeps the last working one and reports why.
-- **Anycast with health checks**: your commands announce the route while the node can answer and withdraw it when it cannot. At shutdown the route is withdrawn first, and the node answers until traffic has drained.
-- **One view**: a Nodes page with each node's state, version, settings and certificate; the fleet's state in the top bar.
-
-![The Nodes page: three nodes in Hong Kong, Frankfurt and San Jose, all healthy, running the same settings and version, with their anycast routes announced](./docs/images/nodes.webp)
+- **One configuration for a fleet**: a primary sends its settings to followers over an encrypted, authenticated channel; a node that cannot apply them keeps the last working ones and reports why. A Nodes page shows the fleet ([docs/cluster.md](./docs/cluster.md)).
+- **Anycast with health checks**: the route is announced while the node can answer and withdrawn when it cannot, and first at shutdown, while traffic drains.
 
 ### Running it
 
@@ -91,11 +70,9 @@ The wizard asks for an administrator password, who the server is for, recursion 
 - **Alerts and monitoring**: Telegram, Discord, Slack or webhook notifications, a heartbeat for outside monitors, Prometheus metrics and a health check ([docs/alerts.md](./docs/alerts.md)).
 - **Diagnostics**: trace any lookup from the root, server by server; a DNSSEC page of failing domains, each exemptible (RFC 7646); an in-memory query log that stops by itself.
 - **Fast**: on one CPU core, about 200,000 answers per second from the cache, 94,000 over DNS over TLS, and 23,000 for new names forwarded to an upstream; a 225,000-rule blocklist costs about 14% ([method](./docs/benchmark.md)).
-- **Quick to recover**: the cache survives restarts (by default on public servers), recent failures are remembered so a broken domain cannot flood upstreams, and Extended DNS Errors tell clients why an answer failed.
+- **Quick to recover**: the cache survives restarts (by default on public servers), and recent failures are remembered so a broken domain cannot flood upstreams.
 - **Private**: queries and client addresses are never written to disk; no telemetry ([PRIVACY.md](./PRIVACY.md)).
-- **Status page** (optional): public addresses, setup steps per device, and a check that shows visitors whether they use the server.
-
-![The Alerts page: nothing wrong now; sent: a critical alert when every upstream failed, a test, and the alert resolved, each delivered to the webhook; then the destinations](./docs/images/alerts.webp)
+- **Status page** (optional): addresses, setup steps per device, and a check that shows visitors whether they use the server.
 
 ## Encrypted DNS
 

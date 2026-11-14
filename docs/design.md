@@ -83,18 +83,18 @@ actions are blue (not green): green means *healthy*.
 
 ## Brand
 
-- **Mark**: a mechanised trident on a 1000-unit grid: a faceted spearhead
-  and two side blades, silver arms and an angular crossbar, and an
-  arrowhead pommel, with blue light in the grooves and two lit windows.
-  Silver lit from the left, shaded on the right. Two drawings:
-  - **metal** (48 px and up: the rail, sign-in): the full drawing, with its
-    own soft glow. Each copy on a page gets its own ids.
-  - **small** (below 48 px: the phone rail, wizard, status page,
-    favicon): a solid `#1478f5` silhouette of the same outline, which
-    stays legible at 16 px on light and dark backgrounds.
-  Both are defined in `app.js` and `status.js`; `logo.svg` (the favicon)
-  is the small one. The source files, for use elsewhere, are in
-  `docs/brand/`.
+- **Mark**: a mechanised trident: a faceted spearhead and two side blades
+  on slender bent arms, an angular crossbar and a diamond pommel, silver
+  lit from the left, with blue light along the inner edges and two lit
+  windows. Two forms:
+  - **picture** (48 px and up: the rail, sign-in): `mark.webp`, 384 px
+    with a transparent background. The metal is opaque; only the glow
+    around it is translucent, so it works on dark and light surfaces.
+  - **silhouette** (below 48 px: the phone rail, wizard, status page,
+    favicon): a solid `#1478f5` vector of the same outline, which stays
+    legible at 16 px. `logo.svg` is this one.
+  A vector drawing of the picture, for print and large sizes, is in
+  `docs/brand/trident.svg`.
 - **Wordmark**: "DNSN" in capitals and "OVA" in small capitals (76% of the
   cap height, one weight heavier so the strokes match), set in **Exo 2
   ExtraBold** with the font's own kerning. Exo 2 is by Natanael Gama under
