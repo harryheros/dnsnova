@@ -38,6 +38,7 @@ ETC="$ROOT/etc/dnsnova"
 CONF="$ETC/dnsnova.toml"
 VAR="$ROOT/var/lib/dnsnova"
 UNIT="$ROOT/etc/systemd/system/dnsnova.service"
+SYSCTL="$ROOT/etc/sysctl.d/90-dnsnova.conf"
 USER_NAME="dnsnova"
 SKIP_SYSTEMD="${DNSNOVA_SKIP_SYSTEMD:-0}"     # tests only
 
@@ -550,6 +551,28 @@ install_files() {
     install -m 755 "$PKG/dnsnova" "$BIN.new"
     mv -f "$BIN.new" "$BIN"
     ok "installed $BIN"
+    tune_udp
+}
+
+# The kernel caps socket buffers (net.core.rmem_max, often about 200 KB),
+# below the 4 MB dnsnova asks for to absorb bursts of UDP queries (and the
+# 7 MB QUIC asks for). Raise the caps, never lower them.
+SOCKBUF=7500000
+tune_udp() {
+    local key cur lines=""
+    for key in rmem_max wmem_max; do
+        cur="$(cat "/proc/sys/net/core/$key" 2>/dev/null || echo 0)"
+        if [ "$cur" -lt "$SOCKBUF" ] 2>/dev/null; then lines="${lines}net.core.$key = $SOCKBUF"$'\n'; fi
+    done
+    [ -n "$lines" ] || return 0
+    install -d -m 755 "$(dirname "$SYSCTL")"
+    { echo "# written by the dnsnova installer: room for bursts of DNS queries over UDP"; printf '%s' "$lines"; } >"$SYSCTL"
+    [ -z "$ROOT" ] || return 0
+    if sysctl -q -p "$SYSCTL" >/dev/null 2>&1; then
+        ok "raised the UDP socket buffer limit to 7.5 MB ($SYSCTL)"
+    else
+        warn "could not raise the UDP socket buffer limit (in a container, the host sets it): dnsnova works, but may drop queries in bursts"
+    fi
 }
 
 healthy() { # wait up to 10 s for the service to answer its health check
@@ -633,7 +656,7 @@ uninstall() {
     if [ "$SKIP_SYSTEMD" != "1" ] && systemctl list-unit-files dnsnova.service >/dev/null 2>&1; then
         systemctl disable --now dnsnova >/dev/null 2>&1 || true
     fi
-    rm -f "$UNIT" "$BIN" "$VAR/dnsnova.prev"
+    rm -f "$UNIT" "$BIN" "$VAR/dnsnova.prev" "$SYSCTL"
     rm -rf "$ROOT/usr/local/share/doc/dnsnova"
     systemd daemon-reload || true
     ok "service and program removed"

@@ -6,6 +6,23 @@ All notable changes are listed here. Versions follow
 
 ## Unreleased
 
+## 1.4.1 (2026-11-13)
+
+- **UDP socket buffers**: the system caps them (on Linux,
+  net.core.rmem_max, often about 200 KB), silently, below the 4 MB dnsnova
+  asks for to absorb bursts of queries; in bursts, queries were dropped
+  with no sign of why. dnsnova now reads back what it got and, when cut
+  short, says so in the log with the command that fixes it. The installer
+  raises the caps to 7.5 MB in /etc/sysctl.d/90-dnsnova.conf (never lowers
+  them; removed on uninstall), which also ends quic-go's warning about its
+  buffers for DoQ and HTTP/3.
+- **Building from source needs Go 1.27.4 or later**: earlier 1.27 releases
+  have security fixes missing in parts dnsnova uses (HTTP/2 for DoH,
+  crypto/tls, crypto/x509, net/http). The release binaries were already
+  built with the newest 1.27 release.
+- The mark no longer gets an extra glow from the page around its own, which
+  made it look blurred.
+
 ## 1.4.0 (2026-11-13)
 
 Recursion without upstreams on networks that tamper with DNS

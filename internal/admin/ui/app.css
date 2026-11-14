@@ -117,9 +117,7 @@ h2 { margin: 0; font-size: 15px; font-weight: 600; }
 .wordmark .wm-edge { stroke: var(--wm-edge); stroke-width: 2.5; paint-order: stroke; }
 .tagline { font-style: italic; font-weight: 400; color: var(--muted); letter-spacing: 0.01em; }
 .mark { flex: none; display: block; }
-/* brand is the one place light is used freely */
-.mark.glow { filter: drop-shadow(0 0 16px rgba(75, 147, 255, 0.5)); }
-:root[data-theme="light"] .mark.glow:not(.side .mark) { filter: none; }
+/* the mark carries its own glow (mark.svg): no added light around it */
 
 /* compact brand (sign-in, wizard, status page, phone rail) */
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 19px; }
