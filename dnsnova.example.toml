@@ -277,7 +277,8 @@ full_ip = false    # who asked first, with the whole address
 # Send every query and answer, as dnstap, to a log collector (Vector,
 # dnscollector, a SIEM): "unix:/path/to/socket" or "tcp:host:port". Empty:
 # off. Sending never delays an answer; while the collector is gone,
-# messages are dropped and counted. The status page shows it.
+# messages are dropped and counted. The status page shows it. Put a Unix
+# socket under /run, not /tmp: the installed service has a /tmp of its own.
 target = ""
 queries = true     # each query as it arrived (CLIENT_QUERY)
 responses = true   # each answer as it went out (CLIENT_RESPONSE)

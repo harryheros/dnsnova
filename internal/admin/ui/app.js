@@ -2164,7 +2164,7 @@ const SETTINGS = {
         { key: "log.query_full_ip", label: "Keep full client addresses", type: "bool", help: "Normally the last part is hidden (203.0.113.x). Full addresses tell which device asked.", show: (v) => v["log.query_days"] > 0 },
       ] },
       { title: "Log collector (dnstap)", fields: [
-        { key: "dnstap.target", label: "Send to", type: "text", placeholder: "unix:/run/vector/dnstap.sock", help: "Every query and answer, as dnstap, to a collector such as Vector, dnscollector or a SIEM: unix:/path/to/socket or tcp:host:port. Empty: off. Sending never delays an answer; when the collector is gone, messages are dropped and counted. The status page shows that it is on." },
+        { key: "dnstap.target", label: "Send to", type: "text", placeholder: "unix:/run/vector/dnstap.sock", help: "Every query and answer, as dnstap, to a collector such as Vector, dnscollector or a SIEM: unix:/path/to/socket (under /run, not /tmp: the service has a /tmp of its own) or tcp:host:port. Empty: off. Sending never delays an answer; when the collector is gone, messages are dropped and counted. The status page shows that it is on." },
         { key: "dnstap.queries", label: "Queries", type: "bool", help: "Send each query as it arrived (CLIENT_QUERY).", show: (v) => !!v["dnstap.target"] },
         { key: "dnstap.responses", label: "Answers", type: "bool", help: "Send each answer as it went out (CLIENT_RESPONSE), with the time taken.", show: (v) => !!v["dnstap.target"] },
         { key: "dnstap.full_ip", label: "Full client addresses", type: "bool", help: "Normally only the network is sent (203.0.113.0, 2001:db8:1::).", show: (v) => !!v["dnstap.target"] },

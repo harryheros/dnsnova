@@ -121,6 +121,12 @@ drain = "5s"      # at shutdown: withdraw, then keep answering this long
 - **A command that fails** is logged and tried again at the next check.
 - The state is on the Nodes page, in `/healthz` (`"anycast"`) and in the
   metrics (`dnsnova_anycast_announced`).
+- **Each node keeps its own records**: query records (`log.query_days`)
+  and newly seen domains are those of the queries the node answered, in
+  its own web interface. Only the primary sends notifications, so a
+  follower's newly seen domains are not sent. To collect every node's
+  queries in one place, use dnstap with a TCP collector: the setting is
+  shared, so every node sends to it.
 - **Which node answered**: a node of a cluster or behind anycast gives its
   `cluster.name` (default: the host name) to clients that ask, with NSID
   (RFC 5001) or a CH TXT query for `id.server`:
