@@ -21,19 +21,12 @@ func TestUDPBatchFamilies(t *testing.T) {
 		c.Close()
 		has6 = true
 	}
-	free := func(network, addr string) string {
-		c, err := net.ListenPacket(network, addr)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer c.Close()
-		return c.LocalAddr().String()
-	}
-	_, port, _ := net.SplitHostPort(free("udp", ":0"))
+	// plain DNS binds UDP and TCP: ports free for both
+	_, port, _ := net.SplitHostPort(freeAddrOn(t, ""))
 	listen := []string{"127.0.0.1:0", ":" + port}
 	ask := []string{"127.0.0.1:" + port}
 	if has6 {
-		v6 := free("udp6", "[::1]:0")
+		v6 := freeAddrOn(t, "::1")
 		listen = append(listen, v6)
 		ask = append(ask, v6, "[::1]:"+port)
 	} else {
