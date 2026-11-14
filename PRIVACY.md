@@ -23,7 +23,10 @@ is your responsibility.
 - It does not forward the EDNS options clients send, such as cookies or
   padding.
 - It never sends reverse lookups of private addresses (10.0.0.0/8,
-  192.168.0.0/16, fd00::/8 and similar) beyond the server.
+  192.168.0.0/16, fd00::/8 and similar) beyond the server, except to the
+  servers you list for that zone in `local.forward`.
+- Names under a domain in `local.forward` go only to the servers listed for
+  it, without EDNS Client Subnet.
 
 ## What is kept, where, and for how long
 

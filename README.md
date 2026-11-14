@@ -2,7 +2,7 @@
 
 > A secure DNS server, from one box at home to a public resolver on several continents.
 
-[![Version](https://img.shields.io/badge/version-v1.4.1-blue)](https://github.com/harryheros/dnsnova/releases)
+[![Version](https://img.shields.io/badge/version-v1.5.0-blue)](https://github.com/harryheros/dnsnova/releases)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](./LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux%20amd64%20%7C%20arm64-lightgrey.svg)](#)
 [![CI](https://github.com/harryheros/dnsnova/actions/workflows/ci.yml/badge.svg)](https://github.com/harryheros/dnsnova/actions/workflows/ci.yml)
@@ -14,13 +14,13 @@ DNSNova resolves names itself, from the root servers with DNSSEC, or forwards th
 
 ![The DNSNova web interface](./docs/images/overview.webp)
 
-## New in 1.4
+## New in 1.5
 
-Recursion without upstreams, on networks that tamper with DNS ([details](./docs/restricted-networks.md)):
+- **Domains with their own servers**: `corp.example` to an office's Active Directory, `lan` and its reverse lookups to the router; asked only there.
+- **RPZ block lists**: threat feeds in RPZ format (URLhaus, ThreatFox, HaGeZi) work as filter lists.
+- **Which node answered**: cluster and anycast nodes answer `dig +nsid` and `id.server` with their name.
 
-- **Injectors on the path**: their forged answers are dropped and the genuine answer, which they cannot stop, is used. Before, such names failed DNSSEC validation or got the forged address.
-- **Networks that take over port 53**: detected and reported, never cached. With your own DNSNova elsewhere as an encrypted upstream, queries go there at once.
-- **DNS over HTTP/3 upstreams**: `h3://1.1.1.1/dns-query`.
+1.4 made recursion work without upstreams on networks that tamper with DNS ([details](./docs/restricted-networks.md)).
 
 Upgrading from 1.2 or earlier: see the [changelog](./CHANGELOG.md) first.
 
@@ -49,8 +49,8 @@ The wizard sets the administrator, who the server is for, recursion or upstreams
 
 - **Plain and encrypted DNS**: UDP and TCP on port 53, DNS over TLS, DNS over QUIC and DNS over HTTPS (HTTP/2 and HTTP/3), with an automatic Let's Encrypt certificate.
 - **Recursion or forwarding**: resolve from the root servers with DNSSEC validation and minimal names, so no third party sees the queries; or forward to upstreams such as Cloudflare or Quad9 over DoH (HTTP/2 or HTTP/3), DoT or DoQ. With both, upstreams are used only when a domain's own servers cannot be reached.
-- **Opt-in filtering**: the usual addresses answer everything; a second address, name or DoH path blocks ads, trackers, malware and CNAME-cloaked trackers. The default list is [ShieldNova](https://github.com/harryheros/shieldnova) (free to use in DNSNova, commercially too); AdGuard-style, hosts and domain lists also work. A broken list update never replaces a working list, *Check a domain* shows which list blocks a name, and one click allows it again.
-- **Local names** such as `nas.home`, blocked clients, and EDNS Client Subnet for a network you choose (never your clients' addresses).
+- **Opt-in filtering**: the usual addresses answer everything; a second address, name or DoH path blocks ads, trackers, malware and CNAME-cloaked trackers. The default list is [ShieldNova](https://github.com/harryheros/shieldnova) (free to use in DNSNova, commercially too); AdGuard-style, hosts, RPZ and domain lists also work. A broken list update never replaces a working list, *Check a domain* shows which list blocks a name, and one click allows it again.
+- **Local names** such as `nas.home`; **domains with their own servers**, such as an office's Active Directory or a router's device names, asked only there; blocked clients; and EDNS Client Subnet for a network you choose (never your clients' addresses).
 
 ### On the internet
 
@@ -62,7 +62,7 @@ The wizard sets the administrator, who the server is for, recursion or upstreams
 ### Many servers
 
 - **One configuration for a fleet**: a primary sends its settings to followers over an encrypted, authenticated channel; a node that cannot apply them keeps the last working ones and reports why. A Nodes page shows the fleet ([docs/cluster.md](./docs/cluster.md)).
-- **Anycast with health checks**: the route is announced while the node can answer and withdrawn when it cannot, and first at shutdown, while traffic drains.
+- **Anycast with health checks**: the route is announced while the node can answer and withdrawn when it cannot, and first at shutdown, while traffic drains. Clients can ask which node answered (`dig +nsid`).
 
 ### Running it
 

@@ -47,6 +47,7 @@ const (
 	RcodeBadCookie = 23
 
 	// EDNS options (RFC 6891).
+	OptNSID    = 3  // Name Server Identifier, RFC 5001
 	OptCookie  = 10 // DNS Cookies, RFC 7873
 	OptPadding = 12 // RFC 7830
 	OptEDE     = 15 // Extended DNS Errors, RFC 8914
@@ -104,6 +105,8 @@ type Query struct {
 	// one defined); Padding reports whether the client padded its query.
 	EDNSVersion uint8
 	Padding     bool
+	// NSID reports whether the client asked which server answered (RFC 5001).
+	NSID bool
 	// Cookie is the data of the client's COOKIE option (RFC 7873): its
 	// client cookie and, after the first exchange, a server cookie. Nil
 	// when the query had none. Its length is 8 or 16 to 40 bytes; any
@@ -313,6 +316,8 @@ func ParseQuery(msg []byte) (*Query, int, error) {
 				switch code {
 				case OptPadding:
 					q.Padding = true
+				case OptNSID:
+					q.NSID = true
 				case OptCookie:
 					n := len(data)
 					if q.Cookie != nil || (n != 8 && (n < 16 || n > 40)) {
@@ -333,7 +338,7 @@ func ParseQuery(msg []byte) (*Query, int, error) {
 	})
 	if err != nil {
 		// nothing read from a rejected OPT record is kept
-		q.EDNS, q.DO, q.UDPSize, q.EDNSVersion, q.Padding, q.Cookie = false, false, 0, 0, false, nil
+		q.EDNS, q.DO, q.UDPSize, q.EDNSVersion, q.Padding, q.NSID, q.Cookie = false, false, 0, 0, false, false, nil
 		return q, RcodeFormErr, nil
 	}
 	if q.EDNS && q.EDNSVersion != 0 {
@@ -461,6 +466,13 @@ func AddOptions(msg, opts []byte) []byte {
 	out := append(msg, opts...)
 	binary.BigEndian.PutUint16(out[o+9:], uint16(rdl))
 	return out
+}
+
+// NSID returns an NSID option (RFC 5001) carrying id.
+func NSID(id string) []byte {
+	b := binary.BigEndian.AppendUint16(nil, OptNSID)
+	b = binary.BigEndian.AppendUint16(b, uint16(len(id)))
+	return append(b, id...)
 }
 
 // Pad adds an EDNS Padding option (RFC 7830) so the message length becomes

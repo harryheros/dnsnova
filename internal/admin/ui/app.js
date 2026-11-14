@@ -1916,6 +1916,7 @@ const SETTINGS = {
       ] },
       { title: "Local names", fields: [
         { key: "local.records", label: "Names answered here", type: "list", help: "One per line: a name and an address, such as \u201cnas.home 192.168.1.5\u201d. \u201c*.dev.home\u201d covers every name under dev.home. For IPv4 and IPv6, use two lines. 0.0.0.0 blocks a name." },
+        { key: "local.forward", label: "Domains with their own servers", type: "list", help: "One per line: a domain and its servers, such as \u201ccorp.example 10.0.0.53\u201d or \u201clan 192.168.1.1\u201d. Names under it are asked from those servers only (an office\u2019s Active Directory, a router\u2019s device names), also private reverse zones such as 168.192.in-addr.arpa. Servers are written as upstreams are." },
       ] },
       { title: "Clients", fields: [
         { key: "ddr.enabled", label: "Discovery (DDR)", type: "bool", help: "Devices asking over plain DNS learn the encrypted addresses and switch automatically." },
@@ -1934,7 +1935,7 @@ const SETTINGS = {
         { key: "filter.all", label: "Filter every address", type: "bool", help: "For a home or office server where everyone should be filtered.", show: (v) => v["filter.enabled"] },
       ] },
       { title: "Lists", action: ["Update now", async () => { const st = await api("POST", "/filter/update"); toast(`${st.rules.toLocaleString()} rules in force`); }], fields: [
-        { key: "filter.lists", label: "Block lists", type: "list", help: "List URLs, one per line: adblock domain rules, hosts files or plain domains. Preset: ShieldNova, with few false positives, free to use in DNSNova, commercially too (other uses need its license).", show: (v) => v["filter.enabled"] },
+        { key: "filter.lists", label: "Block lists", type: "list", help: "List URLs, one per line: adblock domain rules, hosts files, RPZ zones or plain domains. Preset: ShieldNova, with few false positives, free to use in DNSNova, commercially too (other uses need its license).", show: (v) => v["filter.enabled"] },
         { key: "filter.update_interval", adv: true, label: "Update every", type: "text", help: "Such as 24h. A failed or much shorter download keeps the copy in use.", show: (v) => v["filter.enabled"] },
       ] },
       { title: "Your rules", fields: [

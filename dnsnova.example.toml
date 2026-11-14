@@ -152,6 +152,15 @@ records = [
   # "nas.home 192.168.1.5",
   # "*.lab.home 192.168.1.9",
 ]
+# Domains with servers of their own: "domain server [server...]". Names
+# under the domain are asked from these servers only, never from upstreams
+# or the root, and private reverse zones listed here are no longer answered
+# NXDOMAIN. Servers are written as upstreams are; several are asked at once.
+forward = [
+  # "corp.example 10.0.0.53 10.0.0.54",    # an office's Active Directory
+  # "lan 192.168.1.1",                     # a router's device names
+  # "168.192.in-addr.arpa 192.168.1.1",    # and their reverse lookups
+]
 
 [ecs]
 # EDNS Client Subnet: send this network (an address stands for its /24 or
@@ -223,6 +232,7 @@ enabled = false
 #   DoH        the path doh_path, or a name in names
 # Set all = true to filter every address instead.
 enabled = false
+# Adblock domain rules, hosts files, RPZ zones or one domain per line.
 # lists = ["https://raw.githubusercontent.com/harryheros/shieldnova/main/dist/shieldnova-full.txt"]
 # block = ["example-ads.com"]       # your own rules: the name and everything under it
 # allow = ["needed.example.com"]    # always answered, whatever the lists say
@@ -239,7 +249,8 @@ enabled = false
 # Several servers sharing one configuration (docs/cluster.md). No role: a
 # standalone server. Set only in this file; applies after a restart.
 # role = "primary"            # or "follower"
-# name = "ams-1"              # default: the host name
+# name = "ams-1"              # default: the host name. Also what clients
+#                             # asking which node answered get (dig +nsid)
 # region = "Amsterdam"
 # listen = "10.0.0.1:7001"    # primary: where followers reach it
 # primary = "10.0.0.1:7001"   # follower: the primary

@@ -121,6 +121,11 @@ drain = "5s"      # at shutdown: withdraw, then keep answering this long
 - **A command that fails** is logged and tried again at the next check.
 - The state is on the Nodes page, in `/healthz` (`"anycast"`) and in the
   metrics (`dnsnova_anycast_announced`).
+- **Which node answered**: a node of a cluster or behind anycast gives its
+  `cluster.name` (default: the host name) to clients that ask, with NSID
+  (RFC 5001) or a CH TXT query for `id.server`:
+  `dig +nsid @dns.example.com example.com` or
+  `dig CH TXT id.server @dns.example.com`. A single server says nothing.
 
 The commands run as the dnsnova user, without a shell, and come only from
 the file on the server: neither the web interface nor a cluster primary can

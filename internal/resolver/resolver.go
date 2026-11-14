@@ -54,6 +54,13 @@ type Settings struct {
 	// every upstream query: one fixed network, the same for all clients,
 	// so the cache holds one view. Changing it clears the cache.
 	ECS []byte
+	// Forward sends names under some domains to servers of their own
+	// (local.forward), never to the upstreams. Nil: none.
+	Forward *Forwards
+	// ServerID names this server to clients that ask which one answered:
+	// NSID (RFC 5001) and CH TXT id.server, for telling the nodes behind
+	// one anycast address apart. Empty: not said.
+	ServerID string
 }
 
 var (
@@ -93,10 +100,10 @@ func New(s Settings, ups Exchanger, st *stats.Stats) *Resolver {
 // SetSettings applies new settings; cached answers are kept.
 func (r *Resolver) SetSettings(s Settings) {
 	old := r.set.Load()
-	if old != nil && !bytes.Equal(old.ECS, s.ECS) {
+	if old != nil && (!bytes.Equal(old.ECS, s.ECS) || old.Forward.spec() != s.Forward.spec()) {
 		r.netMu.Lock() // waits for lookups under the old network
 		r.set.Store(&s)
-		r.cache.clear() // answers for another network
+		r.cache.clear() // answers for another network, or from other servers
 		r.netMu.Unlock()
 	} else {
 		r.set.Store(&s)
@@ -189,6 +196,9 @@ func (r *Resolver) resolve(req []byte, o Opts, mayFetch bool) (Result, bool) {
 	if rc != 0 {
 		return f.done(Result{Resp: m.ErrorResponse(req, q, rc), Q: q, Source: stats.SourceLocal, Status: strings.ToLower(m.RcodeString(rc))}, nil), true
 	}
+	if s.ServerID != "" && q.Class == classCH && q.Type == typeTXT && (q.Name == wireIDServer || q.Name == wireHostnameBind) {
+		return f.done(Result{Resp: m.Answer(req, q, 0, txt(s.ServerID)), Q: q, Source: stats.SourceLocal, Status: "local"}, nil), true
+	}
 	switch {
 	case q.Class != m.ClassIN, q.Type == m.TypeAXFR, q.Type == m.TypeIXFR:
 		return f.done(Result{Resp: m.ErrorResponse(req, q, m.RcodeRefused), Q: q, Source: stats.SourceLocal, Status: "refused"},
@@ -205,7 +215,10 @@ func (r *Resolver) resolve(req []byte, o Opts, mayFetch bool) (Result, bool) {
 			return f.done(Result{Resp: resp, Q: q, Source: stats.SourceLocal, Status: "local"}, nil), true
 		}
 	}
-	if resp := localAnswer(req, q, s); resp != nil {
+	// A forwarded domain is the administrator's own: its servers answer,
+	// also for private reverse zones otherwise answered here.
+	forwarded := s.Forward.match(q.Name) != nil
+	if resp := localAnswer(req, q, s); resp != nil && !forwarded {
 		return f.done(Result{Resp: resp, Q: q, Source: stats.SourceLocal, Status: "local"}, nil), true
 	}
 	if q.Flags&m.FlagRD == 0 {
@@ -328,7 +341,11 @@ func (f finisher) done(res Result, ede []byte) Result {
 		}
 	}
 	if res.Resp != nil && f.q != nil && f.q.EDNS {
-		res.Resp = m.AddOptions(res.Resp, append(slices.Clip(ede), res.CookieOpt...))
+		opts := append(slices.Clip(ede), res.CookieOpt...)
+		if f.q.NSID && f.s.ServerID != "" {
+			opts = append(opts, m.NSID(f.s.ServerID)...)
+		}
+		res.Resp = m.AddOptions(res.Resp, opts)
 	}
 	if res.Resp != nil && f.q != nil {
 		full := res.Resp
@@ -378,7 +395,16 @@ func (r *Resolver) fetch(q *m.Query) (*entry, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.Timeout)
 	defer cancel()
 	var e *entry
-	resp, err := r.ups.Load().x.Exchange(ctx, m.BuildUpstreamQuery(q, s.ECS))
+	x, ecs := r.ups.Load().x, s.ECS
+	fwd := s.Forward.match(q.Name)
+	if fwd != nil {
+		x, ecs = fwd, nil // a private server: no client subnet
+	}
+	resp, err := x.Exchange(ctx, m.BuildUpstreamQuery(q, ecs))
+	if err == nil && fwd != nil && len(resp) >= m.HeaderLen {
+		// Not validated here, and a router's AD bit says nothing: no AD.
+		binary.BigEndian.PutUint16(resp[2:], m.U16(resp, 2)&^m.FlagAD)
+	}
 	if err == nil {
 		e, err = analyze(resp, q)
 	}

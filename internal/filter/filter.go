@@ -1,6 +1,6 @@
 // Package filter decides which names the filtered service blocks. It reads
 // domain block lists (AdGuard / ABP domain rules such as ShieldNova's,
-// hosts files, or one domain per line), adds the operator's own rules and
+// hosts files, RPZ zones or one domain per line), adds the operator's own rules and
 // matches query names against them.
 //
 // Only domain rules are used; rules that depend on a page, a path, a regular
@@ -122,17 +122,26 @@ type Counts struct {
 //	||example.com^          block example.com and every name under it
 //	@@||example.com^        never block them
 //	0.0.0.0 a.com b.com     hosts file: block exactly these names
+//	a.com CNAME .           RPZ zone (see rpzRecord)
 //	example.com             one domain per line: block it and every name under it
 //
-// "!" and "#" start comments; "$important" is accepted, other modifiers
+// "!", "#" and ";" start comments; "$important" is accepted, other modifiers
 // make a rule page-specific and it is skipped.
 func Parse(r io.Reader, b *Builder) (Counts, error) {
 	var c Counts
+	var z zoneState
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64<<10), 1<<20)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
-		if line == "" || line[0] == '!' || line[0] == '#' || line[0] == '[' {
+		if z.paren { // the rest of a record split over lines, such as an SOA
+			z.paren = !strings.Contains(stripZoneComment(line), ")")
+			continue
+		}
+		if line == "" || line[0] == '!' || line[0] == '#' || line[0] == '[' || line[0] == ';' {
+			continue
+		}
+		if z.directive(line) {
 			continue
 		}
 		// An inline comment after an adblock rule, as in "||a.com^   ! tracker".
@@ -157,7 +166,7 @@ func Parse(r io.Reader, b *Builder) (Counts, error) {
 		case strings.ContainsAny(line, " \t"):
 			fields := strings.Fields(line)
 			if _, err := netip.ParseAddr(fields[0]); err != nil {
-				c.Skipped++
+				z.record(stripZoneComment(line), b, &c)
 				continue
 			}
 			for _, f := range fields[1:] {
