@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="217 -40 974 1124" role="img" aria-label="Futuristic polished titanium trident emblem with electric blue neon accents">
+<defs>
+ <linearGradient id="silver" x1="0" y1="0" x2=".85" y2="1"><stop stop-color="#ffffff"/><stop offset=".22" stop-color="#eaf4ff"/><stop offset=".48" stop-color="#8fa6c9"/><stop offset=".66" stop-color="#f9fcff"/><stop offset=".83" stop-color="#8b9bb7"/><stop offset="1" stop-color="#e5f4ff"/></linearGradient>
+ <linearGradient id="bright" x1=".08" y1="0" x2=".88" y2="1"><stop stop-color="#ffffff"/><stop offset=".28" stop-color="#f7fcff"/><stop offset=".53" stop-color="#b6c9e4"/><stop offset=".72" stop-color="#faffff"/><stop offset="1" stop-color="#7e96ba"/></linearGradient>
+ <linearGradient id="dark" x1="0" y1="0" x2="1" y2=".7"><stop stop-color="#152640"/><stop offset=".35" stop-color="#7f95b5"/><stop offset=".65" stop-color="#263a59"/><stop offset="1" stop-color="#101d34"/></linearGradient>
+ <linearGradient id="centerLeft" gradientUnits="userSpaceOnUse" x1="566" y1="150" x2="709" y2="345"><stop stop-color="#ffffff"/><stop offset=".34" stop-color="#f9fdff"/><stop offset=".58" stop-color="#b6c9e5"/><stop offset=".79" stop-color="#f6faff"/><stop offset="1" stop-color="#869cbd"/></linearGradient>
+ <linearGradient id="centerRight" gradientUnits="userSpaceOnUse" x1="704" y1="100" x2="834" y2="370"><stop stop-color="#263f61"/><stop offset=".30" stop-color="#6682ac"/><stop offset=".60" stop-color="#d5e4f8"/><stop offset=".82" stop-color="#ffffff"/><stop offset="1" stop-color="#7186a8"/></linearGradient>
+ <linearGradient id="stemLeft" gradientUnits="userSpaceOnUse" x1="625" y1="390" x2="710" y2="400"><stop stop-color="#e9f4ff"/><stop offset=".37" stop-color="#ffffff"/><stop offset=".72" stop-color="#a2b6d2"/><stop offset="1" stop-color="#4b607f"/></linearGradient>
+ <linearGradient id="stemRight" gradientUnits="userSpaceOnUse" x1="705" y1="420" x2="784" y2="435"><stop stop-color="#6b82a5"/><stop offset=".52" stop-color="#253956"/><stop offset="1" stop-color="#9db3d3"/></linearGradient>
+ <linearGradient id="sideLight" gradientUnits="userSpaceOnUse" x1="330" y1="320" x2="475" y2="465"><stop stop-color="#ffffff"/><stop offset=".35" stop-color="#f5faff"/><stop offset=".65" stop-color="#afc2df"/><stop offset=".85" stop-color="#ffffff"/><stop offset="1" stop-color="#899ebd"/></linearGradient>
+ <linearGradient id="sideDark" gradientUnits="userSpaceOnUse" x1="438" y1="285" x2="498" y2="497"><stop stop-color="#283d5c"/><stop offset=".40" stop-color="#6e86aa"/><stop offset=".80" stop-color="#c2d5ef"/><stop offset="1" stop-color="#263a59"/></linearGradient>
+ <linearGradient id="arm" gradientUnits="userSpaceOnUse" x1="370" y1="590" x2="715" y2="760"><stop stop-color="#faffff"/><stop offset=".20" stop-color="#b1c4df"/><stop offset=".40" stop-color="#ffffff"/><stop offset=".66" stop-color="#8b9fbe"/><stop offset=".83" stop-color="#edf7ff"/><stop offset="1" stop-color="#536a8d"/></linearGradient>
+ <linearGradient id="armShade" gradientUnits="userSpaceOnUse" x1="410" y1="670" x2="625" y2="748"><stop stop-color="#0c1a33"/><stop offset=".4" stop-color="#1d3a66"/><stop offset=".7" stop-color="#2b4c7e"/><stop offset="1" stop-color="#0b1730"/></linearGradient>
+ <linearGradient id="bottom" x1="0" y1="0" x2=".85" y2="1"><stop stop-color="#ffffff"/><stop offset=".36" stop-color="#b9cbe6"/><stop offset=".66" stop-color="#faffff"/><stop offset="1" stop-color="#819fc7"/></linearGradient>
+ <linearGradient id="electric" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#00f7ff"/><stop offset=".46" stop-color="#0073ff"/><stop offset="1" stop-color="#7cffff"/></linearGradient>
+ <filter id="halo" x="-70%" y="-70%" width="240%" height="240%"><feGaussianBlur stdDeviation="9"/></filter>
+ <filter id="wide" x="-70%" y="-70%" width="240%" height="240%"><feGaussianBlur stdDeviation="18"/></filter>
+ <filter id="soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="3"/></filter>
+ <path id="outer" d="M704 30 L868 389 Q816 373 783 368 L742 405 L742 602 Q742 621 761 627 L845 627 Q861 627 874 616 L942 561 L942 528 Q940 506 910 505 L921 211 L1120 508 Q1061 487 1039 520 L1039 639 L936 738 L816 738 Q788 757 772 790 L809 823 L704 1014 L598 823 L636 790 Q621 756 592 738 L477 738 L369 639 L369 520 Q349 489 287 508 L487 211 L499 505 Q470 503 465 526 L465 560 L536 616 Q549 627 565 627 L642 627 Q664 623 664 603 L664 405 L625 368 Q596 371 540 389 Z"/>
+ <path id="leftNeon" d="M541 388 Q604 378 625 390 Q638 401 638 421 L638 592 Q638 626 604 627 L555 627 Q539 627 523 616 L463 564 L463 527 Q462 506 485 504"/>
+ <path id="lowerNeon" d="M375 641 L484 735 L586 735 Q608 747 635 784"/>
+ <path id="leftEdge" d="M289 508 L487 211 M704 31 L541 389 M602 822 L704 1013"/>
+</defs>
+<!-- All artwork below is genuine editable vector geometry; no embedded raster. -->
+<g fill="none" stroke="#0a6cff" stroke-width="34" opacity=".55" filter="url(#wide)"><use href="#outer"/></g>
+<g fill="none" stroke="#1a86ff" stroke-width="16" opacity=".95" filter="url(#halo)"><use href="#outer"/><use href="#leftNeon"/><use href="#lowerNeon"/><use href="#leftNeon" transform="translate(1408 0) scale(-1 1)"/><use href="#lowerNeon" transform="translate(1408 0) scale(-1 1)"/></g>
+<use href="#outer" fill="#12243d" stroke="#0a4baf" stroke-width="3"/>
+<!-- Central spear, four broad uninterrupted facets -->
+<path d="M704 30 L704 293 L540 389 Z" fill="url(#centerLeft)"/>
+<path d="M704 30 L868 389 L704 293 Z" fill="url(#centerRight)"/>
+<path d="M540 389 L704 293 L704 691 L664 655 L664 405 L625 368 Z" fill="url(#stemLeft)"/>
+<path d="M704 293 L868 389 L783 368 L742 405 L742 603 L704 691 Z" fill="url(#stemRight)"/>
+<!-- Left and right arrowhead mirrored facets -->
+<g id="leftHead"><path d="M487 211 L430 423 L287 508 Z" fill="url(#sideLight)"/><path d="M487 211 L499 505 L430 423 Z" fill="url(#sideDark)"/><path d="M287 508 L430 423 L499 505 L430 450 Z" fill="url(#dark)" opacity=".8"/><path d="M487 211 L287 508" stroke="#e7fcff" stroke-width="2.2" opacity=".8"/></g>
+<use href="#leftHead" transform="translate(1408 0) scale(-1 1)"/>
+<!-- Outer upright supports -->
+<g id="leftSupport"><path d="M287 508 Q352 489 369 520 L369 639 L430 601 L430 450 Z" fill="url(#dark)"/><path d="M369 520 Q363 506 341 504 Q381 494 392 535 L392 607 L369 639 Z" fill="#172c4a"/><path d="M430 450 L499 505 Q467 503 465 526 L465 560 L536 616 L565 627 L642 627 L704 691 L704 823 L606 741 L592 738 L477 738 L369 639 L430 601 Z" fill="url(#arm)"/><path d="M369 639 L477 738 L592 738 Q621 756 636 790 L622 807 Q600 768 580 759 L478 758 Z" fill="url(#armShade)"/><path d="M430 450 L430 601 L369 639 L392 608 L392 531 Z" fill="url(#silver)" opacity=".92"/><path d="M430 450 L430 570 L465 601 L536 653 L607 653 L704 725 L704 691 L642 627 L565 627 L536 616 L465 560 L465 526 Q470 503 499 505 Z" fill="url(#bright)" opacity=".92"/></g>
+<use href="#leftSupport" transform="translate(1408 0) scale(-1 1)"/>
+<!-- Symmetrical bottom tip and clean junction -->
+<path d="M636 790 L704 824 L772 790 L809 823 L704 1014 L598 823 Z" fill="url(#dark)" stroke="#729cce" stroke-width="2"/>
+<path d="M598 823 L704 854 L704 1014 Z" fill="url(#bottom)"/>
+<path d="M809 823 L704 854 L704 1014 Z" fill="url(#centerRight)"/>
+<path d="M598 823 L636 790 L704 824 L772 790 L809 823 L704 854 Z" fill="url(#bright)"/>
+<!-- Embedded inset light slots -->
+<g id="slot"><path d="M389 533 L407 548 L407 591 L389 607 Z" fill="#0b254a" stroke="#8db9e8" stroke-width="2"/><path d="M395 542 L401 551 L401 588 L395 595 Z" fill="#04dfff" filter="url(#soft)"/><path d="M395 542 L401 551 L401 588 L395 595 Z" fill="#63faff"/></g>
+<use href="#slot" transform="translate(1408 0) scale(-1 1)"/>
+<!-- Deliberate, continuous neon routes, three levels of glow -->
+<g fill="none" stroke-linejoin="round" stroke-linecap="round">
+ <g stroke="#0a6cff" stroke-width="30" opacity=".85" filter="url(#halo)"><use href="#leftNeon"/><use href="#leftNeon" transform="translate(1408 0) scale(-1 1)"/><use href="#lowerNeon"/><use href="#lowerNeon" transform="translate(1408 0) scale(-1 1)"/></g>
+ <g stroke="#1a7dff" stroke-width="14" opacity=".9" filter="url(#soft)"><use href="#leftNeon"/><use href="#leftNeon" transform="translate(1408 0) scale(-1 1)"/><use href="#lowerNeon"/><use href="#lowerNeon" transform="translate(1408 0) scale(-1 1)"/></g>
+ <g stroke="#2a8cff" stroke-width="6"><use href="#leftNeon"/><use href="#leftNeon" transform="translate(1408 0) scale(-1 1)"/><use href="#lowerNeon"/><use href="#lowerNeon" transform="translate(1408 0) scale(-1 1)"/></g>
+ <g stroke="#8ffcff" stroke-width="2.4"><use href="#leftNeon"/><use href="#leftNeon" transform="translate(1408 0) scale(-1 1)"/><use href="#lowerNeon"/><use href="#lowerNeon" transform="translate(1408 0) scale(-1 1)"/></g>
+</g>
+<!-- Controlled rim lighting, not stray scribbles -->
+<g fill="none" stroke-linecap="round" stroke-linejoin="round"><g stroke="#1a80ff" stroke-width="12" opacity=".9" filter="url(#soft)"><use href="#leftEdge"/><use href="#leftEdge" transform="translate(1408 0) scale(-1 1)"/></g><g stroke="#00cfff" stroke-width="3"><use href="#leftEdge"/><use href="#leftEdge" transform="translate(1408 0) scale(-1 1)"/></g><path d="M704 53 L704 289" stroke="#f7ffff" stroke-width="1.5" opacity=".7"/><path d="M704 854 L704 989" stroke="#eaffff" stroke-width="2" opacity=".85"/></g>
+</svg>
