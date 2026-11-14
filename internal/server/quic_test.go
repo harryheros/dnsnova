@@ -106,14 +106,11 @@ func (q *quicServer) edit(t *testing.T, old, new string) {
 	}
 }
 
+// freeUDPAddr is freeAddr: DoQ and HTTP/3 listen over UDP on addresses that
+// TCP listeners share.
 func freeUDPAddr(t *testing.T) string {
 	t.Helper()
-	c, err := net.ListenPacket("udp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
-	return c.LocalAddr().String()
+	return freeAddr(t)
 }
 
 func clientTLS(pool *x509.CertPool, alpn string) *tls.Config {
