@@ -83,21 +83,16 @@ const LINE = {
   book: [["path", { d: "M4 19.5V5a2 2 0 0 1 2-2h14v16H6.5A2.5 2.5 0 0 0 4 21.5zM4 19.5A2.5 2.5 0 0 1 6.5 17H20" }]],
 };
 
-// The DNSNova mark (docs/design.md, Brand): from 48 px up, the full
-// metal-and-light picture (mark.webp, 384 px, so sharp on high-density
-// screens); below, a solid silhouette of the same outline, which stays
-// legible where the picture's detail would blur.
-const MARK_SMALL = "M704 30 L868 389 Q816 373 783 368 L742 405 L742 602 Q742 621 761 627 L845 627 Q861 627 874 616 L942 561 L942 528 Q940 506 910 505 L921 211 L1120 508 Q1061 487 1039 520 L1039 639 L936 738 L816 738 Q788 757 772 790 L809 823 L704 1014 L598 823 L636 790 Q621 756 592 738 L477 738 L369 639 L369 520 Q349 489 287 508 L487 211 L499 505 Q470 503 465 526 L465 560 L536 616 Q549 627 565 627 L642 627 Q664 623 664 603 L664 405 L625 368 Q596 371 540 389 Z";
+// The DNSNova mark (docs/design.md, Brand): the metal-and-light drawing,
+// mark.svg. The browser tab icon is a solid silhouette instead (logo.svg).
+// The drawing leaves room for its glow, so it is set a little larger than a
+// plain icon would be.
 let markSeq = 0;
 function stops(prefix, offsets) {
   return offsets.map((o, i) => s("stop", { offset: o, class: prefix + i }));
 }
 function brandMark(size = 28, glow = false) {
-  if (size < 48) {
-    return s("svg", { width: size, height: size, viewBox: "277 20 853 1004", "aria-hidden": "true", class: "mark small" },
-      s("path", { d: MARK_SMALL, fill: "#1478f5" }));
-  }
-  return h("img", { src: "/assets/mark.webp", width: size, height: size, alt: "", "aria-hidden": "true", class: "mark" + (glow ? " glow" : ""), decoding: "async" });
+  return h("img", { src: "/assets/mark.svg", width: size, height: size, alt: "", "aria-hidden": "true", class: "mark" + (glow ? " glow" : ""), decoding: "async" });
 }
 
 // The wordmark: "DNSN" and small capitals "OVA" set in Exo 2 ExtraBold
@@ -364,7 +359,7 @@ async function showWizard(code, codeRequired) {
       h("li", { class: i < w.step ? "done" : "", "aria-current": i === w.step ? "step" : null },
         h("span", { class: "n" }, i < w.step ? "✓" : String(i + 1)), h("span", { class: "t" }, t))));
     mount(h("main", { class: "wizard" }, h("div", { class: "inner" },
-      h("div", { class: "wizhead" }, h("div", { class: "brand" }, brandMark(34, true), wordmark(), h("span", { class: "sub" }, "Setup")), themeIcons()),
+      h("div", { class: "wizhead" }, h("div", { class: "brand" }, brandMark(40, true), wordmark(), h("span", { class: "sub" }, "Setup")), themeIcons()),
       h("div", { class: "row" }, steps, body))));
     WIZ_VIEWS[w.step](w, body, render);
   };
@@ -682,7 +677,7 @@ function wizDone(w) {
   }, "Open the dashboard");
   const ssh = local && !hereLocal ? `ssh -L ${port}:127.0.0.1:${port} user@${location.hostname}` : "";
   mount(h("main", { class: "wizard" }, h("div", { class: "inner" },
-    h("div", { class: "wizhead" }, h("div", { class: "brand" }, brandMark(34, true), wordmark())),
+    h("div", { class: "wizhead" }, h("div", { class: "brand" }, brandMark(40, true), wordmark())),
     h("section", { class: "card wizbody done" },
       h("div", { class: "result ok" }, h("span", { class: "badge" }, s("svg", { width: 22, height: 22, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" }, s("path", { d: "M20 6 9 17l-5-5" }))),
         h("div", null, h("h1", { style: { margin: 0 } }, "DNSNova is running"), h("div", { class: "muted" }, "Now point your devices at it."))),
@@ -773,7 +768,7 @@ async function showApp() {
   const side = h("aside", { class: "side" },
     h("a", { class: "railbrand", href: "#/overview", title: "Overview", "aria-label": "DNSNova: go to the overview", onclick: home, style: { textDecoration: "none" } }, brandMark(96, true), wordmark("rail"), h("div", { class: "tagline" }, TAGLINE)),
     h("div", { class: "railtop" },
-      h("a", { class: "railhome", href: "#/overview", title: "Overview", "aria-label": "DNSNova: go to the overview", onclick: home }, brandMark(28, true), wordmark("rail")),
+      h("a", { class: "railhome", href: "#/overview", title: "Overview", "aria-label": "DNSNova: go to the overview", onclick: home }, brandMark(34, true), wordmark("rail")),
       menu),
     h("div", { class: "sidebody", id: "sidebody" }, nav, h("div", { class: "sidefoot" }, ver)));
   const setMenu = (open) => { side.classList.toggle("open", open); menu.setAttribute("aria-expanded", String(open)); menu.textContent = open ? "Close" : "Menu"; };
