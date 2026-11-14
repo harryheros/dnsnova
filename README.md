@@ -2,7 +2,7 @@
 
 > A secure DNS server, from one box at home to a public resolver on several continents.
 
-[![Version](https://img.shields.io/badge/version-v1.4.0-blue)](https://github.com/harryheros/dnsnova/releases)
+[![Version](https://img.shields.io/badge/version-v1.4.1-blue)](https://github.com/harryheros/dnsnova/releases)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](./LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux%20amd64%20%7C%20arm64-lightgrey.svg)](#)
 [![CI](https://github.com/harryheros/dnsnova/actions/workflows/ci.yml/badge.svg)](https://github.com/harryheros/dnsnova/actions/workflows/ci.yml)
@@ -98,7 +98,7 @@ For encrypted DNS only, choose *Only this server* in the wizard: plain DNS then 
 - [tools/resolver-check.sh](./tools/resolver-check.sh): compares a running server with a reference resolver (popular domains, DNSSEC, minimal names, TCP, response times): `bash resolver-check.sh <server-ip>`.
 - [CHANGELOG.md](./CHANGELOG.md), [PRIVACY.md](./PRIVACY.md), [SECURITY.md](./SECURITY.md) (report vulnerabilities privately).
 
-Build from source (Go 1.27 or later): `CGO_ENABLED=0 go build -o dnsnova ./cmd/dnsnova`. Tests: `go test -race ./...`; every parser is also fuzzed weekly.
+Build from source (Go 1.27.4 or later): `CGO_ENABLED=0 go build -o dnsnova ./cmd/dnsnova`. Tests: `go test -race ./...`; every parser is also fuzzed weekly.
 
 ## License
 

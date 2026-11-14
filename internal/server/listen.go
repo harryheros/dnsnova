@@ -67,8 +67,13 @@ func (s *Server) listenUDP(addr string) (*udpListener, error) {
 			return nil, err
 		}
 		c := pc.(*net.UDPConn)
-		c.SetReadBuffer(4 << 20)
-		c.SetWriteBuffer(4 << 20)
+		c.SetReadBuffer(udpBuffer)
+		c.SetWriteBuffer(udpBuffer)
+		if got, err := granted(c); err == nil {
+			if msg := shortBuffer(got, udpBuffer); msg != "" {
+				bufferWarned.Do(func() { s.Log.Warn(msg) })
+			}
+		}
 		if i == 0 {
 			l.conn = c
 			bind = c.LocalAddr().String() // with port 0 (tests), the port the first socket got

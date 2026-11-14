@@ -1,6 +1,6 @@
 module github.com/harryheros/dnsnova
 
-go 1.27
+go 1.27.4
 
 require (
 	github.com/quic-go/quic-go v0.65.0
