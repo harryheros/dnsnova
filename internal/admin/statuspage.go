@@ -65,7 +65,7 @@ type StatusPage struct {
 }
 
 // statusAssets are the files the status page may load.
-var statusAssets = map[string]bool{"app.css": true, "theme.js": true, "logo.svg": true, "status.js": true, "guides.js": true}
+var statusAssets = map[string]bool{"app.css": true, "theme.js": true, "logo.svg": true, "mark.svg": true, "status.js": true, "guides.js": true}
 
 // NewStatusPage returns the page's handler.
 func NewStatusPage(b PublicBackend) *StatusPage {

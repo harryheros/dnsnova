@@ -59,16 +59,13 @@ function line(name, size = 16) {
   return s("svg", { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true", class: "ic" },
     LINE[name].map(([tag, a]) => s(tag, a)));
 }
-// the DNSNova mark and wordmark, as in the admin interface (app.js); the
-// status page only uses the small mark
-const MARK_SMALL = "M704 30 L868 389 Q816 373 783 368 L742 405 L742 602 Q742 621 761 627 L845 627 Q861 627 874 616 L942 561 L942 528 Q940 506 910 505 L921 211 L1120 508 Q1061 487 1039 520 L1039 639 L936 738 L816 738 Q788 757 772 790 L809 823 L704 1014 L598 823 L636 790 Q621 756 592 738 L477 738 L369 639 L369 520 Q349 489 287 508 L487 211 L499 505 Q470 503 465 526 L465 560 L536 616 Q549 627 565 627 L642 627 Q664 623 664 603 L664 405 L625 368 Q596 371 540 389 Z";
+// the DNSNova mark and wordmark, as in the admin interface (app.js)
 let markSeq = 0;
 function stops(prefix, offsets) {
   return offsets.map((o, i) => s("stop", { offset: o, class: prefix + i }));
 }
 function logoMark(size = 28) {
-  return s("svg", { width: size, height: size, viewBox: "277 20 853 1004", "aria-hidden": "true", class: "mark small" },
-    s("path", { d: MARK_SMALL, fill: "#1478f5" }));
+  return h("img", { src: "/assets/mark.svg", width: size, height: size, alt: "", "aria-hidden": "true", class: "mark", decoding: "async" });
 }
 
 // The wordmark: "DNSN" and small capitals "OVA" set in Exo 2 ExtraBold
@@ -219,7 +216,7 @@ async function boot() {
     h("footer", { class: "dfoot" }, h("span", null, "DNSNova · AGPL-3.0"), h("a", { href: "https://github.com/harryheros/dnsnova", rel: "noopener noreferrer" }, "Source code")));
 
   fill(app, h("div", { class: "pubwrap" },
-    h("header", { class: "pubtop" }, h("div", { class: "brand" }, logo(32), wordmark()), themeToggle()),
+    h("header", { class: "pubtop" }, h("div", { class: "brand" }, logo(38), wordmark()), themeToggle()),
     h("main", { class: "dash" }, hero, guide, addresses, privacy, about)));
   if (info.check) runCheck(info, checkBox);
 }
