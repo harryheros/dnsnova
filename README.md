@@ -2,24 +2,28 @@
 
 > A secure DNS server, from one box at home to a public resolver on several continents.
 
-[![Version](https://img.shields.io/badge/version-v1.5.0-blue)](https://github.com/harryheros/dnsnova/releases)
+[![Version](https://img.shields.io/badge/version-v1.6.0-blue)](https://github.com/harryheros/dnsnova/releases)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](./LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux%20amd64%20%7C%20arm64-lightgrey.svg)](#)
 [![CI](https://github.com/harryheros/dnsnova/actions/workflows/ci.yml/badge.svg)](https://github.com/harryheros/dnsnova/actions/workflows/ci.yml)
 [![Fuzz](https://github.com/harryheros/dnsnova/actions/workflows/fuzz.yml/badge.svg)](https://github.com/harryheros/dnsnova/actions/workflows/fuzz.yml)
 
-DNSNova resolves names itself, from the root servers with DNSSEC, or forwards them to upstreams you choose. It answers over plain DNS, DNS over TLS, DNS over QUIC and DNS over HTTPS. One program, no dependencies, managed from the browser, no query logs.
+DNSNova resolves names itself, from the root servers with DNSSEC, or forwards them to upstreams you choose. It answers over plain DNS, DNS over TLS, DNS over QUIC and DNS over HTTPS. One program, no dependencies, managed from the browser, no query logs unless you choose to keep them.
 
 **At home or in an office**: a private resolver with optional ad and tracker blocking, set up in minutes. **On the internet**: a public resolver built to be exposed, with rate limits, DNS Cookies, a security self-check, multi-node clusters behind anycast, and alerts.
 
 ![The DNSNova web interface](./docs/images/overview.webp)
 
-## New in 1.5
+## New in 1.6
 
-- **Domains with their own servers**: `corp.example` to an office's Active Directory, `lan` and its reverse lookups to the router; asked only there.
-- **RPZ block lists**: threat feeds in RPZ format (URLhaus, ThreatFox, HaGeZi) work as filter lists.
-- **Which node answered**: cluster and anycast nodes answer `dig +nsid` and `id.server` with their name.
+For offices and other networks that must account for their DNS, all off by default:
 
+- **Query records**: every query kept on disk for the days you choose, searchable and downloadable in the web interface.
+- **Client groups**: devices sorted by network, each group with its own filtering and its own blocked or allowed domains.
+- **dnstap**: every query and answer sent to a SIEM or log collector.
+- **New domains**: a notice when a domain is looked up here for the first time, often the first sign of phishing.
+
+1.5 added domains with their own servers (an office's Active Directory, a router's names), RPZ block lists and `dig +nsid`.
 1.4 made recursion work without upstreams on networks that tamper with DNS ([details](./docs/restricted-networks.md)).
 
 Upgrading from 1.2 or earlier: see the [changelog](./CHANGELOG.md) first.
@@ -50,6 +54,7 @@ The wizard sets the administrator, who the server is for, recursion or upstreams
 - **Plain and encrypted DNS**: UDP and TCP on port 53, DNS over TLS, DNS over QUIC and DNS over HTTPS (HTTP/2 and HTTP/3), with an automatic Let's Encrypt certificate.
 - **Recursion or forwarding**: resolve from the root servers with DNSSEC validation and minimal names, so no third party sees the queries; or forward to upstreams such as Cloudflare or Quad9 over DoH (HTTP/2 or HTTP/3), DoT or DoQ. With both, upstreams are used only when a domain's own servers cannot be reached.
 - **Opt-in filtering**: the usual addresses answer everything; a second address, name or DoH path blocks ads, trackers, malware and CNAME-cloaked trackers. The default list is [ShieldNova](https://github.com/harryheros/shieldnova) (free to use in DNSNova, commercially too); AdGuard-style, hosts, RPZ and domain lists also work. A broken list update never replaces a working list, *Check a domain* shows which list blocks a name, and one click allows it again.
+- **Client groups**: devices sorted by network, each group with its own filtering and its own blocked or allowed domains (the finance office filtered, the lab never, social networks blocked for guests).
 - **Local names** such as `nas.home`; **domains with their own servers**, such as an office's Active Directory or a router's device names, asked only there; blocked clients; and EDNS Client Subnet for a network you choose (never your clients' addresses).
 
 ### On the internet
@@ -67,11 +72,13 @@ The wizard sets the administrator, who the server is for, recursion or upstreams
 ### Running it
 
 - **Web interface**: queries per second, response times, cache hit rate and traffic history, query flow by protocol, upstream health, top domains, and every setting, previewed before it is applied and kept in a history.
+- **New domains**: tells, on the page and through alerts, when a domain is looked up here for the first time, often the first sign of phishing; one click blocks it. It keeps only hashes, no list of domains.
+- **Query records and dnstap** (off by default): keep every query on disk for a number of days, searchable and downloadable in the web interface, or send them as dnstap to a SIEM or log collector; the status page says so.
 - **Alerts and monitoring**: Telegram, Discord, Slack or webhook notifications, a heartbeat for outside monitors, Prometheus metrics and a health check ([docs/alerts.md](./docs/alerts.md)).
 - **Diagnostics**: trace any lookup from the root, server by server; a DNSSEC page of failing domains, each exemptible (RFC 7646); an in-memory query log that stops by itself.
 - **Fast**: on one CPU core, about 200,000 answers per second from the cache, 94,000 over DNS over TLS, and 23,000 for new names forwarded to an upstream; a 225,000-rule blocklist costs about 14% ([method](./docs/benchmark.md)).
 - **Quick to recover**: the cache survives restarts (by default on public servers), and recent failures are remembered so a broken domain cannot flood upstreams.
-- **Private**: queries and client addresses are never written to disk; no telemetry ([PRIVACY.md](./PRIVACY.md)).
+- **Private by default**: queries and client addresses are not written to disk unless you choose to keep them for a number of days, as an office may have to (searchable and downloadable in the web interface, and shown on the status page); no telemetry ([PRIVACY.md](./PRIVACY.md)).
 - **Status page** (optional): addresses, setup steps per device, and a check that shows visitors whether they use the server.
 
 ## Encrypted DNS

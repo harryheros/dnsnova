@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/harryheros/dnsnova/internal/config"
+	"github.com/harryheros/dnsnova/internal/dnstap"
 	"github.com/harryheros/dnsnova/internal/events"
 	"github.com/harryheros/dnsnova/internal/filter"
 	"github.com/harryheros/dnsnova/internal/insight"
@@ -63,6 +64,12 @@ type Backend interface {
 	Tops(span time.Duration) Tops
 	// QueryLog is the in-memory query log.
 	QueryLog() *insight.QueryLog
+	// Archive keeps queries on disk (log.query_days).
+	Archive() *insight.Archive
+	// Dnstap describes the sending of queries to a log collector.
+	Dnstap() dnstap.State
+	// NOD describes newly observed domains; ok is false when it is off.
+	NOD() (st insight.NODState, recent []insight.NewDomain, ok bool)
 	Upstreams() []Upstream
 	Certificate() tlsmgr.Status
 	Events(limit int) []events.Event
@@ -283,6 +290,12 @@ func (a *Admin) routes() {
 	m.Handle("GET /api/v1/querylog", auth(a.getQueryLog))
 	m.Handle("POST /api/v1/querylog", auth(a.startQueryLog))
 	m.Handle("DELETE /api/v1/querylog", auth(a.stopQueryLog))
+	m.Handle("GET /api/v1/querylog/archive", auth(a.searchArchive))
+	m.Handle("GET /api/v1/nod", auth(func(w http.ResponseWriter, r *http.Request, c *call) {
+		st, recent, on := a.b.NOD()
+		writeJSON(w, http.StatusOK, map[string]any{"on": on, "state": st, "domains": nonNil(recent)})
+	}))
+	m.Handle("GET /api/v1/querylog/files/{name}", auth(a.archiveFile))
 	m.Handle("GET /api/v1/system/addresses", auth(a.addresses))
 	m.Handle("GET /api/v1/cluster", auth(func(w http.ResponseWriter, r *http.Request, c *call) { writeJSON(w, http.StatusOK, a.b.Cluster()) }))
 	m.Handle("POST /api/v1/tools/lookup", auth(a.lookup))

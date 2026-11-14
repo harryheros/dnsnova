@@ -4,6 +4,49 @@ All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
 **Security**.
 
+## 1.6.0 (2026-11-14)
+
+For offices and other networks that must account for their DNS: everything
+here is off by default, and the status page says what is on.
+
+- **Query records** (`log.query_days`, off by default): every query kept on
+  disk for a number of days, for networks that must be able to tell later
+  which device looked up what. One plain tab-separated file per day in
+  data_dir/querylog, gzipped after the day, deleted past the days kept, and
+  all deleted when turned off. The Query log page then searches them (by
+  domain, client, blocked or failed answers, and day) and downloads each
+  day's file. Writing never delays an answer: if the disk falls behind,
+  records are dropped and counted. Client addresses are shortened unless
+  `log.query_full_ip` is set. The status page and the admin overview say
+  that queries are kept, for how long and with which addresses.
+- **Client groups** (`clients.groups`, Settings › DNS & upstreams ›
+  Clients): devices sorted by network, each group with its own filtering:
+  the block lists always, never, or as the address used decides, plus the
+  group's own blocked and allowed domains (which also apply to CNAME
+  chains). A device in several groups belongs to the narrowest network.
+  The query log and query records show each query's group, and blocks by a
+  group's rule are told apart from the block lists (and carry their own
+  Extended DNS Error text).
+- **dnstap** (`[dnstap]`, Settings › Admin › Log collector): every query
+  and answer sent as dnstap to a log collector (Vector, dnscollector, a
+  SIEM) over a Unix socket or TCP, with the Frame Streams handshake fstrm
+  readers expect; tested against dnstap-receiver. Queries, answers or
+  both; client networks only unless `dnstap.full_ip`. It reconnects by
+  itself and never delays an answer: while the collector is gone, messages
+  are dropped and counted (`dnsnova_dnstap_*` metrics, and the Query log
+  page). The status page says that queries are sent to a log collector.
+- **New domains** (`[nod]`, Settings › Filtering › New domains, and a
+  Status › New domains page): tells when a domain is looked up here for the
+  first time in 30 to 60 days, often the first sign of phishing or malware,
+  with the name asked and who asked first; one click blocks it. Sent to the
+  alert destinations as a notice at most every 10 minutes (webhook `status`
+  `event`, `kind` `new_domains`). It keeps no list of domains: two Bloom
+  filters of hashes under a random key (4 MB), saved so a restart does not
+  make every domain new, and deleted when turned off. When first on, it
+  learns quietly (`nod.learn`, 24h). Only real answers count (not blocked,
+  local or failed ones); `nod.ignore` exempts domains. Metrics
+  `dnsnova_new_domains_*`; the query log tags such queries "new".
+
 ## 1.5.0 (2026-11-14)
 
 - **Domains with their own servers** (`local.forward`): names under a

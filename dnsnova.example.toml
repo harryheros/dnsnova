@@ -162,6 +162,18 @@ forward = [
   # "168.192.in-addr.arpa 192.168.1.1",    # and their reverse lookups
 ]
 
+[clients]
+# Groups of devices, by network, each with its own filtering:
+#   "name network... [filter | nofilter] [block=a.com,b.com] [allow=c.com]"
+# filter: the block lists apply on every address; nofilter: never; neither:
+# the address used decides. block= and allow= are the group's own rules
+# (the domain and everything under it); allow wins. A device in several
+# groups belongs to the narrowest network. The query log shows the group.
+groups = [
+  # "finance 10.1.0.0/24 filter block=facebook.com,tiktok.com",
+  # "lab 10.9.0.0/16 nofilter",
+]
+
 [ecs]
 # EDNS Client Subnet: send this network (an address stands for its /24 or
 # /56) with every query, so name servers answer as they would for it.
@@ -241,9 +253,35 @@ enabled = false
 # names = ["filtered.dns.example.com"]
 # listen = ["203.0.113.10:5353"]
 
-# There is no setting to log queries: none are written to disk. For
-# troubleshooting, the query log in the web interface runs in memory, masks
-# client addresses by default, and stops by itself.
+[log]
+# By default no query is written to disk; for troubleshooting, the query log
+# in the web interface runs in memory and stops by itself. Where queries
+# must be kept (an office's security team, an audit), keep them on disk for
+# this many days (data_dir/querylog, one file per day, gzipped after the
+# day; 0 deletes them). The status page shows it.
+query_days = 0
+query_full_ip = false     # whole client addresses (normally 203.0.113.x)
+
+[nod]
+# Newly observed domains: tell when a domain is looked up here for the
+# first time in 30 to 60 days, often the first sign of phishing or malware
+# (Status > New domains, and the alert destinations). Keeps no list of
+# domains: only hashes, in data_dir/nod.bin, deleted when turned off.
+enabled = false
+learn = "24h"      # when first on: quiet this long, learning the usual domains
+alert = true       # send them, at most every 10 minutes (needs [alerts] on)
+ignore = []        # never reported, with everything under them
+full_ip = false    # who asked first, with the whole address
+
+[dnstap]
+# Send every query and answer, as dnstap, to a log collector (Vector,
+# dnscollector, a SIEM): "unix:/path/to/socket" or "tcp:host:port". Empty:
+# off. Sending never delays an answer; while the collector is gone,
+# messages are dropped and counted. The status page shows it.
+target = ""
+queries = true     # each query as it arrived (CLIENT_QUERY)
+responses = true   # each answer as it went out (CLIENT_RESPONSE)
+full_ip = false    # whole client addresses (normally the network only)
 
 [cluster]
 # Several servers sharing one configuration (docs/cluster.md). No role: a

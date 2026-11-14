@@ -6,8 +6,11 @@ is your responsibility.
 
 ## What DNSNova never does
 
-- It never writes queries or client addresses to disk; they live in memory
-  and are gone after a restart. One exception: a public server saves its
+- By default, it never writes queries or client addresses to disk; they
+  live in memory and are gone after a restart. An administrator can choose
+  to keep them on disk for a number of days (`log.query_days`, see "Query
+  records" below), as an office may have to; the status page then says so.
+  One other exception: a public server saves its
   answer cache (names and records, never who asked or when) to survive
   restarts. With many users, a cached name reveals nothing about any one of
   them. In private mode (home or office), where it would, the cache is not
@@ -44,6 +47,10 @@ is your responsibility.
 | Networks that hit the rate limits (IPv4 /24, IPv6 /48, and a count) | Memory | 24 hours; lost on restart |
 | Status page check names (random token and protocol, no address) | Memory | 5 minutes |
 | Query log, only while an administrator runs it (see below) | Memory | At most 10,000 queries; deleted an hour after it stops |
+| Newly seen domains, only with `[nod]` on (domain, name, type, who asked first, time) | Memory; alert destinations with `nod.alert` | The last 500; lost on restart |
+| Hashes of domains looked up, only with `[nod]` on (no domain can be read back) | `/var/lib/dnsnova/nod.bin`, mode 0600 | 30 to 60 days of use; deleted when turned off |
+| dnstap messages, only with `dnstap.target` set | Sent to your collector, not kept by DNSNova | – |
+| Query records, only with `log.query_days` set (time, client, protocol, name, type, result, source, time taken, client group; client addresses shortened unless `log.query_full_ip`) | `/var/lib/dnsnova/querylog/`, one file per day, mode 0600 | `log.query_days`; all deleted when it is set to 0 |
 | Recent log records shown in the admin interface | Memory | The last 200; lost on restart |
 | Administrator name, password hash (Argon2id) and two-step verification secret | `/var/lib/dnsnova/secrets/admin.json`, mode 0600 | Until you remove them |
 | One-time setup code | `/var/lib/dnsnova/secrets/setup-code`, mode 0600 | Until the administrator is created |
@@ -84,7 +91,6 @@ address is not kept. These names are answered locally, never sent on.
 
 ## Query log
 
-There is no setting that writes queries to a file or to the system log.
 For troubleshooting, an administrator can start the query log in the admin
 interface:
 
@@ -98,6 +104,47 @@ interface:
   stops, or at once with "Stop and delete".
 - The service log records who started it, for how long and whether full
   addresses were kept. The admin status shows whether it is running.
+
+## Query records
+
+Off by default. Some networks must be able to tell later which device
+looked up what: an office's security team, an audit, a law. For them,
+`log.query_days` (Settings › Admin › Query records) keeps every query on
+disk:
+
+- One file per day (UTC) in `/var/lib/dnsnova/querylog/`, readable only by
+  the service, gzipped once the day is over. Plain tab-separated text:
+  time, client, protocol, name, type, result, source, milliseconds,
+  filtered, client group.
+- Files older than `log.query_days` are deleted every hour. Setting it to 0
+  deletes them all.
+- Client addresses are shortened unless `log.query_full_ip` is set.
+- Searching and downloading them needs an administrator's sign-in; each
+  download is recorded in the service log.
+- The public status page shows that queries are kept, for how long, and
+  whether with full addresses, and so does the admin overview.
+
+If you run DNSNova for other people, tell them, as the law where you and
+they are may require.
+
+## New domains
+
+Off by default. With `[nod]` on, DNSNova notes the domain of every answered
+query in two Bloom filters: bits set by hashes of the domains under a
+random key, from which no domain can be read back. They are saved in
+`/var/lib/dnsnova/nod.bin` (mode 0600) and deleted when it is turned off.
+The domains it reports as new (the domain, the name asked, its type, who
+asked first, shortened unless `nod.full_ip`, and when) are kept in memory,
+the last 500, and sent to the alert destinations if `nod.alert` is set.
+
+## Log collector (dnstap)
+
+Off by default. With `dnstap.target`, every query and answer (the DNS
+messages themselves, the time, the protocol and the client's network, or
+its whole address with `dnstap.full_ip`) is sent as dnstap to the
+collector you name, over a Unix socket or TCP. What happens there is up to
+that collector. The public status page and the admin overview say that
+queries are sent to a log collector.
 
 `[log] queries` from earlier versions is still accepted in the configuration
 file, but does nothing and produces a warning.

@@ -205,8 +205,12 @@ func (s *Server) PublicStatus() admin.PublicInfo {
 	if c.Recursion.Enabled && s.Rec != nil && s.Rec.Healthy() && !s.Rec.Intercepted() {
 		info.Healthy = true
 	}
-	ql := s.QLog.State(time.Now())
-	info.QueryLog, info.QueryLogFullIP = ql.On, ql.On && ql.FullIP
+	ql, arch := s.QLog.State(time.Now()), s.QArchive.State()
+	info.QueryLog, info.QueryLogFullIP = ql.On || arch.On, (ql.On && ql.FullIP) || arch.FullIP
+	if arch.On {
+		info.QueryLogDays = arch.Days
+	}
+	info.QueryExport = s.Tap.On()
 	return info
 }
 

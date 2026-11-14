@@ -170,7 +170,7 @@ async function boot() {
   const checkBox = h("div", { class: "checkbox", "aria-live": "polite" });
 
   const facts = [
-    info.query_log ? null : "No query log",
+    info.query_log || info.query_export ? null : "No query log",
     "Your address is never sent upstream",
     "Open source",
   ].filter(Boolean);
@@ -198,9 +198,10 @@ async function boot() {
     h("footer", { class: "dfoot" }, h("span", null, info.check ? "After changing the setting, check above that it works." : "Settings take effect within a minute."), h("span")));
 
   const privRows = [
-    ["Query log", info.query_log ? (info.query_log_full_ip ? "On now, with addresses" : "On now, addresses shortened") : "Off", info.query_log ? "warn" : "ok"],
-    ["Queries kept on disk", "Never", "ok"],
-    ["Your address kept on disk", "Never", "ok"],
+    ["Query log", info.query_log ? (info.query_log_full_ip ? "On, with addresses" : "On, addresses shortened") : "Off", info.query_log ? "warn" : "ok"],
+    ["Queries kept on disk", info.query_log_days ? `For ${info.query_log_days} ${info.query_log_days === 1 ? "day" : "days"}` : "Never", info.query_log_days ? "warn" : "ok"],
+    ["Queries sent to a log collector", info.query_export ? "Yes" : "No", info.query_export ? "warn" : "ok"],
+    ["Your address kept on disk", info.query_log_days ? (info.query_log_full_ip ? "Yes, with the queries" : "Shortened, with the queries") : "Never", info.query_log_days ? "warn" : "ok"],
     [info.recursion ? "Your address sent to name servers" : "Your address sent upstream", "Never", "ok"],
     ["Ads, tracking, telemetry", "None", "ok"],
   ];

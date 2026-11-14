@@ -89,13 +89,15 @@ func text(n Notification) (title, body string) {
 		label = "STILL " + label
 	case Test:
 		label = "TEST"
+	case EventStatus:
+		label = "NOTICE"
 	}
 	title = fmt.Sprintf("[%s] %s: %s", label, n.Node, n.Summary)
 	var b strings.Builder
 	for _, d := range n.Details {
 		b.WriteString("• " + d + "\n")
 	}
-	if n.Status != Test {
+	if n.Status != Test && n.Status != EventStatus {
 		if n.Status == Resolved {
 			fmt.Fprintf(&b, "Lasted %s (since %s)", n.Time.Sub(n.Since).Round(time.Second), n.Since.UTC().Format("2006-01-02 15:04 UTC"))
 		} else {
@@ -169,7 +171,7 @@ func (d Discord) Send(ctx context.Context, n Notification) error {
 	switch {
 	case n.Status == Resolved:
 		color = 0x2EA043
-	case n.Status == Test:
+	case n.Status == Test || n.Status == EventStatus:
 		color = 0x3B82F6
 	case n.Severity == Critical:
 		color = 0xE5534B

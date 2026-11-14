@@ -21,21 +21,33 @@ func TestUDPBatchFamilies(t *testing.T) {
 		c.Close()
 		has6 = true
 	}
-	// plain DNS binds UDP and TCP: ports free for both
-	_, port, _ := net.SplitHostPort(freeAddrOn(t, ""))
-	listen := []string{"127.0.0.1:0", ":" + port}
-	ask := []string{"127.0.0.1:" + port}
-	if has6 {
-		v6 := freeAddrOn(t, "::1")
-		listen = append(listen, v6)
-		ask = append(ask, v6, "[::1]:"+port)
-	} else {
+	if !has6 {
 		t.Log("no IPv6 here: IPv4 and the all-addresses socket only")
 	}
+	// The ports are chosen once the server runs: starting it opens sockets
+	// on ports the system picks, which could take a port chosen before.
+	// Something else can still take one before the reload binds it, so a
+	// clash is retried with other ports.
 	s, _, path := start(t, "")
-	writeListen(t, path, listen)
-	if err := s.Reload(); err != nil {
-		t.Fatal(err)
+	var ask []string
+	for try := 0; ; try++ {
+		// plain DNS binds UDP and TCP: ports free for both
+		_, port, _ := net.SplitHostPort(freeAddrOn(t, ""))
+		listen := []string{"127.0.0.1:0", ":" + port}
+		ask = []string{"127.0.0.1:" + port}
+		if has6 {
+			v6 := freeAddrOn(t, "::1")
+			listen = append(listen, v6)
+			ask = append(ask, v6, "[::1]:"+port)
+		}
+		writeListen(t, path, listen)
+		err := s.Reload()
+		if err == nil {
+			break
+		}
+		if try == 4 || !strings.Contains(err.Error(), "address already in use") {
+			t.Fatal(err)
+		}
 	}
 	for _, addr := range ask {
 		var wg sync.WaitGroup

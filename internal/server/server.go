@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -22,6 +23,7 @@ import (
 	"github.com/harryheros/dnsnova/internal/config"
 	"github.com/harryheros/dnsnova/internal/cookie"
 	m "github.com/harryheros/dnsnova/internal/dnsmsg"
+	"github.com/harryheros/dnsnova/internal/dnstap"
 	"github.com/harryheros/dnsnova/internal/events"
 	"github.com/harryheros/dnsnova/internal/filter"
 	"github.com/harryheros/dnsnova/internal/guard"
@@ -77,6 +79,14 @@ type Server struct {
 
 	// QLog records queries while an administrator has it running.
 	QLog *insight.QueryLog
+	// Archive keeps every query on disk when log.query_days is set.
+	QArchive *insight.Archive
+	// Tap sends queries and answers to a dnstap collector ([dnstap]).
+	Tap *dnstap.Sender
+	// nod reports newly observed domains ([nod]); nil when off.
+	nod      atomic.Pointer[insight.NOD]
+	nodFull  atomic.Bool
+	nodAlert atomic.Bool
 
 	res   *resolver.Resolver
 	state atomic.Pointer[state]
@@ -143,6 +153,8 @@ func New(store *config.Store, log *slog.Logger) (*Server, error) {
 		NXDomains:   insight.NewTop(true, 168, time.Now()),
 		Limited:     insight.NewTop(false, 24, time.Now()),
 		QLog:        insight.NewQueryLog(),
+		QArchive:    insight.NewArchive(),
+		Tap:         dnstap.New(),
 		udp:         map[string]*udpListener{},
 		tcp:         map[string]*tcpListener{},
 		dot:         map[string]*tcpListener{},
@@ -257,6 +269,7 @@ func settingsFrom(c *config.Config, st *state) resolver.Settings {
 	return resolver.Settings{
 		Forward:             st.fwd,
 		ServerID:            serverID(c),
+		Groups:              groupsFrom(c),
 		DDR:                 ddrFrom(c),
 		CheckZone:           checkZone(c),
 		Local:               localNames(c),
@@ -272,6 +285,49 @@ func settingsFrom(c *config.Config, st *state) resolver.Settings {
 		UpstreamConcurrency: c.Limits.UpstreamConcurrency,
 		ZoneConcurrency:     c.Limits.ZoneConcurrency,
 		ECS:                 ecsOption(c),
+	}
+}
+
+// groupsFrom builds clients.groups (already validated).
+func groupsFrom(c *config.Config) *resolver.Groups {
+	list, err := config.ParseGroups(c.Clients.Groups)
+	if err != nil || len(list) == 0 {
+		return nil
+	}
+	gs := resolver.NewGroups()
+	for _, g := range list {
+		rg := &resolver.Group{Name: g.Name, Filter: map[string]int8{"on": 1, "off": -1}[g.Filter]}
+		if len(g.Block)+len(g.Allow) > 0 {
+			b := filter.NewBuilder()
+			for _, d := range g.Block {
+				b.Block(d)
+			}
+			for _, d := range g.Allow {
+				b.Allow(d)
+			}
+			rg.Rules = b.Set()
+		}
+		for _, p := range g.Networks {
+			gs.Add(p, rg)
+		}
+	}
+	return gs
+}
+
+// tapSettings configures dnstap; the identity is the node's name.
+func (s *Server) tapSettings(c *config.Config) dnstap.Settings {
+	return dnstap.Settings{
+		Target: c.Dnstap.Target, Queries: c.Dnstap.Queries, Responses: c.Dnstap.Responses, FullIP: c.Dnstap.FullIP,
+		Identity: nodeName(c.Cluster.Name), Version: "DNSNova " + s.Version(),
+	}
+}
+
+// archiveSettings places the query archive in data_dir/querylog.
+func archiveSettings(c *config.Config) insight.ArchiveSettings {
+	return insight.ArchiveSettings{
+		Dir:    filepath.Join(c.Server.DataDir, insight.ArchiveDir),
+		Days:   c.Log.QueryDays,
+		FullIP: c.Log.QueryFullIP,
 	}
 }
 
@@ -377,6 +433,9 @@ func (s *Server) Start() error {
 	s.applyCookies(snap.Config)
 	s.loadCache(snap.Config) // before any listener: the first queries already find it
 	s.applyRetention(snap.Config)
+	s.QArchive.Configure(archiveSettings(snap.Config))
+	s.Tap.Configure(s.tapSettings(snap.Config))
+	s.applyNOD(snap.Config)
 	s.startFilter(snap.Config)
 	s.Certs = tlsmgr.NewManager(snap.Config.Server.DataDir, s.Log)
 	s.Certs.HTTP = s.ACMEHTTP
@@ -397,6 +456,12 @@ func (s *Server) Start() error {
 	}
 	s.hash = snap.Hash
 	go s.res.Janitor(s.ctx)
+	s.wg.Add(1)
+	go func() { defer s.wg.Done(); s.QArchive.Run(s.ctx) }() // the last queries are written at shutdown
+	s.wg.Add(1)
+	go func() { defer s.wg.Done(); s.Tap.Run(s.ctx) }()
+	s.wg.Add(1)
+	go func() { defer s.wg.Done(); s.nodLoop() }() // saved at shutdown too
 	go s.Rec.Janitor(s.ctx)
 	go s.sweeper()
 	go s.Certs.Run(s.ctx)
@@ -456,6 +521,9 @@ func (s *Server) Apply(snap *config.Snapshot) error {
 	s.res.SetSettings(settingsFrom(snap.Config, st))
 	s.applyCookies(snap.Config)
 	s.applyRetention(snap.Config)
+	s.QArchive.Configure(archiveSettings(snap.Config))
+	s.Tap.Configure(s.tapSettings(snap.Config))
+	s.applyNOD(snap.Config)
 	s.Rec.SetConfig(recConfig(snap.Config))
 	s.res.SetUpstreams(s.exchanger(snap.Config, st))
 	s.Filter.Configure(filterSettings(snap.Config))

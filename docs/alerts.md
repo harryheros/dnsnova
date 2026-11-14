@@ -50,6 +50,12 @@ check off.
 | Anycast withdrawn | The route has been withdrawn for a minute because the health checks fail. | critical | |
 | Node offline | A follower stopped checking in with its primary. | critical | `nodes` |
 
+**Newly seen domains** (with `[nod]` on and `nod.alert`) are not a
+problem that fires and resolves but a notice: at most every 10 minutes, the
+domains looked up for the first time since the last one, each with the name
+asked, its type, who asked first and when (`status` `event`, `kind`
+`new_domains`, `severity` `info`). See Status › New domains.
+
 A problem that clears before its time is up sends nothing. Once sent, it is
 **resolved** after a minute without it (so a value near its threshold does
 not flap), with its duration. Meanwhile a reminder goes out every `repeat`
@@ -103,7 +109,8 @@ A `POST` with `Content-Type: application/json`:
 }
 ```
 
-- `status`: `firing`, `reminder` (still firing), `resolved`, or `test`.
+- `status`: `firing`, `reminder` (still firing), `resolved`, `test`, or
+  `event` (a one-off notice, such as newly seen domains; `severity` `info`).
 - `key` is the same for every notification about one problem: match
   `firing` and `resolved` on it.
 - `node` is where the problem is; `server` is the node that sent it (a

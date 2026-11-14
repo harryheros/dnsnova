@@ -25,8 +25,12 @@ type Query struct {
 	Rcode  string    `json:"rcode"`
 	Source string    `json:"source"` // cache, stale, upstream, local, blocked
 	MS     float64   `json:"ms"`
-	// Filtered: the query came in through the filtered service.
+	// Filtered: the block lists applied to it.
 	Filtered bool `json:"filtered,omitempty"`
+	// Group is the client's group (clients.groups), or "".
+	Group string `json:"group,omitempty"`
+	// NewDomain: the first query here for its domain ([nod]).
+	NewDomain bool `json:"new_domain,omitempty"`
 }
 
 // QueryLogState says whether the query log is running.

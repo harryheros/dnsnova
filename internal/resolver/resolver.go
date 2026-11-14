@@ -61,6 +61,8 @@ type Settings struct {
 	// NSID (RFC 5001) and CH TXT id.server, for telling the nodes behind
 	// one anycast address apart. Empty: not said.
 	ServerID string
+	// Groups sorts clients into groups with their own filtering. Nil: none.
+	Groups *Groups
 }
 
 var (
@@ -162,6 +164,11 @@ type Result struct {
 	// CookieOpt is the COOKIE option sent with Resp, for a response made
 	// again later (a truncated one, BADCOOKIE).
 	CookieOpt []byte
+	// Group is the client's group (clients.groups), or "".
+	Group string
+	// BlockedByGroup: blocked by a rule of the client's group, not by the
+	// block lists.
+	BlockedByGroup bool
 }
 
 // Resolve answers one raw query. udp applies the client's UDP size limit.
@@ -192,7 +199,8 @@ func (r *Resolver) resolve(req []byte, o Opts, mayFetch bool) (Result, bool) {
 		r.stats.Rejected[stats.RejectMalformed].Add(1)
 		return Result{Status: "malformed"}, true
 	}
-	f := finisher{r: r, req: req, q: q, o: o, s: s}
+	g := s.Groups.find(o.Client)
+	f := finisher{r: r, req: req, q: q, o: o, s: s, g: g, filt: g.filtering(o.Filter)}
 	if rc != 0 {
 		return f.done(Result{Resp: m.ErrorResponse(req, q, rc), Q: q, Source: stats.SourceLocal, Status: strings.ToLower(m.RcodeString(rc))}, nil), true
 	}
@@ -228,8 +236,8 @@ func (r *Resolver) resolve(req []byte, o Opts, mayFetch bool) (Result, bool) {
 		return f.done(Result{Resp: m.ErrorResponse(req, q, m.RcodeRefused), Q: q, Source: stats.SourceLocal, Status: "refused"},
 			m.EDE(m.EDENotAuth, "recursion not requested")), true
 	}
-	if o.Filter && r.filter.Load().Blocked(q.Name) {
-		return f.blocked(), true
+	if blocked, byGroup := f.nameBlocked(q.Name); blocked {
+		return f.blocked(byGroup), true
 	}
 
 	key := q.CacheKey()
@@ -239,8 +247,8 @@ func (r *Resolver) resolve(req []byte, o Opts, mayFetch bool) (Result, bool) {
 		if s.Prefetch && e.ttl >= 10 && e.expire.Sub(now) < time.Duration(e.ttl)*time.Second/10 {
 			r.refreshAsync(key, q, e, now)
 		}
-		if f.cnameBlocked(e) {
-			return f.blocked(), true
+		if blocked, byGroup := f.cnameBlocked(e); blocked {
+			return f.blocked(byGroup), true
 		}
 		res := Result{Resp: r.build(e, req, q, now, false, s), Q: q, Source: stats.SourceCache, Status: "hit"}
 		if e.failure {
@@ -252,8 +260,8 @@ func (r *Resolver) resolve(req []byte, o Opts, mayFetch bool) (Result, bool) {
 	stale := e != nil && !e.failure && s.ServeStale > 0 && now.Before(e.expire.Add(s.ServeStale))
 	if stale {
 		r.refreshAsync(key, q, e, now)
-		if f.cnameBlocked(e) {
-			return f.blocked(), true
+		if blocked, byGroup := f.cnameBlocked(e); blocked {
+			return f.blocked(byGroup), true
 		}
 		res := Result{Resp: r.build(e, req, q, now, true, s), Q: q, Source: stats.SourceStale, Status: "stale"}
 		r.stats.LatencyCache.Observe(r.now().Sub(start))
@@ -274,8 +282,8 @@ func (r *Resolver) resolve(req []byte, o Opts, mayFetch bool) (Result, bool) {
 		return f.done(Result{Resp: m.ErrorResponse(req, q, m.RcodeServFail), Q: q, Source: stats.SourceUpstream, Status: "servfail"},
 			m.EDE(m.EDEOther, "server busy")), true
 	}
-	if f.cnameBlocked(fresh) {
-		return f.blocked(), true
+	if blocked, byGroup := f.cnameBlocked(fresh); blocked {
+		return f.blocked(byGroup), true
 	}
 	res := Result{Resp: r.build(fresh, req, q, r.now(), false, s), Q: q, Source: stats.SourceUpstream, Status: "miss"}
 	if fresh.failure {
@@ -287,49 +295,84 @@ func (r *Resolver) resolve(req []byte, o Opts, mayFetch bool) (Result, bool) {
 
 // finisher prepares every response the same way, whatever produced it.
 type finisher struct {
-	r   *Resolver
-	req []byte
-	q   *m.Query
-	o   Opts
-	s   *Settings
+	r    *Resolver
+	req  []byte
+	q    *m.Query
+	o    Opts
+	s    *Settings
+	g    *Group // the client's group, or nil
+	filt bool   // the block lists apply
+}
+
+// nameBlocked reports whether name is blocked for this client, and whether
+// by its group's own rules rather than the block lists (when they apply).
+// A group's allow rule wins over both.
+func (f finisher) nameBlocked(name string) (blocked, byGroup bool) {
+	if gr := f.g.rules(); gr != nil {
+		if gr.Allowed(name) {
+			return false, false
+		}
+		if gr.Blocked(name) {
+			return true, true
+		}
+	}
+	return f.filt && f.r.filter.Load().Blocked(name), false
 }
 
 // blocked answers a name the filtered service blocks: NXDOMAIN with an SOA
 // so clients remember it briefly, and an Extended DNS Error so people and
 // programs can tell it was blocked.
-func (f finisher) blocked() Result {
-	return f.done(Result{Resp: m.NegativeSOA(f.req, f.q, f.q.Name, BlockedTTL, m.RcodeNXDomain), Q: f.q, Source: stats.SourceBlocked, Status: "blocked"},
-		m.EDE(m.EDEBlocked, "blocked by this server's filter"))
+func (f finisher) blocked(byGroup bool) Result {
+	res := Result{Resp: m.NegativeSOA(f.req, f.q, f.q.Name, BlockedTTL, m.RcodeNXDomain), Q: f.q, Source: stats.SourceBlocked, Status: "blocked"}
+	why := "blocked by this server's filter"
+	if byGroup {
+		res.BlockedByGroup = true
+		why = "blocked by a rule of this client's group"
+	}
+	return f.done(res, m.EDE(m.EDEBlocked, why))
 }
 
 // cnameBlocked reports whether the filtered service must block an answer
 // because its CNAME chain leads to a blocked name: trackers disguised as a
 // site's own subdomain ("CNAME cloaking"). A name the operator allowed
 // explicitly is never blocked this way.
-func (f finisher) cnameBlocked(e *entry) bool {
-	if !f.o.Filter || (len(e.cnames) == 0 && !e.cnamesCut) {
-		return false
+func (f finisher) cnameBlocked(e *entry) (blocked, byGroup bool) {
+	gr := f.g.rules()
+	if (!f.filt && gr == nil) || (len(e.cnames) == 0 && !e.cnamesCut) {
+		return false, false
+	}
+	if gr != nil && gr.Allowed(f.q.Name) {
+		return false, false
 	}
 	set := f.r.filter.Load()
-	if set == nil || set.Allowed(f.q.Name) {
-		return false
+	if !f.filt {
+		set = nil
+	}
+	if set != nil && set.Allowed(f.q.Name) {
+		set = nil // the lists exempt the name; the group's rules still apply
+	}
+	if set == nil && gr == nil {
+		return false, false
 	}
 	if e.cnamesCut {
-		return true // too long to check every name: fail closed
+		return true, set == nil // too long to check every name: fail closed
 	}
 	for _, c := range e.cnames {
-		if set.Blocked(c) {
-			return true
+		if gr != nil && gr.Blocked(c) {
+			return true, true
+		}
+		if set != nil && set.Blocked(c) {
+			return true, false
 		}
 	}
-	return false
+	return false, false
 }
 
 // done adds Extended DNS Errors (for clients that use EDNS), keeps UDP
 // answers within the client's size limit, pads encrypted answers for
 // clients that pad, and counts the result.
 func (f finisher) done(res Result, ede []byte) Result {
-	res.Filtered = f.o.Filter
+	res.Filtered, res.Group = f.filt, f.g.name()
 	if f.q != nil && f.q.EDNS && f.q.Cookie != nil {
 		if jar := f.r.cookies.Load(); jar != nil {
 			res.Cookie = cookie.Check(f.q.Cookie)
