@@ -4,6 +4,26 @@ All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
 **Security**.
 
+## 1.5.0 (2026-11-14)
+
+- **Domains with their own servers** (`local.forward`): names under a
+  domain are asked from the servers listed for it, never from upstreams or
+  the root, such as an office's Active Directory (`corp.example 10.0.0.53`)
+  or a router's device names (`lan 192.168.1.1`). Private reverse zones
+  listed there (`168.192.in-addr.arpa`) go to those servers instead of being
+  answered NXDOMAIN. Servers are written as upstreams are (plain, TLS,
+  HTTPS, HTTP/3, QUIC) and asked at once; no client subnet is sent, and
+  their answers never carry the AD bit. Changing the list clears the cache.
+  In the web interface under Settings › Local names.
+- **RPZ block lists**: filter lists in RPZ zone format, as threat feeds
+  publish them (URLhaus, ThreatFox, HaGeZi), now work. NXDOMAIN, NODATA,
+  drop and local-data rules block; `rpz-passthru` and triggers on addresses,
+  name servers or clients are skipped (and counted).
+- **Which node answered**: a node of a cluster or behind anycast gives its
+  `cluster.name` to clients that ask with NSID (RFC 5001, `dig +nsid`) or a
+  CH TXT query for `id.server` or `hostname.bind`. A single server says
+  nothing.
+
 ## 1.4.1 (2026-11-13)
 
 - **UDP socket buffers**: the system caps them (on Linux,

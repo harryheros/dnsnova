@@ -38,6 +38,18 @@ type state struct {
 	cfg   *config.Config
 	guard *guard.Guard
 	group *upstream.Group
+	// fwd holds the servers of local.forward; fwdGroups, the same for
+	// closing them.
+	fwd       *resolver.Forwards
+	fwdGroups []*upstream.Group
+}
+
+// close shuts every upstream connection of st.
+func (st *state) close() {
+	st.group.Close()
+	for _, g := range st.fwdGroups {
+		g.Close()
+	}
 }
 
 // Server is a running dnsnova instance.
@@ -241,8 +253,10 @@ func localNames(c *config.Config) *resolver.LocalNames {
 	return resolver.NewLocalNames(recs)
 }
 
-func settingsFrom(c *config.Config) resolver.Settings {
+func settingsFrom(c *config.Config, st *state) resolver.Settings {
 	return resolver.Settings{
+		Forward:             st.fwd,
+		ServerID:            serverID(c),
 		DDR:                 ddrFrom(c),
 		CheckZone:           checkZone(c),
 		Local:               localNames(c),
@@ -259,6 +273,16 @@ func settingsFrom(c *config.Config) resolver.Settings {
 		ZoneConcurrency:     c.Limits.ZoneConcurrency,
 		ECS:                 ecsOption(c),
 	}
+}
+
+// serverID is what NSID and id.server answer: the node's name, for a node
+// of a cluster or behind anycast, where it tells which one answered. A
+// single server does not say its host name.
+func serverID(c *config.Config) string {
+	if c.Cluster.Role == "" && !c.Anycast.Enabled {
+		return ""
+	}
+	return nodeName(c.Cluster.Name)
 }
 
 // ecsOption is the EDNS Client Subnet option for ecs.address, or nil.
@@ -291,7 +315,12 @@ func (s *Server) buildState(c *config.Config) (*state, error) {
 	if err != nil {
 		return nil, err
 	}
-	gd := guard.New(guard.Limits{
+	st := &state{cfg: c, group: g}
+	if err := st.buildForwards(c, s.TLS); err != nil {
+		st.close()
+		return nil, err
+	}
+	st.guard = guard.New(guard.Limits{
 		Private:      c.Server.Mode == config.ModePrivate,
 		Allow:        guard.ACL(c.Access.Allow),
 		Deny:         guard.ACL(c.Access.Deny),
@@ -303,7 +332,31 @@ func (s *Server) buildState(c *config.Config) (*state, error) {
 		RRLRate:      c.Limits.RRLRate,
 		RRLSlip:      c.Limits.RRLSlip,
 	})
-	return &state{cfg: c, guard: gd, group: g}, nil
+	return st, nil
+}
+
+// buildForwards makes the servers of local.forward: each domain's servers
+// are asked all at once, and the first good answer wins.
+func (st *state) buildForwards(c *config.Config, tlsOverride *tls.Config) error {
+	zones, err := config.ParseForwardZones(c.Local.Forward)
+	if err != nil || len(zones) == 0 {
+		return err
+	}
+	st.fwd = resolver.NewForwards(strings.Join(c.Local.Forward, "\n"))
+	for _, z := range zones {
+		g, err := upstream.NewGroup(upstream.Options{
+			Primary:   z.Servers,
+			Bootstrap: c.Upstream.Bootstrap,
+			Timeout:   c.Upstream.Timeout,
+			TLS:       tlsOverride,
+		})
+		if err != nil {
+			return fmt.Errorf("local.forward %s: %w", z.Name, err)
+		}
+		st.fwdGroups = append(st.fwdGroups, g)
+		st.fwd.Add(z.Name, g)
+	}
+	return nil
 }
 
 // Start loads the configuration and opens every listener.
@@ -320,7 +373,7 @@ func (s *Server) Start() error {
 		return err
 	}
 	s.Rec = recursor.New(recConfig(snap.Config), s.Log)
-	s.res = resolver.New(settingsFrom(snap.Config), s.exchanger(snap.Config, st), s.Stats)
+	s.res = resolver.New(settingsFrom(snap.Config, st), s.exchanger(snap.Config, st), s.Stats)
 	s.applyCookies(snap.Config)
 	s.loadCache(snap.Config) // before any listener: the first queries already find it
 	s.applyRetention(snap.Config)
@@ -389,18 +442,18 @@ func (s *Server) Apply(snap *config.Snapshot) error {
 		s.Log.Warn("[cluster] changes take effect after a restart")
 	}
 	if err := s.Certs.Configure(tlsSettings(snap.Config)); err != nil {
-		st.group.Close()
+		st.close()
 		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.syncListeners(snap.Config); err != nil {
-		st.group.Close()
+		st.close()
 		return err
 	}
 	old := s.state.Swap(st)
 	s.snap.Store(snap)
-	s.res.SetSettings(settingsFrom(snap.Config))
+	s.res.SetSettings(settingsFrom(snap.Config, st))
 	s.applyCookies(snap.Config)
 	s.applyRetention(snap.Config)
 	s.Rec.SetConfig(recConfig(snap.Config))
@@ -415,7 +468,7 @@ func (s *Server) Apply(snap *config.Snapshot) error {
 	if old != nil {
 		go func() { // let in-flight queries on the old upstreams finish
 			time.Sleep(10 * time.Second)
-			old.group.Close()
+			old.close()
 		}()
 	}
 	s.Log.Info("configuration applied", "mode", snap.Config.Server.Mode)
@@ -778,7 +831,7 @@ func (s *Server) Shutdown() {
 		s.Log.Warn("cache not saved", "err", err)
 	}
 	if st := s.state.Load(); st != nil {
-		st.group.Close()
+		st.close()
 	}
 }
 

@@ -123,6 +123,10 @@ type Config struct {
 	}
 	Local struct {
 		Records []string // "name address", answered by DNSNova itself
+		// Forward lists "domain server [server...]": names under the domain
+		// are asked from these servers, never from upstreams or recursion
+		// (an office's Active Directory, a router's own names).
+		Forward []string
 	}
 	ECS struct {
 		// Address is a network ("1.2.3.0/24") or an address in it,
@@ -452,6 +456,9 @@ func (c *Config) validate(lines map[string]int) (Errors, []string) {
 	}
 	if _, err := ParseLocalRecords(c.Local.Records); err != nil {
 		bad("local.records", err.Error())
+	}
+	if _, err := ParseForwardZones(c.Local.Forward); err != nil {
+		bad("local.forward", err.Error())
 	}
 	if c.Status.Enabled {
 		if len(c.DoH.HTTPSListen) == 0 && c.DoH.Listen == "" {
@@ -900,6 +907,7 @@ var fields = map[string]field{
 	"access.allow":    prefixes(func(c *Config) *[]netip.Prefix { return &c.Access.Allow }),
 	"access.deny":     prefixes(func(c *Config) *[]netip.Prefix { return &c.Access.Deny }),
 	"local.records":   strList(func(c *Config) *[]string { return &c.Local.Records }),
+	"local.forward":   strList(func(c *Config) *[]string { return &c.Local.Forward }),
 	"ecs.address":     str(func(c *Config) *string { return &c.ECS.Address }),
 	"ecs.client_path": str(func(c *Config) *string { return &c.ECS.ClientPath }),
 	"stats.retention": str(func(c *Config) *string { return &c.Stats.Retention }),
@@ -1253,6 +1261,51 @@ func ParseLocalRecords(list []string) ([]LocalRecord, error) {
 			return nil, fmt.Errorf("%q: %q is not an IP address", e, f[1])
 		}
 		out = append(out, LocalRecord{Name: name, Addr: a.Unmap()})
+	}
+	return out, nil
+}
+
+// ForwardZone is one entry of local.forward: a domain and the servers its
+// names are asked from.
+type ForwardZone struct {
+	Name    string   // lowercase, no trailing dot
+	Servers []string // upstream addresses (upstream.ParseSpec)
+}
+
+// ParseForwardZones reads entries like "corp.example 10.0.0.53 10.0.0.54".
+// A server is written as an upstream is: an IP address (with :port if not
+// 53), tls://, https://, h3:// or quic://.
+func ParseForwardZones(list []string) ([]ForwardZone, error) {
+	var out []ForwardZone
+	seen := map[string]bool{}
+	for _, e := range list {
+		f := strings.Fields(e)
+		if len(f) < 2 {
+			return nil, fmt.Errorf("%q: write a domain and its servers, such as \"corp.example 10.0.0.53\"", e)
+		}
+		name := strings.ToLower(strings.TrimSuffix(f[0], "."))
+		if name == "" || len(name) > 253 {
+			return nil, fmt.Errorf("%q: not a valid domain", f[0])
+		}
+		for _, l := range strings.Split(name, ".") {
+			if l == "" || len(l) > 63 || l[0] == '-' || l[len(l)-1] == '-' || strings.Trim(l, "abcdefghijklmnopqrstuvwxyz0123456789-_") != "" {
+				return nil, fmt.Errorf("%q: not a valid domain", f[0])
+			}
+		}
+		switch {
+		case name == "localhost" || strings.HasSuffix(name, ".localhost"),
+			name == "resolver.arpa" || strings.HasSuffix(name, ".resolver.arpa"):
+			return nil, fmt.Errorf("%q: answered by DNSNova itself, never forwarded", f[0])
+		case seen[name]:
+			return nil, fmt.Errorf("%q: listed twice", f[0])
+		}
+		seen[name] = true
+		for _, sv := range f[1:] {
+			if _, err := upstream.ParseSpec(sv); err != nil {
+				return nil, fmt.Errorf("%q: %v", e, err)
+			}
+		}
+		out = append(out, ForwardZone{Name: name, Servers: f[1:]})
 	}
 	return out, nil
 }

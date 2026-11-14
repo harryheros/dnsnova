@@ -44,6 +44,9 @@ var (
 	wireArpa      = "\x04arpa"
 	wireInvalid   = "\x07invalid"
 
+	wireIDServer     = toWire("id.server")
+	wireHostnameBind = toWire("hostname.bind")
+
 	wireResolverArpa = toWire("resolver.arpa")
 	wireDDR          = toWire("_dns.resolver.arpa")
 )
@@ -107,4 +110,17 @@ func ProbeToken(name string) string {
 		return ""
 	}
 	return name[1 : 1+int(name[0])]
+}
+
+const (
+	classCH = 3
+	typeTXT = 16
+)
+
+// txt is the data of a TXT record holding s (at most 255 bytes).
+func txt(s string) []byte {
+	if len(s) > 255 {
+		s = s[:255]
+	}
+	return append([]byte{byte(len(s))}, s...)
 }
