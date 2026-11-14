@@ -666,6 +666,9 @@ uninstall() {
         ok "configuration, data and the $USER_NAME user removed"
     else
         ok "configuration kept in $ETC (remove everything with: -u --purge)"
+        if [ -d "$VAR/querylog" ]; then
+            warn "query records kept in $VAR/querylog; delete them with: rm -r $VAR/querylog"
+        fi
     fi
 }
 
