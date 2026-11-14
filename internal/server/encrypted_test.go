@@ -167,13 +167,33 @@ rrl_rate = 0
 	c2.Close()
 }
 
-// freeAddr returns a loopback address with a currently free port (DDR needs
-// real port numbers in the configuration).
+// freeAddr returns a loopback address whose port is currently free for
+// both TCP and UDP (DDR needs real port numbers in the configuration, and
+// plain DNS binds both). A port free for one protocol alone may be held
+// over the other by tests running at the same time.
 func freeAddr(t *testing.T) string {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	t.Helper()
+	return freeAddrOn(t, "127.0.0.1")
+}
+
+// freeAddrOn is freeAddr on host ("" for every address, "::1", ...).
+func freeAddrOn(t *testing.T, host string) string {
+	t.Helper()
+	for range 100 {
+		ln, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, port, _ := net.SplitHostPort(ln.Addr().String())
+		addr := net.JoinHostPort(host, port)
+		pc, err := net.ListenPacket("udp", addr)
+		ln.Close()
+		if err != nil {
+			continue // taken over UDP: try another
+		}
+		pc.Close()
+		return addr
 	}
-	defer ln.Close()
-	return ln.Addr().String()
+	t.Fatal("no port free for both TCP and UDP")
+	return ""
 }
