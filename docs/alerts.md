@@ -26,6 +26,8 @@ saved (only a hint, such as the host). To change one, replace it.
 Messages carry no client addresses. Domain names in them are sent as plain
 text, so they cannot mention anyone on Discord or Slack or become links.
 
+![The Alerts page: notifications sent, and their destinations](./images/alerts.webp)
+
 ## What is checked
 
 Every 30 seconds, over the last five minutes. A threshold of 0 turns a

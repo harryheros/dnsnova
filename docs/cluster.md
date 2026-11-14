@@ -78,6 +78,8 @@ page within seconds.
 - **A node is offline** on the Nodes page after three missed syncs.
 - `[cluster]` changes take effect after a restart.
 
+![The Nodes page: three nodes, all healthy, on the same settings and version](./images/nodes.webp)
+
 ### Security
 
 Every exchange is encrypted and authenticated with AES-256-GCM under the
