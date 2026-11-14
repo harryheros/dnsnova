@@ -22,6 +22,7 @@ import (
 
 	"github.com/harryheros/dnsnova/internal/cookie"
 	m "github.com/harryheros/dnsnova/internal/dnsmsg"
+	"github.com/harryheros/dnsnova/internal/dnstap"
 	"github.com/harryheros/dnsnova/internal/guard"
 	"github.com/harryheros/dnsnova/internal/insight"
 	"github.com/harryheros/dnsnova/internal/proxyproto"
@@ -237,7 +238,7 @@ func (s *Server) udpAnswer(st *state, ip netip.Addr, pkt []byte, res resolver.Re
 			resp = m.Truncated(pkt, res.Q, m.Rcode(resp))
 		}
 	}
-	s.logQuery(st, ip, "udp", res, start) // before sending: a client may read the log as soon as it has its answer
+	s.logQuery(st, ip, "udp", pkt, res, start) // before sending: a client may read the log as soon as it has its answer
 	return resp
 }
 
@@ -257,9 +258,10 @@ func (s *Server) reject(v guard.Verdict, ip netip.Addr) {
 	s.Limited.Add(insight.NetworkOf(ip).String(), ip)
 }
 
-// logQuery counts an answered query for the domain lists and, while it
-// runs, records it in the query log. Nothing is written to disk.
-func (s *Server) logQuery(st *state, ip netip.Addr, proto string, res resolver.Result, start time.Time) {
+// logQuery counts an answered query for the domain lists and records it
+// in the query log while it runs, and in the archive (on disk) when
+// log.query_days is set.
+func (s *Server) logQuery(st *state, ip netip.Addr, proto string, req []byte, res resolver.Result, start time.Time) {
 	if res.Q == nil || res.Resp == nil {
 		return
 	}
@@ -270,13 +272,34 @@ func (s *Server) logQuery(st *state, ip netip.Addr, proto string, res resolver.R
 	if rc == m.RcodeNXDomain {
 		s.NXDomains.Add(d, ip)
 	}
-	if s.QLog.On() {
-		s.QLog.Add(insight.Query{
-			Time: start, Proto: proto, Name: strings.ToLower(strings.TrimSuffix(name, ".")),
-			Type: m.TypeString(res.Q.Type), Rcode: m.RcodeString(rc), Source: stats.SourceName(res.Source), Filtered: res.Filtered,
-			MS: float64(time.Since(start).Microseconds()) / 1000,
-		}, ip)
+	newDomain := s.observeNOD(d, name, ip, res)
+	if s.Tap.On() {
+		s.Tap.Add(dnstap.Event{Proto: proto, Client: netip.AddrPortFrom(ip, 0), Query: req, Response: res.Resp, Start: start, End: time.Now()})
 	}
+	live, kept := s.QLog.On(), s.QArchive.On()
+	if !live && !kept {
+		return
+	}
+	q := insight.Query{
+		Time: start, Proto: proto, Name: strings.ToLower(strings.TrimSuffix(name, ".")),
+		Type: m.TypeString(res.Q.Type), Rcode: m.RcodeString(rc), Source: blockedSource(res), Filtered: res.Filtered, Group: res.Group, NewDomain: newDomain,
+		MS: float64(time.Since(start).Microseconds()) / 1000,
+	}
+	if live {
+		s.QLog.Add(q, ip)
+	}
+	if kept {
+		s.QArchive.Add(q, ip)
+	}
+}
+
+// blockedSource names where an answer came from for the query log; a
+// block by a client group's own rule is told apart from the block lists.
+func blockedSource(res resolver.Result) string {
+	if res.BlockedByGroup {
+		return "blocked (group)"
+	}
+	return stats.SourceName(res.Source)
 }
 
 // ---- TCP (pipelined queries are answered concurrently) ----
@@ -415,7 +438,7 @@ func (s *Server) serveTCPConn(c net.Conn, ip netip.Addr, key string, proto, pipe
 			start := time.Now()
 			res := s.resolve(msg, ip, false, name, filtered(st))
 			if res.Resp != nil {
-				s.logQuery(st, ip, name, res, start)
+				s.logQuery(st, ip, name, msg, res, start)
 				writeTCP(c, &wmu, res.Resp)
 			}
 		}()
@@ -613,7 +636,7 @@ func (s *Server) handleDoH(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "malformed dns message", http.StatusBadRequest)
 		return
 	}
-	s.logQuery(st, ip, name, res, start)
+	s.logQuery(st, ip, name, msg, res, start)
 	w.Header().Set("Content-Type", "application/dns-message")
 	w.Header().Set("Cache-Control", fmt.Sprintf("max-age=%d", m.ResponseMinTTL(res.Resp)))
 	w.Write(res.Resp)
@@ -657,6 +680,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintf(w, "dnsnova_upstream_healthy{upstream=%q,role=%q} %d\n", u.U.String(), role(u.Fallback), h)
 	}
 	s.writeRecursionMetrics(w)
+	s.writeLogMetrics(w)
 }
 
 func role(fallback bool) string {
@@ -722,4 +746,33 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		out["anycast"] = s.anycastState()
 	}
 	json.NewEncoder(w).Encode(out)
+}
+
+// writeLogMetrics describes the query records and dnstap, when on.
+func (s *Server) writeLogMetrics(w io.Writer) {
+	if a := s.QArchive.State(); a.On {
+		fmt.Fprintf(w, "# HELP dnsnova_query_records_written_total Queries written to the query records on disk.\n# TYPE dnsnova_query_records_written_total counter\ndnsnova_query_records_written_total %d\n", a.Written)
+		fmt.Fprintf(w, "# HELP dnsnova_query_records_dropped_total Queries left out of the query records because the disk fell behind.\n# TYPE dnsnova_query_records_dropped_total counter\ndnsnova_query_records_dropped_total %d\n", a.Dropped)
+		fmt.Fprintf(w, "# TYPE dnsnova_query_records_errors_total counter\ndnsnova_query_records_errors_total %d\n", a.Errors)
+		fmt.Fprintf(w, "# TYPE dnsnova_query_records_bytes gauge\ndnsnova_query_records_bytes %d\n", a.Bytes)
+	}
+	if n := s.nod.Load(); n != nil {
+		st := n.State()
+		learning := 0
+		if st.Learning {
+			learning = 1
+		}
+		fmt.Fprintf(w, "# HELP dnsnova_new_domains_total Domains looked up here for the first time (newly observed).\n# TYPE dnsnova_new_domains_total counter\ndnsnova_new_domains_total %d\n", st.Total)
+		fmt.Fprintf(w, "# TYPE dnsnova_new_domains_learning gauge\ndnsnova_new_domains_learning %d\n", learning)
+	}
+	if t := s.Tap.State(); t.On {
+		up := 0
+		if t.Connected {
+			up = 1
+		}
+		fmt.Fprintf(w, "# TYPE dnsnova_dnstap_connected gauge\ndnsnova_dnstap_connected %d\n", up)
+		fmt.Fprintf(w, "# TYPE dnsnova_dnstap_sent_total counter\ndnsnova_dnstap_sent_total %d\n", t.Sent)
+		fmt.Fprintf(w, "# HELP dnsnova_dnstap_dropped_total Messages dropped because the collector was gone or slow.\n# TYPE dnsnova_dnstap_dropped_total counter\ndnsnova_dnstap_dropped_total %d\n", t.Dropped)
+		fmt.Fprintf(w, "# TYPE dnsnova_dnstap_errors_total counter\ndnsnova_dnstap_errors_total %d\n", t.Errors)
+	}
 }

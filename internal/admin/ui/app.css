@@ -444,6 +444,15 @@ td.r, th.r { text-align: right; }
 .field .help { font-size: 13px; color: var(--muted); }
 .field .ctl { flex: 1 1 300px; min-width: 0; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
 .field.inline { flex-wrap: nowrap; }
+.field.wide .ctl { flex-basis: 100%; align-items: stretch; }
+.groups { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; width: 100%; }
+.gcard { width: 100%; border: 1px solid var(--border); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+.ghead { display: flex; gap: 12px; align-items: flex-end; justify-content: space-between; }
+.ghead .gfield { flex: 0 1 260px; }
+.ggrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.gfield { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.gfield textarea { min-height: 76px; max-width: none; }
+.gfield select, .gfield input { max-width: none; }
 .field.inline .ctl { flex: none; align-items: flex-end; }
 .field .problem { color: var(--err); font-size: 12px; }
 .field.flash { animation: flash 1.6s ease-out; }

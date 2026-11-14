@@ -57,6 +57,7 @@ const LINE = {
   overview: [["rect", { x: 3, y: 3, width: 7, height: 9, rx: 1 }], ["rect", { x: 14, y: 3, width: 7, height: 5, rx: 1 }], ["rect", { x: 14, y: 12, width: 7, height: 9, rx: 1 }], ["rect", { x: 3, y: 16, width: 7, height: 5, rx: 1 }]],
   upstreams: [["rect", { x: 2, y: 2, width: 20, height: 8, rx: 2 }], ["rect", { x: 2, y: 14, width: 20, height: 8, rx: 2 }], ["path", { d: "M6 6h.01M6 18h.01" }]],
   querylog: [["path", { d: "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" }]],
+  sparkle: [["path", { d: "M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z" }], ["path", { d: "M19 15v4M17 17h4" }]],
   dns: [["circle", { cx: 12, cy: 12, r: 10 }], ["path", { d: "M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20M2 12h20" }]],
   lock: [["rect", { x: 3, y: 11, width: 18, height: 11, rx: 2 }], ["path", { d: "M7 11V7a5 5 0 0 1 10 0v4" }]],
   shield: [["path", { d: "M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" }]],
@@ -718,7 +719,7 @@ function changedValues(before, after) {
 // ---------- the app shell ----------
 
 const NAV = [
-  ["Status", [["Overview", "overview", "home"], ["Upstreams", "upstreams", "upstreams"], ["Query log", "querylog", "querylog"]]],
+  ["Status", [["Overview", "overview", "home"], ["Upstreams", "upstreams", "upstreams"], ["Query log", "querylog", "querylog"], ["New domains", "newdomains", "sparkle"]]],
   ["Settings", [["DNS & upstreams", "settings/dns", "dns"], ["Filtering", "settings/filter", "filter"], ["Encrypted DNS", "settings/encryption", "lock"], ["Access & limits", "settings/access", "shield"], ["Alerts", "settings/alerts", "bell"], ["Admin", "settings/admin", "user"]]],
   ["Tools", [["Setup guide", "tools/guide", "phone"], ["Compare upstreams", "tools/lookup", "compare"], ["Trace a lookup", "tools/trace", "arrow"]]],
 ];
@@ -1304,14 +1305,15 @@ function drawOverview(d, { range, metric, seg, mseg }) {
   const pv = st.privacy;
   const privRows = [
     ["Query log", pv.query_log ? (pv.query_log_full_ip ? "On, full addresses" : "On") : "Off", pv.query_log ? "warn" : "ok"],
-    ["Queries on disk", "Never", "ok"],
-    ["Addresses on disk", "Never", "ok"],
+    ["Queries on disk", pv.query_log_days ? `${pv.query_log_days} days` : "Never", pv.query_log_days ? "warn" : "ok"],
+    ["Addresses on disk", pv.query_log_days ? (pv.query_log_full_ip ? "Full" : "Shortened") : "Never", pv.query_log_days ? "warn" : "ok"],
+    ["Sent to a log collector", pv.query_export ? "Yes (dnstap)" : "No", pv.query_export ? "warn" : "ok"],
     ["Client addresses sent on", "Never", "ok"],
     ["Telemetry", "None", "ok"],
   ];
   const privCard = card("s3", "Privacy", "shieldcheck", null,
     h("dl", { class: "kvs" }, privRows.map(([k, v, cls]) => h("div", null, h("dt", null, k), h("dd", { class: cls }, v)))),
-    h("footer", { class: "dfoot" }, h("span", null, "In memory only"), h("a", { href: "#/querylog" }, "Query log")));
+    h("footer", { class: "dfoot" }, h("span", null, pv.query_log_days ? "Queries kept on disk" : "In memory only"), h("a", { href: "#/querylog" }, "Query log")));
 
   const notServing = st.serves_dns === false ? h("p", { class: "notice warn s12" }, "DNS is not served yet: no address is set. Choose addresses in ", h("a", { href: "#/settings/encryption" }, "Encrypted DNS › Protocols"), " and where answers come from in ", h("a", { href: "#/settings/dns" }, "DNS & upstreams"), ".") : null;
   return [h("div", { class: "dash" }, notServing, k1, k2, k3, k4, chart, flow, top, upCard, evCard,
@@ -1781,11 +1783,100 @@ function lookupPage(main) {
 
 const QL_LENGTHS = [[15, "15 minutes"], [60, "1 hour"], [360, "6 hours"], [1440, "24 hours"]];
 
+// qlTable shows query records; withDate adds the date (for the archive).
+function qlTable(entries, withDate) {
+  const when = (t) => withDate ? new Date(t).toLocaleString([], { hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }) : new Date(t).toLocaleTimeString([], { hour12: false });
+  return h("div", { class: "tablewrap" }, h("table", null,
+    h("thead", null, h("tr", null, ["Time", "Client", "Protocol", "Domain", "Type", "Result", "From", "Time taken"].map((t, i) => h("th", { scope: "col", class: i === 7 ? "r" : "" }, t)))),
+    h("tbody", null, entries.map((q) => h("tr", null,
+      h("td", { class: "mono small" }, when(q.time)),
+      h("td", { class: "mono small" }, q.client, q.group ? h("span", { class: "tag", title: "Client group" }, q.group) : null), h("td", { class: "small" }, q.proto, q.filtered ? h("span", { class: "tag", title: "The block lists applied" }, "filtered") : null),
+      h("td", { class: "mono small ellipsis", title: q.name }, q.name, q.new_domain ? h("span", { class: "tag warn", title: "The first lookup of this domain here" }, "new") : null), h("td", { class: "small" }, q.type),
+      h("td", { class: "small " + (q.rcode === "NOERROR" ? "" : "warn") }, q.rcode),
+      h("td", { class: "small " + (q.source.startsWith("blocked") ? "warn" : "muted"), title: q.source === "blocked (group)" ? "By a rule of the client's group (Settings › DNS › Clients)" : null }, q.source,
+        q.source === "blocked" ? h("button", { type: "button", class: "btn link small", title: "Never block " + q.name, onclick: () => allowDomain(q.name).catch((e) => toast(e.message, "err")) }, "Allow") : null),
+      h("td", { class: "r num small" }, (q.ms ? fmt.ms(q.ms) : "<0.1") + " ms"))))));
+}
+
+const fmtBytes = (n) => n >= 1 << 30 ? (n / (1 << 30)).toFixed(1) + " GB" : n >= 1 << 20 ? (n / (1 << 20)).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB";
+
 function queryLogPage(main) {
+  const box = h("div", { style: { display: "flex", flexDirection: "column", gap: "16px" } }, h("p", { class: "muted" }, "Loading…"));
+  main.append(pageHead("Query log", "Status"), box);
+  (async () => {
+    try {
+      const r = await api("GET", "/querylog?limit=1");
+      if (r.archive && r.archive.on) archiveView(box, r.archive, r.files || []);
+      else { box.replaceChildren(); liveLogView(box); }
+      if (r.dnstap && r.dnstap.on) box.prepend(tapNotice(r.dnstap));
+    } catch (e) { if (e.status !== 401) fill(box, errorBox(e)); }
+  })();
+}
+
+// tapNotice says where dnstap sends queries and how that goes.
+function tapNotice(t) {
+  const how = t.connected ? `connected, ${fmt.int(t.sent)} messages sent` : "not connected" + (t.last_error ? ": " + t.last_error : "");
+  return h("p", { class: "notice small " + (t.connected && !t.dropped ? "" : "warn"), style: { margin: 0 } },
+    h("strong", null, "dnstap: "), `every query also goes to ${t.target}, ${how}.`,
+    t.dropped ? ` ${fmt.int(t.dropped)} dropped while the collector was gone or slow.` : "",
+    " ", h("a", { href: "#/settings/admin" }, "Settings"));
+}
+
+// archiveView searches the queries kept on disk (log.query_days).
+function archiveView(box, ar, files) {
+  const name = h("input", { type: "search", placeholder: "Domain contains", "aria-label": "Domain contains", spellcheck: "false" });
+  const client = h("input", { type: "search", placeholder: "Client starts with", "aria-label": "Client starts with", spellcheck: "false" });
+  const result = h("select", { "aria-label": "Result" }, [["", "All results"], ["blocked", "Blocked"], ["error", "Errors (not NOERROR)"]].map(([v, t]) => h("option", { value: v }, t)));
+  const day = h("select", { "aria-label": "Day" }, h("option", { value: "" }, "Every day"), files.map((f) => h("option", { value: f.day }, f.day + " (UTC)")));
+  const table = h("div");
+  const note = h("p", { class: "small muted", style: { margin: 0 } });
+  const warn = ar.dropped || ar.errors ? h("p", { class: "notice warn small", style: { margin: 0 } },
+    ar.dropped ? `${fmt.int(ar.dropped)} queries could not be written fast enough and are missing. ` : "",
+    ar.errors ? `Writing failed ${fmt.int(ar.errors)} times${ar.last_error ? ": " + ar.last_error : ""}.` : "") : null;
+  fill(box,
+    h("section", { class: "card" },
+      h("div", { class: "pagehead" }, h("h2", null, h("span", { class: "dot warn", style: { marginRight: "8px" } }), `Every query is kept for ${ar.days} ${ar.days === 1 ? "day" : "days"}`),
+        h("a", { class: "btn", href: "#/settings/admin" }, "Settings")),
+      h("p", { style: { margin: 0 } }, ar.full_ip ? h("strong", { class: "warn" }, "Full client addresses are kept. ") : "Client addresses are shortened (203.0.113.x, 2001:db8:1::/48). ",
+        `${fmt.int(ar.files)} ${ar.files === 1 ? "file" : "files"}, ${fmtBytes(ar.bytes)} on disk. The status page tells visitors that queries are kept.`),
+      warn),
+    h("section", { class: "card" },
+      h("div", { class: "row", style: { alignItems: "center" } },
+        h("div", { style: { flex: "2 1 220px" } }, name), h("div", { style: { flex: "1 1 160px" } }, client),
+        h("div", { style: { flex: "0 1 190px" } }, result), h("div", { style: { flex: "0 1 190px" } }, day)),
+      note, table),
+    files.length ? h("section", { class: "card" }, h("h2", null, "Download"),
+      h("p", { class: "small muted", style: { margin: 0 } }, "One file per day (UTC), tab-separated: time, client, protocol, domain, type, result, from, milliseconds, filtered, group. Finished days are gzipped. Each download is recorded in the service log."),
+      h("div", { class: "addrs" }, files.map((f) => h("div", { class: "copyrow" }, h("span", { class: "k" }, f.day), h("code", null, `${f.name} · ${fmtBytes(f.size)}`),
+        h("a", { class: "btn small", href: "/api/v1/querylog/files/" + encodeURIComponent(f.name), download: "" }, "Download"))))) : null);
+  let seq = 0;
+  const load = async () => {
+    const my = ++seq;
+    note.textContent = "Searching…";
+    try {
+      const qs = new URLSearchParams({ limit: "500", name: name.value, client: client.value, result: result.value, day: day.value });
+      const r = await api("GET", "/querylog/archive?" + qs);
+      if (my !== seq) return;
+      note.textContent = r.partial ? r.partial : r.entries.length === 500 ? "The newest 500 matches." : `${fmt.int(r.entries.length)} ${r.entries.length === 1 ? "match" : "matches"}.`;
+      note.className = "small " + (r.partial ? "warn" : "muted");
+      fill(table, r.entries.length ? qlTable(r.entries, true) : h("p", { class: "empty small", style: { margin: 0 } }, "No queries match."));
+    } catch (e) { if (my === seq && e.status !== 401) { note.textContent = ""; fill(table, errorBox(e)); } }
+  };
+  let deb;
+  const later = () => { clearTimeout(deb); deb = setTimeout(load, 350); };
+  name.addEventListener("input", later);
+  client.addEventListener("input", later);
+  result.addEventListener("change", load);
+  day.addEventListener("change", load);
+  load();
+}
+
+// liveLogView is the in-memory query log, started by hand for a while.
+function liveLogView(main) {
   const head = h("section", { class: "card" });
   const filter = h("input", { type: "search", placeholder: "Filter by domain or client", "aria-label": "Filter by domain or client", spellcheck: "false" });
   const table = h("div");
-  main.append(pageHead("Query log", "Status"), head, h("section", { class: "card" }, h("div", { class: "row", style: { alignItems: "center" } }, h("div", { style: { flex: "1 1 260px" } }, filter)), table));
+  main.append(head, h("section", { class: "card" }, h("div", { class: "row", style: { alignItems: "center" } }, h("div", { style: { flex: "1 1 260px" } }, filter)), table));
   let st = null, timer = null;
   const drawHead = () => {
     if (st.on) {
@@ -1805,6 +1896,7 @@ function queryLogPage(main) {
     fill(head,
       h("h2", null, "The query log is off"),
       h("p", { style: { margin: 0 } }, "Turn it on to see each query as it arrives, for troubleshooting. It runs for the time you choose and then stops by itself. Nothing is written to disk, and a restart clears it."),
+      h("p", { class: "small muted", style: { margin: 0 } }, "To keep every query for days instead, as offices may need to, set ", h("a", { href: "#/settings/admin" }, "Admin › Query records"), "."),
       st.count ? h("p", { class: "small muted", style: { margin: 0 } }, `The ${fmt.int(st.count)} queries below are from the last run; they are deleted an hour after it stopped.`) : null,
       h("div", { class: "row", style: { alignItems: "center" } }, h("label", { class: "small" }, "Run for "), len,
         h("label", { class: "check", style: { flex: "1 1 260px" } }, full, h("span", null, "Keep full client addresses (normally the last part is hidden)"))),
@@ -1829,16 +1921,7 @@ function queryLogPage(main) {
       const was = st && st.on;
       st = r.state;
       if (!head.childNodes.length || was !== st.on) drawHead();
-      fill(table, r.entries.length ? h("div", { class: "tablewrap" }, h("table", null,
-        h("thead", null, h("tr", null, ["Time", "Client", "Protocol", "Domain", "Type", "Result", "From", "Time taken"].map((t, i) => h("th", { scope: "col", class: i === 7 ? "r" : "" }, t)))),
-        h("tbody", null, r.entries.map((q) => h("tr", null,
-          h("td", { class: "mono small" }, new Date(q.time).toLocaleTimeString([], { hour12: false })),
-          h("td", { class: "mono small" }, q.client), h("td", { class: "small" }, q.proto, q.filtered ? h("span", { class: "tag", title: "Through the filtered service" }, "filtered") : null),
-          h("td", { class: "mono small ellipsis", title: q.name }, q.name), h("td", { class: "small" }, q.type),
-          h("td", { class: "small " + (q.rcode === "NOERROR" ? "" : "warn") }, q.rcode),
-          h("td", { class: "small " + (q.source === "blocked" ? "warn" : "muted") }, q.source,
-            q.source === "blocked" ? h("button", { type: "button", class: "btn link small", title: "Never block " + q.name, onclick: () => allowDomain(q.name).catch((e) => toast(e.message, "err")) }, "Allow") : null),
-          h("td", { class: "r num small" }, (q.ms ? fmt.ms(q.ms) : "<0.1") + " ms"))))))
+      fill(table, r.entries.length ? qlTable(r.entries, false)
         : h("p", { class: "empty small", style: { margin: 0 } }, st.on ? (filter.value ? "No queries match." : "Waiting for queries…") : "No queries recorded."));
     } catch (e) { if (e.status !== 401) fill(table, errorBox(e)); }
   };
@@ -1846,6 +1929,44 @@ function queryLogPage(main) {
   filter.addEventListener("input", () => { clearTimeout(deb); deb = setTimeout(load, 250); });
   load();
   state.timer = setInterval(() => { if (document.visibilityState === "visible" && st && st.on) load(); }, 5000);
+}
+
+// ---------- newly observed domains ----------
+
+function newDomainsPage(main) {
+  const box = h("div", { style: { display: "flex", flexDirection: "column", gap: "16px" } }, h("p", { class: "muted" }, "Loading…"));
+  main.append(pageHead("New domains", "Status"), box);
+  const load = async () => {
+    try {
+      const r = await api("GET", "/nod");
+      if (!r.on) {
+        fill(box, h("section", { class: "card" }, h("h2", null, "Not watching for new domains"),
+          h("p", { style: { margin: 0 } }, "DNSNova can tell when a domain is looked up here for the first time. Phishing and malware mostly use domains registered days before, which nobody on a network has asked for until then; a first lookup is often the first sign."),
+          h("p", { class: "small muted", style: { margin: 0 } }, "It keeps no list of domains, only hashes, and reports what it finds here and to your alert destinations."),
+          h("div", null, h("a", { class: "btn primary", href: "#/settings/filter" }, "Turn it on in Filtering"))));
+        return;
+      }
+      const st = r.state;
+      const head = h("section", { class: "card" },
+        h("div", { class: "pagehead" }, h("h2", null, st.learning ? "Learning the network's domains" : `${fmt.int(st.total)} new ${st.total === 1 ? "domain" : "domains"} since the start`),
+          h("a", { class: "btn", href: "#/settings/filter" }, "Settings")),
+        h("p", { style: { margin: 0 } }, st.learning ? `Nothing is reported until ${fmt.time(st.learn_until, "full")}, while DNSNova learns which domains are usual here.` :
+          "Domains looked up here for the first time in 30 to 60 days. Most are harmless (a new site, a new service); look twice at unfamiliar names, especially lookalikes of brands."));
+      const table = r.domains.length ? h("div", { class: "tablewrap" }, h("table", null,
+        h("thead", null, h("tr", null, ["First seen", "Domain", "Name looked up", "Type", "First asked by", ""].map((t) => h("th", { scope: "col" }, t)))),
+        h("tbody", null, r.domains.map((d) => h("tr", null,
+          h("td", { class: "mono small" }, new Date(d.time).toLocaleString([], { hour12: false })),
+          h("td", { class: "mono small" }, h("strong", null, d.domain)),
+          h("td", { class: "mono small ellipsis", title: d.name }, d.name),
+          h("td", { class: "small" }, d.type),
+          h("td", { class: "mono small" }, d.client),
+          h("td", { class: "r" }, h("button", { type: "button", class: "btn small", title: "Add to the block rules", onclick: () => blockDomain(d.domain).catch((e) => toast(e.message, "err")) }, "Block")))))))
+        : h("p", { class: "empty small", style: { margin: 0 } }, st.learning ? "Learning…" : "None yet.");
+      fill(box, head, h("section", { class: "card" }, table));
+    } catch (e) { if (e.status !== 401) fill(box, errorBox(e)); }
+  };
+  load();
+  state.timer = setInterval(() => { if (document.visibilityState === "visible") load(); }, 15000);
 }
 
 // ---------- setup guide ----------
@@ -1919,6 +2040,7 @@ const SETTINGS = {
         { key: "local.forward", label: "Domains with their own servers", type: "list", help: "One per line: a domain and its servers, such as \u201ccorp.example 10.0.0.53\u201d or \u201clan 192.168.1.1\u201d. Names under it are asked from those servers only (an office\u2019s Active Directory, a router\u2019s device names), also private reverse zones such as 168.192.in-addr.arpa. Servers are written as upstreams are." },
       ] },
       { title: "Clients", fields: [
+        { key: "clients.groups", label: "Groups", type: "groups", help: "Devices sorted by network, each group with its own filtering: the finance office filtered, the lab never, social networks blocked for the guests. The query log shows each query's group." },
         { key: "ddr.enabled", label: "Discovery (DDR)", type: "bool", help: "Devices asking over plain DNS learn the encrypted addresses and switch automatically." },
       ] },
     ],
@@ -1941,6 +2063,13 @@ const SETTINGS = {
       { title: "Your rules", fields: [
         { key: "filter.allow", label: "Never block", type: "list", help: "One domain per line; covers every name under it and wins over every list. Use it when something stops working.", show: (v) => v["filter.enabled"] },
         { key: "filter.block", label: "Also block", type: "list", help: "One domain per line; covers every name under it.", show: (v) => v["filter.enabled"] },
+      ] },
+      { title: "New domains", fields: [
+        { key: "nod.enabled", label: "Watch for new domains", type: "bool", help: "Tell when a domain is looked up here for the first time in 30 to 60 days: often the first sign of phishing or malware. Keeps hashes only, no list of domains; shown under Status › New domains." },
+        { key: "nod.alert", label: "Send to alert destinations", type: "bool", help: "At most every 10 minutes, the domains found since the last message. Needs alerts on.", show: (v) => v["nod.enabled"] },
+        { key: "nod.learn", label: "Learn first", type: "text", help: "When first turned on, stay quiet this long while learning which domains are usual here, such as 24h.", show: (v) => v["nod.enabled"] },
+        { key: "nod.ignore", adv: true, label: "Never report", type: "list", help: "Domains, with everything under them, such as your own or a CDN that creates names all the time.", show: (v) => v["nod.enabled"] },
+        { key: "nod.full_ip", adv: true, label: "Full client addresses", type: "bool", help: "Say which device asked first with its whole address (normally 203.0.113.x).", show: (v) => v["nod.enabled"] },
       ] },
     ],
   },
@@ -2031,6 +2160,16 @@ const SETTINGS = {
       { title: "Statistics", action: ["Clear statistics", async () => { await api("POST", "/stats/clear"); toast("Statistics cleared"); }], fields: [
         { key: "stats.retention", label: "Keep statistics for", type: "select", options: [["24h", "24 hours"], ["7d", "7 days"], ["30d", "30 days"]], help: "Kept in memory only, so a restart starts them again. Counts and response times, and the domain lists; never client addresses." },
       ] },
+      { title: "Query records", fields: [
+        { key: "log.query_days", label: "Keep queries for", type: "number", help: "Days. Every query is written to disk (data_dir/querylog, one file per day, compressed after the day), for offices that must be able to tell later which device looked up what. 0 turns it off and deletes the files. The status page shows that it is on." },
+        { key: "log.query_full_ip", label: "Keep full client addresses", type: "bool", help: "Normally the last part is hidden (203.0.113.x). Full addresses tell which device asked.", show: (v) => v["log.query_days"] > 0 },
+      ] },
+      { title: "Log collector (dnstap)", fields: [
+        { key: "dnstap.target", label: "Send to", type: "text", placeholder: "unix:/run/vector/dnstap.sock", help: "Every query and answer, as dnstap, to a collector such as Vector, dnscollector or a SIEM: unix:/path/to/socket or tcp:host:port. Empty: off. Sending never delays an answer; when the collector is gone, messages are dropped and counted. The status page shows that it is on." },
+        { key: "dnstap.queries", label: "Queries", type: "bool", help: "Send each query as it arrived (CLIENT_QUERY).", show: (v) => !!v["dnstap.target"] },
+        { key: "dnstap.responses", label: "Answers", type: "bool", help: "Send each answer as it went out (CLIENT_RESPONSE), with the time taken.", show: (v) => !!v["dnstap.target"] },
+        { key: "dnstap.full_ip", label: "Full client addresses", type: "bool", help: "Normally only the network is sent (203.0.113.0, 2001:db8:1::).", show: (v) => !!v["dnstap.target"] },
+      ] },
       { title: "Access", fields: [
         { key: "admin.listen", label: "Admin address", type: "text", help: "127.0.0.1:7000: through an SSH tunnel only (safest). :7000: also from other machines, with a password: from your own network in private mode, over HTTPS only on a public server." },
         { key: "metrics.listen", label: "Metrics address", type: "text", help: "Prometheus metrics and the health check. Keep it on a private address." },
@@ -2041,7 +2180,7 @@ const SETTINGS = {
 };
 
 const PAGES_BY_ROUTE = {
-  overview, upstreams: upstreamsPage, querylog: queryLogPage, nodes: nodesPage, dnssec: dnssecPage, "tools/trace": tracePage, "tools/lookup": lookupPage, "tools/guide": guidePage,
+  overview, upstreams: upstreamsPage, querylog: queryLogPage, newdomains: newDomainsPage, nodes: nodesPage, dnssec: dnssecPage, "tools/trace": tracePage, "tools/lookup": lookupPage, "tools/guide": guidePage,
   "settings/dns": (m) => settingsPage(m, "dns"),
   "settings/encryption": (m) => settingsPage(m, "encryption"),
   "settings/filter": (m) => settingsPage(m, "filter"),
@@ -2239,6 +2378,11 @@ function fieldRow(f, form, onchange) {
       reset = () => { ctl.value = form.val[f.key].join("\n"); };
       break;
     }
+    case "groups": {
+      ctl = groupsEditor(id, v, set);
+      reset = () => ctl.load(form.val[f.key]);
+      break;
+    }
     case "number": {
       ctl = h("input", { type: "number", id, value: v, step: "any", inputmode: "decimal" });
       ctl.addEventListener("input", () => { if (ctl.value !== "" && !isNaN(Number(ctl.value))) set(Number(ctl.value)); });
@@ -2252,8 +2396,9 @@ function fieldRow(f, form, onchange) {
     }
   }
   const inline = f.type === "bool" || f.type === "listen";
+  const wide = f.type === "groups";
   const labelEl = f.type === "bool" || f.type === "listen" ? h("span", { class: "label", id: id + "-l" }, f.label) : h("label", { for: id }, f.label);
-  const el = h("div", { class: "field" + (inline ? " inline" : ""), "data-key": f.key },
+  const el = h("div", { class: "field" + (inline ? " inline" : "") + (wide ? " wide" : ""), "data-key": f.key },
     h("div", { class: "text" }, labelEl, h("div", { class: "help", id: id + "-h" }, f.help)),
     h("div", { class: "ctl" }, ctl, prob));
   const target = ctl.matches?.("input,select,textarea,button") ? ctl : ctl.querySelector("button");
@@ -2265,6 +2410,74 @@ function fieldRow(f, form, onchange) {
       target.setAttribute("aria-invalid", String(!!(msgs && msgs.length)));
     },
   };
+}
+
+// ---------- client groups ----------
+
+// parseGroup reads one clients.groups entry: "name networks... [filter|nofilter] [block=a,b] [allow=c]".
+function parseGroup(line) {
+  const g = { name: "", nets: [], filter: "", block: [], allow: [] };
+  const words = line.trim().split(/\s+/);
+  g.name = words.shift() || "";
+  for (const w of words) {
+    const lw = w.toLowerCase();
+    if (lw === "filter") g.filter = "on";
+    else if (lw === "nofilter") g.filter = "off";
+    else if (lw.startsWith("block=")) g.block.push(...w.slice(6).split(",").filter(Boolean));
+    else if (lw.startsWith("allow=")) g.allow.push(...w.slice(6).split(",").filter(Boolean));
+    else g.nets.push(w);
+  }
+  return g;
+}
+
+function groupLine(g) {
+  const words = [g.name.trim(), ...g.nets];
+  if (g.filter === "on") words.push("filter");
+  if (g.filter === "off") words.push("nofilter");
+  if (g.block.length) words.push("block=" + g.block.join(","));
+  if (g.allow.length) words.push("allow=" + g.allow.join(","));
+  return words.filter(Boolean).join(" ");
+}
+
+// groupsEditor edits clients.groups as cards; set receives the lines.
+function groupsEditor(id, value, set) {
+  const box = h("div", { class: "groups", id, role: "group" });
+  let groups = [];
+  const words = (s) => s.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
+  const emit = () => set(groups.map(groupLine).filter(Boolean));
+  const draw = () => {
+    const cards = groups.map((g, i) => {
+      const name = h("input", { type: "text", value: g.name, "aria-label": "Group name", placeholder: "finance", spellcheck: "false", class: "mono" });
+      const nets = h("textarea", { "aria-label": "Networks", placeholder: "10.1.0.0/24\n10.1.1.5", spellcheck: "false", class: "mono" });
+      nets.value = g.nets.join("\n");
+      const filt = h("select", { "aria-label": "Filtering" }, [["", "As the address they use decides"], ["on", "Always filtered"], ["off", "Never filtered"]].map(([v, t]) => h("option", { value: v }, t)));
+      filt.value = g.filter;
+      const block = h("textarea", { "aria-label": "Blocked for this group", placeholder: "facebook.com\ntiktok.com", spellcheck: "false", class: "mono" });
+      block.value = g.block.join("\n");
+      const allow = h("textarea", { "aria-label": "Never blocked for this group", placeholder: "ads.partner.example", spellcheck: "false", class: "mono" });
+      allow.value = g.allow.join("\n");
+      name.addEventListener("input", () => { g.name = name.value.trim(); emit(); });
+      nets.addEventListener("input", () => { g.nets = words(nets.value); emit(); });
+      filt.addEventListener("change", () => { g.filter = filt.value; emit(); });
+      block.addEventListener("input", () => { g.block = words(block.value); emit(); });
+      allow.addEventListener("input", () => { g.allow = words(allow.value); emit(); });
+      const lab = (t, el, hint) => h("label", { class: "gfield" }, h("span", { class: "small" }, t), el, hint ? h("span", { class: "small muted" }, hint) : null);
+      return h("div", { class: "gcard" },
+        h("div", { class: "ghead" }, lab("Name", name),
+          h("button", { type: "button", class: "btn small danger", onclick: () => { groups.splice(i, 1); emit(); draw(); } }, "Remove")),
+        h("div", { class: "ggrid" },
+          lab("Networks or addresses", nets, "One per line. A device in several groups belongs to the narrowest."),
+          lab("Filtering", filt, "Whether the block lists apply."),
+          lab("Blocked for this group", block, "Domains, with everything under them; whatever the lists say."),
+          lab("Never blocked for this group", allow, "Exempt from the lists and the rules above.")));
+    });
+    fill(box, ...cards,
+      groups.length ? null : h("p", { class: "small muted", style: { margin: 0 } }, "No groups: every device is treated alike."),
+      h("button", { type: "button", class: "btn small", onclick: () => { groups.push({ name: "", nets: [], filter: "", block: [], allow: [] }); draw(); box.querySelector(".gcard:last-of-type input")?.focus(); } }, "Add a group"));
+  };
+  box.load = (lines) => { groups = (lines || []).map(parseGroup); draw(); };
+  box.load(value);
+  return box;
 }
 
 // The label a setting has in the interface, for change lists.
@@ -2348,6 +2561,15 @@ function whyCard() {
 }
 
 // allowDomain adds a name to filter.allow (from the query log).
+// blockDomain adds a name to filter.block (from the new domains page).
+async function blockDomain(name) {
+  const cfg = await api("GET", "/config");
+  const cur = (cfg.settings.find((x) => x.key === "filter.block") || {}).value || [];
+  if (cur.includes(name)) { toast(`${name} is already blocked`); return; }
+  await api("PATCH", "/config", { hash: cfg.hash, set: { "filter.block": [...cur, name] } });
+  toast(`${name} is blocked where filtering applies`);
+}
+
 async function allowDomain(name) {
   const cfg = await api("GET", "/config");
   const cur = (cfg.settings.find((x) => x.key === "filter.allow") || {}).value || [];

@@ -300,7 +300,7 @@ func (s *Server) serveDoQStream(c *quic.Conn, str *quic.Stream, ip netip.Addr, s
 		c.CloseWithError(doqProtocolError, "malformed query")
 		return
 	}
-	s.logQuery(st, ip, "doq", res, start)
+	s.logQuery(st, ip, "doq", msg, res, start)
 	writeDoQ(str, res.Resp)
 }
 

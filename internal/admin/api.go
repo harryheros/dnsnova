@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"net/netip"
@@ -264,6 +265,7 @@ func (a *Admin) status(w http.ResponseWriter, r *http.Request, c *call) {
 	pos, neg := a.b.Cache()
 	started := a.b.Started()
 	ql := a.b.QueryLog().State(a.Now())
+	arch := a.b.Archive().State()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version":        a.b.Version(),
 		"started":        started.UTC(),
@@ -278,10 +280,12 @@ func (a *Admin) status(w http.ResponseWriter, r *http.Request, c *call) {
 		"retention":      cfg.Stats.Retention,
 		"serves_dns":     cfg.ServesDNS(),
 		"privacy": map[string]any{
-			"query_log":            ql.On,
-			"query_log_full_ip":    ql.On && ql.FullIP,
-			"client_ip_upstream":   false,         // clients' addresses are never sent on
-			"client_subnet":        ecsShown(cfg), // the one fixed ecs.address sent instead, or ""
+			"query_log":            ql.On || arch.On,
+			"query_log_full_ip":    (ql.On && ql.FullIP) || arch.FullIP,
+			"query_log_days":       arch.Days * boolInt(arch.On), // kept on disk; 0: not kept
+			"query_export":         a.b.Dnstap().On,              // sent to a log collector (dnstap)
+			"client_ip_upstream":   false,                        // clients' addresses are never sent on
+			"client_subnet":        ecsShown(cfg),                // the one fixed ecs.address sent instead, or ""
 			"telemetry":            false,
 			"zero_rtt":             false,
 			"private_ptr_answered": true,
@@ -336,7 +340,67 @@ func (a *Admin) getQueryLog(w http.ResponseWriter, r *http.Request, c *call) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"state":   l.State(now),
 		"entries": l.Recent(limit, r.URL.Query().Get("q"), now),
+		"archive": a.b.Archive().State(),
+		"dnstap":  a.b.Dnstap(),
+		"files":   a.b.Archive().Files(),
 	})
+}
+
+// searchArchive searches the queries kept on disk: ?day=2006-01-02 (or
+// every day), name=, client=, result=blocked|error, limit= (up to 1000).
+func (a *Admin) searchArchive(w http.ResponseWriter, r *http.Request, c *call) {
+	p := r.URL.Query()
+	q := insight.ArchiveQuery{Day: p.Get("day"), Name: p.Get("name"), Client: p.Get("client"), Group: p.Get("group"), Result: p.Get("result"), Limit: 500}
+	if s := p.Get("limit"); s != "" {
+		n, err := strconv.Atoi(s)
+		if err != nil || n < 1 || n > 1000 {
+			writeError(w, http.StatusBadRequest, "limit must be 1 to 1000")
+			return
+		}
+		q.Limit = n
+	}
+	if q.Day != "" {
+		if _, err := time.Parse(time.DateOnly, q.Day); err != nil {
+			writeError(w, http.StatusBadRequest, "day must look like 2006-01-02")
+			return
+		}
+	}
+	if q.Result != "" && q.Result != "blocked" && q.Result != "error" {
+		writeError(w, http.StatusBadRequest, `result must be "blocked" or "error"`)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	entries, err := a.b.Archive().Search(ctx, q)
+	partial := ""
+	if err != nil {
+		if !errors.Is(err, insight.ErrSearchTimeout) {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		partial = err.Error()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"entries": entries, "partial": partial})
+}
+
+// archiveFile downloads one day of the archive as it is on disk.
+func (a *Admin) archiveFile(w http.ResponseWriter, r *http.Request, c *call) {
+	name := r.PathValue("name")
+	f, err := a.b.Archive().OpenFile(name)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "no such file")
+		return
+	}
+	defer f.Close()
+	a.log.Info("admin: query archive downloaded", "user", c.sess.user, "file", name)
+	ctype := "text/tab-separated-values; charset=utf-8"
+	if strings.HasSuffix(name, ".gz") {
+		ctype = "application/gzip"
+	}
+	w.Header().Set("Content-Type", ctype)
+	w.Header().Set("Content-Disposition", `attachment; filename="dnsnova-queries-`+name+`"`)
+	w.Header().Set("Cache-Control", "no-store")
+	io.Copy(w, f)
 }
 
 // queryLogMinutes are the lengths an administrator can choose.
@@ -925,4 +989,11 @@ func fileOnlyChange(old, new []byte) string {
 		}
 	}
 	return ""
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

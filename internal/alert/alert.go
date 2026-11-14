@@ -26,6 +26,7 @@ type Severity string
 const (
 	Critical Severity = "critical"
 	Warning  Severity = "warning"
+	Info     Severity = "info" // events (Event), never a condition
 )
 
 // Condition is one thing that is wrong.
@@ -48,6 +49,9 @@ const (
 	Resolved = "resolved"
 	Reminder = "reminder" // still firing, Repeat later
 	Test     = "test"
+	// Event is something that happened once, such as newly observed
+	// domains: it neither fires nor resolves.
+	EventStatus = "event"
 )
 
 // Notification is what a channel sends. Version is the schema of the JSON
@@ -298,13 +302,23 @@ func (e *Engine) dispatch(n Notification) {
 	}
 	e.mu.Unlock()
 	lvl := slog.LevelWarn
-	if n.Status == Resolved {
+	if n.Status == Resolved || n.Status == EventStatus {
 		lvl = slog.LevelInfo
 	}
 	e.Log.Log(context.Background(), lvl, "alert "+n.Status+": "+n.Summary, "key", n.Key, "node", n.Node)
 	for _, w := range ws {
 		w.enqueue(n)
 	}
+}
+
+// Event sends a one-off notification of kind to every channel.
+func (e *Engine) Event(kind, node, summary string, details []string) {
+	now := e.Now()
+	e.mu.Lock()
+	server := e.Server
+	e.mu.Unlock()
+	e.dispatch(Notification{Version: 1, Status: EventStatus, Key: kind, Kind: kind, Severity: Info, Node: node,
+		Summary: summary, Details: details, Since: now.UTC(), Time: now.UTC(), Server: server})
 }
 
 // SendTest sends a test notification to every channel now and returns how

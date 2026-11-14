@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/harryheros/dnsnova/internal/config"
+	"github.com/harryheros/dnsnova/internal/dnstap"
 	"github.com/harryheros/dnsnova/internal/events"
 	"github.com/harryheros/dnsnova/internal/filter"
 	"github.com/harryheros/dnsnova/internal/insight"
@@ -43,6 +44,8 @@ type fake struct {
 	failApply error
 	cleared   int
 	qlog      *insight.QueryLog
+	archive   *insight.Archive
+	nod       *insight.NOD
 	alerts    alert.Secrets
 	recursion bool
 }
@@ -54,8 +57,16 @@ func (f *fake) Tops(time.Duration) Tops {
 	return Tops{Domains: []insight.Entry{{Name: "example.com", Count: 9}}}
 }
 func (f *fake) QueryLog() *insight.QueryLog { return f.qlog }
-func (f *fake) ClearStats()                 {}
-func (f *fake) Guide() GuideInfo            { return GuideInfo{} }
+func (f *fake) Archive() *insight.Archive   { return f.archive }
+func (f *fake) Dnstap() dnstap.State        { return dnstap.State{} }
+func (f *fake) NOD() (insight.NODState, []insight.NewDomain, bool) {
+	if f.nod == nil {
+		return insight.NODState{}, nil, false
+	}
+	return f.nod.State(), f.nod.Recent(), true
+}
+func (f *fake) ClearStats()      {}
+func (f *fake) Guide() GuideInfo { return GuideInfo{} }
 func (f *fake) Upstreams() []Upstream {
 	return []Upstream{{Address: "udp://192.0.2.53", Role: "primary", Healthy: true}}
 }
@@ -161,7 +172,7 @@ func newEnv(t *testing.T) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b := &fake{store: st, snap: snap, qlog: insight.NewQueryLog()}
+	b := &fake{store: st, snap: snap, qlog: insight.NewQueryLog(), archive: insight.NewArchive()}
 	a, err := New(b, dir, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/harryheros/dnsnova/internal/dnstap"
 	"github.com/harryheros/dnsnova/internal/filter"
 	"github.com/harryheros/dnsnova/internal/recursor"
 	"github.com/harryheros/dnsnova/internal/upstream"
@@ -128,6 +129,26 @@ type Config struct {
 		// (an office's Active Directory, a router's own names).
 		Forward []string
 	}
+	// NOD reports newly observed domains.
+	NOD struct {
+		Enabled bool
+		Learn   time.Duration // quiet at first, while it learns the network's domains
+		Ignore  []string      // never reported, with everything under them
+		Alert   bool          // send them to the alert destinations
+		FullIP  bool          // say who asked first with the whole address
+	}
+	// Dnstap sends every query and answer to a log collector.
+	Dnstap struct {
+		Target    string // "unix:/path" or "tcp:host:port"; empty: off
+		Queries   bool
+		Responses bool
+		FullIP    bool
+	}
+	// Clients sorts clients into groups by network, each with its own
+	// filtering (see ParseGroups).
+	Clients struct {
+		Groups []string
+	}
 	ECS struct {
 		// Address is a network ("1.2.3.0/24") or an address in it,
 		// sent as the EDNS Client Subnet of every query. Empty: off.
@@ -143,6 +164,11 @@ type Config struct {
 	}
 	Log struct {
 		Queries bool // no longer used: the query log runs from the admin interface, in memory
+		// QueryDays keeps every query on disk (data_dir/querylog) for this
+		// many days. 0: off, and the files are deleted.
+		QueryDays int
+		// QueryFullIP keeps whole client addresses in those files.
+		QueryFullIP bool
 	}
 	// Filter is the filtered service: the same server answers on its own
 	// addresses ("doors") with block lists applied. Every other address
@@ -215,6 +241,8 @@ func Defaults() *Config {
 	c.Cache.MaxNegativeTTL = 3600
 	c.Cache.ServeStale = 24 * time.Hour
 	c.Cache.Prefetch = true
+	c.Dnstap.Queries, c.Dnstap.Responses = true, true
+	c.NOD.Learn, c.NOD.Alert = 24*time.Hour, true
 	c.Server.Cookies = true
 	c.Recursion.Cookies = true
 	c.Cache.Persist = "auto"
@@ -460,6 +488,24 @@ func (c *Config) validate(lines map[string]int) (Errors, []string) {
 	if _, err := ParseForwardZones(c.Local.Forward); err != nil {
 		bad("local.forward", err.Error())
 	}
+	if c.NOD.Learn < 0 || c.NOD.Learn > 30*24*time.Hour {
+		bad("nod.learn", "between 0s and 720h (30 days)")
+	}
+	for _, d := range c.NOD.Ignore {
+		if !filter.ValidDomain(strings.TrimPrefix(d, "*.")) {
+			bad("nod.ignore", fmt.Sprintf("%q is not a domain", d))
+		}
+	}
+	if c.Dnstap.Target != "" {
+		if _, _, err := dnstap.ParseTarget(c.Dnstap.Target); err != nil {
+			bad("dnstap.target", err.Error())
+		} else if !c.Dnstap.Queries && !c.Dnstap.Responses {
+			warns = append(warns, "dnstap: queries and responses are both off, so nothing is sent")
+		}
+	}
+	if _, err := ParseGroups(c.Clients.Groups); err != nil {
+		bad("clients.groups", err.Error())
+	}
 	if c.Status.Enabled {
 		if len(c.DoH.HTTPSListen) == 0 && c.DoH.Listen == "" {
 			warns = append(warns, "status.enabled: the status page is served on the DNS-over-HTTPS addresses, and none is set (doh.https_listen or doh.listen)")
@@ -470,6 +516,9 @@ func (c *Config) validate(lines map[string]int) (Errors, []string) {
 	}
 	errs, warns = c.validateFilter(lines, errs, warns)
 	errs, warns = c.validateRecursion(lines, errs, warns)
+	if c.Log.QueryDays < 0 || c.Log.QueryDays > 3650 {
+		bad("log.query_days", "a number of days, 0 (off) to 3650")
+	}
 	if c.Log.Queries {
 		warns = append(warns, "log.queries no longer writes queries to the system log; start the query log in the admin interface instead (it is kept in memory and stops by itself)")
 	}
@@ -904,13 +953,23 @@ var fields = map[string]field{
 		return nil
 	}, func(c *Config) Value { return Str(c.Cache.Persist) }},
 
-	"access.allow":    prefixes(func(c *Config) *[]netip.Prefix { return &c.Access.Allow }),
-	"access.deny":     prefixes(func(c *Config) *[]netip.Prefix { return &c.Access.Deny }),
-	"local.records":   strList(func(c *Config) *[]string { return &c.Local.Records }),
-	"local.forward":   strList(func(c *Config) *[]string { return &c.Local.Forward }),
-	"ecs.address":     str(func(c *Config) *string { return &c.ECS.Address }),
-	"ecs.client_path": str(func(c *Config) *string { return &c.ECS.ClientPath }),
-	"stats.retention": str(func(c *Config) *string { return &c.Stats.Retention }),
+	"access.allow":     prefixes(func(c *Config) *[]netip.Prefix { return &c.Access.Allow }),
+	"access.deny":      prefixes(func(c *Config) *[]netip.Prefix { return &c.Access.Deny }),
+	"local.records":    strList(func(c *Config) *[]string { return &c.Local.Records }),
+	"local.forward":    strList(func(c *Config) *[]string { return &c.Local.Forward }),
+	"clients.groups":   strList(func(c *Config) *[]string { return &c.Clients.Groups }),
+	"nod.enabled":      boolean(func(c *Config) *bool { return &c.NOD.Enabled }),
+	"nod.learn":        duration(func(c *Config) *time.Duration { return &c.NOD.Learn }),
+	"nod.ignore":       strList(func(c *Config) *[]string { return &c.NOD.Ignore }),
+	"nod.alert":        boolean(func(c *Config) *bool { return &c.NOD.Alert }),
+	"nod.full_ip":      boolean(func(c *Config) *bool { return &c.NOD.FullIP }),
+	"dnstap.target":    str(func(c *Config) *string { return &c.Dnstap.Target }),
+	"dnstap.queries":   boolean(func(c *Config) *bool { return &c.Dnstap.Queries }),
+	"dnstap.responses": boolean(func(c *Config) *bool { return &c.Dnstap.Responses }),
+	"dnstap.full_ip":   boolean(func(c *Config) *bool { return &c.Dnstap.FullIP }),
+	"ecs.address":      str(func(c *Config) *string { return &c.ECS.Address }),
+	"ecs.client_path":  str(func(c *Config) *string { return &c.ECS.ClientPath }),
+	"stats.retention":  str(func(c *Config) *string { return &c.Stats.Retention }),
 
 	"limits.client_qps":           number(func(c *Config) *float64 { return &c.Limits.ClientQPS }),
 	"limits.client_burst":         number(func(c *Config) *float64 { return &c.Limits.ClientBurst }),
@@ -961,8 +1020,10 @@ var fields = map[string]field{
 	"alerts.cert_warn_days":       integer(func(c *Config) *int { return &c.Alerts.CertWarnDays }),
 	"alerts.cert_critical_days":   integer(func(c *Config) *int { return &c.Alerts.CertCriticalDays }),
 
-	"status.enabled": boolean(func(c *Config) *bool { return &c.Status.Enabled }),
-	"log.queries":    boolean(func(c *Config) *bool { return &c.Log.Queries }),
+	"status.enabled":    boolean(func(c *Config) *bool { return &c.Status.Enabled }),
+	"log.queries":       boolean(func(c *Config) *bool { return &c.Log.Queries }),
+	"log.query_days":    integer(func(c *Config) *int { return &c.Log.QueryDays }),
+	"log.query_full_ip": boolean(func(c *Config) *bool { return &c.Log.QueryFullIP }),
 
 	"filter.enabled":         boolean(func(c *Config) *bool { return &c.Filter.Enabled }),
 	"filter.all":             boolean(func(c *Config) *bool { return &c.Filter.All }),
@@ -989,7 +1050,7 @@ var fields = map[string]field{
 var knownTables = map[string]bool{
 	"cluster": true, "anycast": true, "alerts": true,
 	"server": true, "doh": true, "dot": true, "doq": true, "tls": true, "ddr": true, "upstream": true, "cache": true,
-	"access": true, "limits": true, "metrics": true, "log": true, "admin": true, "status": true, "local": true, "stats": true, "ecs": true, "filter": true,
+	"access": true, "limits": true, "metrics": true, "log": true, "admin": true, "status": true, "local": true, "clients": true, "dnstap": true, "nod": true, "stats": true, "ecs": true, "filter": true,
 	"recursion": true,
 }
 
@@ -1306,6 +1367,93 @@ func ParseForwardZones(list []string) ([]ForwardZone, error) {
 			}
 		}
 		out = append(out, ForwardZone{Name: name, Servers: f[1:]})
+	}
+	return out, nil
+}
+
+// Group is one entry of clients.groups: clients on some networks, with
+// their own filtering.
+type Group struct {
+	Name     string
+	Networks []netip.Prefix
+	// Filter: "on" (the block lists apply, whichever address they use),
+	// "off" (never), or "" (as the address they use decides).
+	Filter string
+	Block  []string // blocked for this group, whatever the lists say
+	Allow  []string // never blocked for this group
+}
+
+// ParseGroups reads entries like
+//
+//	finance 10.1.0.0/24 10.1.1.5 filter block=facebook.com,tiktok.com
+//	lab 10.9.0.0/16 nofilter
+//
+// a name, then networks or addresses, then options: filter or nofilter,
+// block= and allow= with domains separated by commas. A client in several
+// groups belongs to the one with the narrowest network.
+func ParseGroups(list []string) ([]Group, error) {
+	var out []Group
+	names := map[string]bool{}
+	nets := map[netip.Prefix]string{}
+	for _, e := range list {
+		f := strings.Fields(e)
+		if len(f) < 2 {
+			return nil, fmt.Errorf("%q: write a name and its networks, such as \"finance 10.1.0.0/24\"", e)
+		}
+		g := Group{Name: strings.ToLower(f[0])}
+		if len(g.Name) > 32 || strings.Trim(g.Name, "abcdefghijklmnopqrstuvwxyz0123456789-_") != "" {
+			return nil, fmt.Errorf("%q: a group name is letters, digits, - and _, at most 32", f[0])
+		}
+		if names[g.Name] {
+			return nil, fmt.Errorf("%q: group listed twice", f[0])
+		}
+		names[g.Name] = true
+		for _, w := range f[1:] {
+			lw := strings.ToLower(w)
+			switch {
+			case lw == "filter" || lw == "nofilter":
+				if g.Filter != "" {
+					return nil, fmt.Errorf("%q: filter or nofilter, once", e)
+				}
+				g.Filter = map[string]string{"filter": "on", "nofilter": "off"}[lw]
+			case strings.HasPrefix(lw, "block=") || strings.HasPrefix(lw, "allow="):
+				key, val, _ := strings.Cut(lw, "=")
+				for _, d := range strings.Split(val, ",") {
+					d = strings.TrimSuffix(strings.TrimPrefix(d, "*."), ".")
+					if d == "" {
+						continue
+					}
+					if !filter.ValidDomain(d) {
+						return nil, fmt.Errorf("%q: %q is not a domain", e, d)
+					}
+					if key == "block" {
+						g.Block = append(g.Block, d)
+					} else {
+						g.Allow = append(g.Allow, d)
+					}
+				}
+			default:
+				p, err := netip.ParsePrefix(w)
+				if err != nil {
+					a, aerr := netip.ParseAddr(w)
+					if aerr != nil || a.Zone() != "" {
+						return nil, fmt.Errorf("%q: %q is not a network, an address or an option (filter, nofilter, block=, allow=)", e, w)
+					}
+					a = a.Unmap()
+					p = netip.PrefixFrom(a, a.BitLen())
+				}
+				p = p.Masked()
+				if other, ok := nets[p]; ok {
+					return nil, fmt.Errorf("%q: %s is already in group %s", e, p, other)
+				}
+				nets[p] = g.Name
+				g.Networks = append(g.Networks, p)
+			}
+		}
+		if len(g.Networks) == 0 {
+			return nil, fmt.Errorf("%q: a group needs at least one network or address", e)
+		}
+		out = append(out, g)
 	}
 	return out, nil
 }

@@ -19,6 +19,7 @@ import (
 
 	"github.com/harryheros/dnsnova/internal/admin"
 	"github.com/harryheros/dnsnova/internal/config"
+	"github.com/harryheros/dnsnova/internal/dnstap"
 	"github.com/harryheros/dnsnova/internal/events"
 	"github.com/harryheros/dnsnova/internal/insight"
 	"github.com/harryheros/dnsnova/internal/stats"
@@ -423,3 +424,18 @@ func (s *Server) Tops(span time.Duration) admin.Tops {
 
 // QueryLog implements admin.Backend.
 func (s *Server) QueryLog() *insight.QueryLog { return s.QLog }
+
+// NOD implements admin.Backend.
+func (s *Server) NOD() (insight.NODState, []insight.NewDomain, bool) {
+	n := s.nod.Load()
+	if n == nil {
+		return insight.NODState{}, nil, false
+	}
+	return n.State(), n.Recent(), true
+}
+
+// Dnstap implements admin.Backend.
+func (s *Server) Dnstap() dnstap.State { return s.Tap.State() }
+
+// Archive implements admin.Backend.
+func (s *Server) Archive() *insight.Archive { return s.QArchive }
