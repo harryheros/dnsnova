@@ -4,14 +4,6 @@ All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
 **Security**.
 
-## Unreleased
-
-- Uninstalling without `--purge` now says when query records are left in
-  /var/lib/dnsnova/querylog, and how to delete them.
-- Documentation: a dnstap Unix socket belongs under /run, not /tmp (the
-  service has a /tmp of its own); in a cluster, each node keeps its own
-  query records and newly seen domains.
-
 ## 1.6.0 (2026-11-14)
 
 For offices and other networks that must account for their DNS: everything
@@ -54,6 +46,11 @@ here is off by default, and the status page says what is on.
   learns quietly (`nod.learn`, 24h). Only real answers count (not blocked,
   local or failed ones); `nod.ignore` exempts domains. Metrics
   `dnsnova_new_domains_*`; the query log tags such queries "new".
+- Uninstalling without `--purge` now says when query records are left in
+  /var/lib/dnsnova/querylog, and how to delete them.
+- Documentation: a dnstap Unix socket belongs under /run, not /tmp (the
+  service has a /tmp of its own); in a cluster, each node keeps its own
+  query records and newly seen domains.
 
 ## 1.5.0 (2026-11-14)
 
