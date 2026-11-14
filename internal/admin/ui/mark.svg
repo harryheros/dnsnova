@@ -14,7 +14,6 @@
  <linearGradient id="bottom" x1="0" y1="0" x2=".85" y2="1"><stop stop-color="#ffffff"/><stop offset=".36" stop-color="#b9cbe6"/><stop offset=".66" stop-color="#faffff"/><stop offset="1" stop-color="#819fc7"/></linearGradient>
  <linearGradient id="electric" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#00f7ff"/><stop offset=".46" stop-color="#0073ff"/><stop offset="1" stop-color="#7cffff"/></linearGradient>
  <filter id="halo" x="-70%" y="-70%" width="240%" height="240%"><feGaussianBlur stdDeviation="9"/></filter>
- <filter id="wide" x="-70%" y="-70%" width="240%" height="240%"><feGaussianBlur stdDeviation="18"/></filter>
  <filter id="soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="3"/></filter>
  <path id="outer" d="M704 30 L868 389 Q816 373 783 368 L742 405 L742 602 Q742 621 761 627 L845 627 Q861 627 874 616 L942 561 L942 528 Q940 506 909.2 499.9 L946.8 208 L1120.2 521.3 Q1061 487 1039 520 L1039 639 L936 738 L816 738 Q788 757 772 790 L809 823 L704 1014 L598 823 L636 790 Q621 756 592 738 L477 738 L369 639 L369 520 Q349 489 287.8 521.3 L461.2 208 L498.8 499.9 Q470 503 465 526 L465 560 L536 616 Q549 627 565 627 L642 627 Q664 623 664 603 L664 405 L625 368 Q596 371 540 389 Z"/>
  <path id="leftNeon" d="M541 388 Q604 378 625 390 Q638 401 638 421 L638 592 Q638 626 604 627 L555 627 Q539 627 523 616 L463 564 L463 527 Q462 506 485 504"/>
@@ -22,7 +21,6 @@
  <path id="leftEdge" d="M289.8 521.1 L461.2 208 M704 31 L541 389 M602 822 L704 1013"/>
 </defs>
 <!-- All artwork below is genuine editable vector geometry; no embedded raster. -->
-<g fill="none" stroke="#0a6cff" stroke-width="34" opacity=".55" filter="url(#wide)"><use href="#outer"/></g>
 <g fill="none" stroke="#1a86ff" stroke-width="16" opacity=".95" filter="url(#halo)"><use href="#outer"/><use href="#leftNeon"/><use href="#lowerNeon"/><use href="#leftNeon" transform="translate(1408 0) scale(-1 1)"/><use href="#lowerNeon" transform="translate(1408 0) scale(-1 1)"/></g>
 <use href="#outer" fill="#12243d" stroke="#0a4baf" stroke-width="3"/>
 <!-- Central spear, four broad uninterrupted facets -->

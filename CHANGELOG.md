@@ -4,8 +4,6 @@ All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
 **Security**.
 
-## Unreleased
-
 ## 1.4.1 (2026-11-13)
 
 - **UDP socket buffers**: the system caps them (on Linux,
@@ -20,8 +18,10 @@ All notable changes are listed here. Versions follow
   have security fixes missing in parts dnsnova uses (HTTP/2 for DoH,
   crypto/tls, crypto/x509, net/http). The release binaries were already
   built with the newest 1.27 release.
-- The mark no longer gets an extra glow from the page around its own, which
-  made it look blurred.
+- **Logo glow**: the page no longer adds a glow of its own around the
+  mark. That glow had a fixed size, so on small icons (the narrow layout's
+  top bar) it showed as a wide blue ring. The mark's own glow is tighter
+  too.
 
 ## 1.4.0 (2026-11-13)
 

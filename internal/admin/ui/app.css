@@ -41,7 +41,7 @@
   --page: radial-gradient(1200px 520px at 78% -12%, rgba(47, 123, 255, 0.12), transparent 60%),
           radial-gradient(900px 600px at 105% 105%, rgba(57, 208, 242, 0.04), transparent 60%),
           linear-gradient(180deg, #050d20 0%, #040a18 100%);
-  /* brand: mark (--mk*) and wordmark (--wm*) gradients */
+  /* brand: wordmark (--wm*) gradients */
   --wm0: #ffffff; --wm1: #e8f0fc; --wm2: #9fb8e4; --wm3: #8aa6d9; --wm4: #dbe7fb; --wm-edge: #0a1838;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
