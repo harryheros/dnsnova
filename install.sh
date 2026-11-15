@@ -82,7 +82,7 @@ Configure here instead of in the browser (for scripts):
   --cert-file PATH        with --doh-proxy: certificate for DNS over TLS and QUIC (e.g. nginx's)
   --key-file PATH         its private key
   --admin local|public|off
-                          admin API and web interface on port 7000: local = only
+                          admin API and web interface (on --admin-port): local = only
                           from this server, through an SSH tunnel (the default for
                           the internet); public = also from other machines: from the
                           allowed private networks directly in private mode (the
