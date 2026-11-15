@@ -111,4 +111,4 @@ Build from source (Go 1.27.4 or later): `CGO_ENABLED=0 go build -o dnsnova ./cmd
 
 [GNU Affero General Public License v3.0](./LICENSE): free for any use, including commercial. If you modify DNSNova and offer it as a network service, you must make your modified source available to its users. For other terms, see the commercial license in [COMMERCIAL.md](./COMMERCIAL.md). Contributions are welcome under the [contributor license agreement](./CONTRIBUTING.md). Third-party components: [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
 
-Part of the [Nova projects](https://github.com/harryheros).
+Part of the [Nova infrastructure toolkit](https://github.com/harryheros).
