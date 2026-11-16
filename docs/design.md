@@ -184,7 +184,7 @@ color. No glow on icons. Icons never replace a label.
 The interface is shaped for several nodes so that each step is additive.
 What is not done yet is not shown in the interface until it works.
 
-| Area | Today | With several nodes |
+| Area | One server | With several nodes |
 | --- | --- | --- |
 | Top bar state | this server | the fleet: "3 of 3 nodes online" |
 | Identity chips | one domain | fleet name, node selector ("All nodes") |

@@ -4,6 +4,14 @@ All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
 **Security**.
 
+## Unreleased
+
+- Wording: forged answers dropped on the path are described as injected on
+  the path, in the documentation, the web interface (Overview › Forged
+  answers dropped) and the code. No change in behaviour.
+- COMMERCIAL.md: the abuse.ch data in ShieldNova's security list keeps its
+  own terms for commercial use.
+
 ## 1.6.0 (2026-11-14)
 
 For offices and other networks that must account for their DNS: everything
