@@ -20,11 +20,11 @@ import (
 // listen on real loopback sockets, and an injector sits on the path between
 // them and the resolver, which uses its real UDP socket pool and TCP.
 //
-// The injector behaves as published measurements of on-path DNS injection describe (Hoang et al.,
-// USENIX Security 2021): for a
-// question about a targeted name it sends forged answers at once, from
-// the server's address, and lets the genuine answer through after them;
-// over TCP it resets the connection. Or, as on networks that hijack port
+// The injector behaves as published measurements of on-path DNS injection
+// describe (Hoang et al., USENIX Security 2021): for a question about a
+// targeted name it sends forged answers at once, from the server's
+// address, and lets the genuine answer through after them; over TCP it
+// resets the connection. Or, as on networks that hijack port
 // 53 (RIPE Labs, "Detecting DNS root manipulation", 2022), it answers
 // every question itself and nothing reaches the servers.
 type injector struct {

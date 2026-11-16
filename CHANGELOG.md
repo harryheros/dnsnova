@@ -96,10 +96,9 @@ here is off by default, and the status page says what is on.
 Recursion without upstreams on networks that tamper with DNS
 ([docs/restricted-networks.md](./docs/restricted-networks.md)):
 
-- **Forged answers from injectors on the path are dropped and the genuine
+- **Forged answers injected on the path are dropped and the genuine
   answer is used.** Some networks answer for certain names themselves,
-   from the name server's address and ahead of it, and reset
-  TCP. The first matching answer was taken: for signed zones it failed
+  from the name server's address and ahead of it, and reset TCP. The first matching answer was taken: for signed zones it failed
   validation (SERVFAIL); for unsigned zones the forged address was used and
   cached. Each UDP answer is now judged on arrival. Dropped: an address from
   a root server, no authority from a root or top-level-domain server, an

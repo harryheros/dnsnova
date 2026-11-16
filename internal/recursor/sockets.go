@@ -192,14 +192,13 @@ func (p *sockPool) exchangeUDP(ctx context.Context, addr netip.AddrPort, q []byt
 }
 
 // Some networks inject answers on the path between a resolver and name
-// servers: devices on it answer questions about certain
-// names themselves: they see the question go by and send forged
-// answers at once, from the server's address, with its port, ID and
-// question. They cannot stop the genuine answer, which arrives after
-// theirs (in published measurements, 99% of forged answers come at most 364 ms earlier;
-// Hoang et al., USENIX Security 2021). Taking the first answer that
-// matches, as resolvers do, takes the forged one; asking again over TCP
-// does not help, as the injector resets those connections.
+// servers: a device sees a question about certain names go by and sends
+// forged answers at once, from the server's address, with its port, ID
+// and question. It cannot stop the genuine answer, which arrives after
+// the forged ones (in published measurements, 99% come at most 364 ms
+// earlier; Hoang et al., USENIX Security 2021). Taking the first answer
+// that matches, as resolvers do, takes the forged one; asking again over
+// TCP does not help, as the injector resets those connections.
 //
 // So each answer is judged as it arrives (judgeFn, made by ask for the
 // question): one that cannot be the server's is dropped and the socket

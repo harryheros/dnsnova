@@ -842,7 +842,7 @@ func impossible(msg *message, zone, name string, qtype uint16) string {
 	return ""
 }
 
-// doubt judges a UDP answer by what a injector's forged answers look like
+// doubt judges a UDP answer by what injected forged answers look like
 // and genuine ones from this server do not: vForged when it cannot be the
 // server's, vSuspect when it is merely unlike it. The reason is for the
 // trace. The same checks on a genuine (TCP) answer show whether the server
