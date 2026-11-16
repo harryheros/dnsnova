@@ -4,11 +4,15 @@ All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
 **Security**.
 
-## Unreleased
+## 1.6.1 (2026-11-15)
 
-- Wording: forged answers dropped on the path are described as injected on
-  the path, in the documentation, the web interface (Overview › Forged
-  answers dropped) and the code. No change in behaviour.
+Wording and documentation only; the resolver behaves exactly as in 1.6.0.
+
+- Forged answers dropped on the path are described as injected on the
+  path, in the documentation, the web interface (Overview › Forged answers
+  dropped) and the code.
+- `install.sh --help`: `--admin` no longer says "port 7000"; the port is
+  the one set with `--admin-port`.
 - COMMERCIAL.md: the abuse.ch data in ShieldNova's security list keeps its
   own terms for commercial use.
 
