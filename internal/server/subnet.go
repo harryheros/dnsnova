@@ -21,8 +21,9 @@ import (
 
 // subnetDeadline is how long one such lookup may take. Longer than for
 // clients: a measurement tool waits, and every name in the chain is asked
-// afresh, so on a lossy path to the name servers (across some international
-// links, for one) the spare time goes into trying other servers. Under the
+// afresh, so on a lossy path to the name servers (across some
+// international links, for one) the spare time goes into trying other
+// servers. Under the
 // 10 seconds tools such as DomainNova wait for an answer.
 const subnetDeadline = 9 * time.Second
 

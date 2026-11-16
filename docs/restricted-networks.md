@@ -8,11 +8,11 @@ by itself and what you need to set up.
 
 **Where:** some national and ISP networks.
 
-**What they do:** for a question about certain names, a device on the path sends a
-forged answer at once, from the name server's address, with the right port,
-ID and question. It cannot stop the genuine answer, which arrives later (in published
-measurements, 99% of forged answers lead by at most 364 ms). Over TCP, it resets
-the connection.
+**What they do:** for a question about certain names, a device on the path
+sends a forged answer at once, from the name server's address, with the
+right port, ID and question. It cannot stop the genuine answer, which
+arrives later (in published measurements, 99% of forged answers led by at
+most 364 ms). Over TCP, it resets the connection.
 
 Before 1.4, DNSNova took the first matching answer, the forged one. For
 signed zones (the root, `com`, `net` and most top-level domains) it failed
@@ -33,7 +33,7 @@ one:
 | A wrong DNS Cookie, or none from a server that always sends one | Only the server knows the cookie |
 | No EDNS to a question with EDNS, or no AA from the zone's own server | Unusual: kept only if nothing better arrives |
 
-Answers that pass are used at once, so untargeted names cost nothing extra.
+Answers that pass are used at once, so other names cost nothing extra.
 After a dropped answer, DNSNova waits up to 500 ms for the genuine one,
 within the query's timeout, then asks over TCP. A server whose genuine TCP
 answer looks like the dropped ones (some load balancers omit EDNS or AA) is
@@ -42,14 +42,13 @@ trusted over UDP for an hour.
 No upstreams are needed. The Overview shows *Forged answers dropped*; the
 metric is `dnsnova_recursion_forged_total`.
 
-**Your clients:** the injector also forges answers sent to clients that reach
-DNSNova across it.
-Those clients must use DNS over HTTPS, TLS or QUIC.
+**Your clients:** the same device also forges answers sent to clients that
+reach DNSNova across it. Those clients must use DNS over HTTPS, TLS or QUIC.
 
 ## Networks that take over port 53
 
-**Where:** some national, ISP and corporate networks
-(RIPE Labs found it in 48 countries in 2022).
+**Where:** some national, ISP and corporate networks (RIPE Labs found it
+in 48 countries in 2022).
 
 **What they do:** every DNS question, to any address, is answered or refused
 by the network's own resolver, often over TCP too. No name server is

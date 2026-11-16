@@ -1333,7 +1333,7 @@ function recCard(rec) {
   ];
   if (rec.fallback) rows.push(["idle", "Answered by upstreams", fmt.short(rec.fallbacks), "when no name server answered"]);
   if (rec.intercepted) rows.unshift(["err", "Network answers for name servers", fmt.short(rec.rewritten), "port 53 intercepted: use your own DNSNova elsewhere as upstream"]);
-  if (rec.forged) rows.push(["warn", "Forged answers dropped", fmt.short(rec.forged), "an injector on the path; the genuine answers were used"]);
+  if (rec.forged) rows.push(["warn", "Forged answers dropped", fmt.short(rec.forged), "injected on the path; the genuine answers were used"]);
   if (rec.spoofed) rows.push(["warn", "Forged answers stopped", fmt.short(rec.spoofed), "someone sent fake answers; asked again over TCP"]);
   return card("s4", "Resolution", "network", more("#/settings/dns", "Settings"),
     h("ul", { class: "slots" }, rows.slice(0, SLOTS).map(([cls, name, value, note]) => h("li", { class: "slot tall", style: { minHeight: "44px" } },
