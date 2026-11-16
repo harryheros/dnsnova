@@ -16,6 +16,9 @@ Anything the AGPL allows, which includes commercial use:
   network can get its source code under the AGPL (section 13);
 - use its filtered service with the ShieldNova list it offers by default:
   ShieldNova allows that use in DNSNova, commercial deployments included.
+  The third-party data in ShieldNova's security list keeps its own terms:
+  commercial use of the abuse.ch data may need a Spamhaus subscription
+  (see ShieldNova's THIRD_PARTY_NOTICES.md).
 
 A company that is happy with those terms never needs a commercial license.
 Paying is not about being a business; it is about wanting other terms.
