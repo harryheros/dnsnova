@@ -500,6 +500,9 @@ func (s *Server) Apply(snap *config.Snapshot) error {
 	if err != nil {
 		return err
 	}
+	if old := s.state.Load(); old != nil {
+		st.group.Adopt(old.group) // keep what is known about unchanged upstreams
+	}
 	if old := s.state.Load(); old != nil && old.cfg.Server.DataDir != snap.Config.Server.DataDir {
 		s.Log.Warn("server.data_dir changes take effect after a restart")
 	}

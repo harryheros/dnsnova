@@ -193,12 +193,7 @@ func (s *Server) PublicStatus() admin.PublicInfo {
 		}
 	}
 	info.Filtered = s.filteredInfo(c, info.Domain)
-	ups := s.Upstreams()
-	for _, u := range ups {
-		if u.Role == "primary" && u.Healthy {
-			info.Healthy = true
-		}
-	}
+	info.Healthy = upstreamsAnswer(s.Upstreams(), c.Recursion.Enabled)
 	// With recursion on, the server answers by itself: a working resolver
 	// is healthy even with no (or no healthy) upstreams, as in /healthz.
 	info.Recursion = c.Recursion.Enabled
@@ -254,6 +249,18 @@ func (s *Server) Guide() admin.GuideInfo {
 func listensOnAll(c *config.Config) bool {
 	for _, a := range c.Server.Listen {
 		if strings.HasPrefix(a, ":") || strings.HasPrefix(a, "0.0.0.0:") || strings.HasPrefix(a, "[::]:") {
+			return true
+		}
+	}
+	return false
+}
+
+// upstreamsAnswer reports a healthy upstream that answers queries: a
+// primary, or with recursion on, where every upstream is a fallback, any of
+// them (as in /healthz).
+func upstreamsAnswer(ups []admin.Upstream, recursion bool) bool {
+	for _, u := range ups {
+		if u.Healthy && (u.Role == "primary" || recursion) {
 			return true
 		}
 	}

@@ -343,12 +343,9 @@ func (s *Server) Upstreams() []admin.Upstream {
 		return nil
 	}
 	var out []admin.Upstream
+	now := time.Now()
 	for _, m := range st.group.Members() {
-		role := "primary"
-		if m.Fallback {
-			role = "fallback"
-		}
-		out = append(out, admin.Upstream{Address: m.U.String(), Role: role, Healthy: m.Healthy(),
+		out = append(out, admin.Upstream{Address: m.U.String(), Role: memberRole(m, st.cfg), Healthy: m.Healthy(), Idle: m.Idle(now),
 			LatencyMS: float64(m.Latency().Microseconds()) / 1000, Queries: m.Queries(), Errors: m.Errors(),
 			LastOK: m.LastOK(), LastError: m.LastError()})
 	}
