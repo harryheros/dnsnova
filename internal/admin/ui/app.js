@@ -130,8 +130,9 @@ const fmt = {
   int: (n) => (n ?? 0).toLocaleString("en-US"),
   short(n) {
     n = n ?? 0;
-    if (n >= 1e9) return (n / 1e9).toFixed(2) + "B";
-    if (n >= 1e6) return (n / 1e6).toFixed(2) + "M";
+    // thresholds at what rounds up to the next unit: 999,960 is 1.00M, not 1000.0k
+    if (n >= 999.995e6) return (n / 1e9).toFixed(2) + "B";
+    if (n >= 999.95e3) return (n / 1e6).toFixed(2) + "M";
     if (n >= 1e4) return (n / 1e3).toFixed(1) + "k";
     return fmt.int(n);
   },
@@ -143,12 +144,14 @@ const fmt = {
   },
   rate(n) {
     n = n ?? 0;
-    if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + "M";
-    if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + "K";
+    if (n >= 999.5e3) return (n / 1e6).toFixed(n >= 9.95e6 ? 0 : 1) + "M";
+    if (n >= 999.5) return (n / 1e3).toFixed(n >= 9950 ? 0 : 1) + "K";
     if (n >= 10) return Math.round(n).toString();
     return n ? n.toFixed(1) : "0";
   },
-  pct: (r) => (r * 100).toFixed(r >= 0.995 || r === 0 ? 0 : 1) + "%",
+  // never rounded to 100% or 0% unless it is: 99.6% next to 0.4% must not
+  // read as 100% + 0.4%
+  pct: (r) => (r <= 0 || r >= 1 ? Math.round(r * 100) : Math.min(99.9, Math.max(0.1, r * 100)).toFixed(1)) + "%",
   ago(t) {
     if (!t) return "never";
     const d = (Date.now() - new Date(t).getTime()) / 1000;
@@ -1038,8 +1041,10 @@ function noteLatency(ups) {
 
 // upState describes an upstream: healthy, slow (three times slower than
 // the median of the healthy primaries and over 50 ms, or over 500 ms),
-// failing, or standing by (a healthy fallback).
+// failing, idle (failed last, but nothing asked since, long ago), or standing
+// by (a healthy fallback).
 function upState(u, ups) {
+  if (!u.healthy && u.idle) return { cls: "idle", label: "Idle" };
   if (!u.healthy) return { cls: "err", label: "Failing" };
   if (u.role === "fallback") return { cls: "idle", label: "Standby" };
   const lat = ups.filter((x) => x.healthy && x.role === "primary" && x.latency_ms > 0).map((x) => x.latency_ms).sort((a, b) => a - b);
@@ -1050,8 +1055,8 @@ function upState(u, ups) {
 
 function successRate(u) {
   if (!u.queries) return "–";
-  const r = 1 - u.errors / u.queries;
-  return (r >= 0.9995 ? "100" : (r * 100).toFixed(1)) + "%";
+  // 100% only without errors: 3 errors in 10,000 queries is 99.9%
+  return u.errors ? fmt.pct(1 - u.errors / u.queries) : "100%";
 }
 
 // mergeEvents folds consecutive identical events into one with a count.
@@ -1109,6 +1114,16 @@ function meter(frac) {
 
 // series helpers
 const stepSeconds = (ser) => (ser.length > 1 ? (new Date(ser[1].t) - new Date(ser[0].t)) / 1000 : 60);
+// timed gives each point the seconds it covers, from the point before it (the
+// first from the start of the report). The newest point is still filling: it
+// covers only the time since the last sample, and divided by a full step it
+// drew a drop at the end of every chart. A newest point under half a step
+// is left out: its few seconds make a noisy rate (its queries stay in totals).
+function timed(ser, from) {
+  const out = ser.map((p, i) => ({ ...p, secs: Math.max(1, (new Date(p.t) - new Date(i ? ser[i - 1].t : from)) / 1000) }));
+  if (out.length > 2 && out[out.length - 1].secs < out[out.length - 2].secs / 2) out.pop();
+  return out;
+}
 const sum = (a) => a.reduce((x, y) => x + y, 0);
 function weightedP50(ser) {
   const q = sum(ser.map((p) => p.queries));
@@ -1129,7 +1144,7 @@ function bucket(ser, max) {
   const k = Math.ceil(ser.length / max), out = [];
   for (let i = 0; i < ser.length; i += k) {
     const g = ser.slice(i, i + k), q = sum(g.map((p) => p.queries));
-    out.push({ t: g[0].t, n: g.length, queries: q, latency: {
+    out.push({ t: g[0].t, n: g.length, queries: q, secs: sum(g.map((p) => p.secs || 0)), latency: {
       p50_ms: q ? sum(g.map((p) => p.latency.p50_ms * p.queries)) / q : sum(g.map((p) => p.latency.p50_ms)) / g.length,
       p95_ms: Math.max(...g.map((p) => p.latency.p95_ms)),
     } });
@@ -1199,9 +1214,8 @@ function drawOverview(d, { range, metric, seg, mseg }) {
   const total = sum(Object.values(stats.queries));
   const rejected = sum(Object.values(stats.rejected));
   const answered = sum(Object.values(stats.answers));
-  const ser = stats.series || [];
-  const step = stepSeconds(ser);
-  const rates = ser.map((p) => p.queries / step);
+  const ser = timed(stats.series || [], stats.from);
+  const rates = ser.map((p) => p.queries / p.secs);
   const before = windowBefore(prev, ser, range);
   const rec = st.recursion && st.recursion.enabled ? st.recursion : null;
   const open = PROTOS.map(([k]) => k).filter((k) => (st.listeners || {})[k] || (k === "doh" && (st.listeners || {}).doh_proxy));
@@ -1209,10 +1223,11 @@ function drawOverview(d, { range, metric, seg, mseg }) {
   // ---- key figures ----
   // the newest point is still filling, so "now" is the one before it
   const nowRate = rates.length > 1 ? rates[rates.length - 2] : rates[0] || 0;
-  const avgRate = ser.length ? total / (ser.length * step) : 0;
+  const span = (new Date(stats.to) - new Date(stats.from)) / 1000;
+  const avgRate = span > 0 ? total / span : 0;
   const prevRate = before ? sum(before.map((p) => p.queries)) / (before.length * stepSeconds(prev.series)) : 0;
   const peak = Math.max(0, ...rates);
-  const sparkRates = bucket(ser, 48).map((p) => p.queries / (step * (p.n || 1)));
+  const sparkRates = bucket(ser, 48).map((p) => p.queries / p.secs);
   const k1 = kpiCard("var(--c1)", "bolt", "Queries / sec", total ? fmt.rate(nowRate) : "–", null, delta(avgRate, prevRate, "", range),
     total ? `avg ${fmt.rate(avgRate)} · peak ${fmt.rate(peak)}` : "Waiting for the first queries", sparkline(sparkRates));
 
@@ -1329,7 +1344,7 @@ function recCard(rec) {
     ["ok", "Signed and verified", rec.dnssec ? share(rec.secure) : "off", "DNSSEC"],
     ["idle", "Not signed", rec.dnssec ? share(rec.insecure) : "–", "the domain does not use DNSSEC"],
     [rec.bogus ? "warn" : "idle", "Failed the check", fmt.short(rec.bogus), "refused (SERVFAIL)"],
-    ["cyan", "Queries to name servers", fmt.short(rec.queries), rec.queries ? `${fmt.pct(rec.timeouts / rec.queries)} timed out` : "since start"],
+    ["cyan", "Queries to name servers", fmt.short(rec.queries), rec.queries ? `${fmt.pct(rec.timeouts / rec.queries)} timed out` : "none yet"],
   ];
   if (rec.fallback) rows.push(["idle", "Answered by upstreams", fmt.short(rec.fallbacks), "when no name server answered"]);
   if (rec.intercepted) rows.unshift(["err", "Network answers for name servers", fmt.short(rec.rewritten), "port 53 intercepted: use your own DNSNova elsewhere as upstream"]);
@@ -1340,7 +1355,8 @@ function recCard(rec) {
       h("span", { class: "dot lit " + cls }),
       h("div", { class: "grow" }, h("div", null, name), h("div", { class: "small muted" }, note)),
       h("span", { class: "num strong" }, value)))),
-    h("footer", { class: "dfoot" }, h("span", null, "From the root servers"),
+    // these counters run since the server started, not over the chosen range
+    h("footer", { class: "dfoot" }, h("span", null, "From the root servers · since start"),
       h("span", { class: "num" }, `${fmt.short(rec.cache.zones)} zones · ${fmt.short(rec.cache.servers)} servers`)));
 }
 
@@ -1426,10 +1442,9 @@ function trafficChart(ser0, total, range, label, metric) {
       h("div", null, h("strong", null, "Not enough data yet"),
         h("div", { class: "small muted" }, range === "1h" ? "The first points appear after a minute or two of traffic." : "Points here are " + (range === "24h" ? "five minutes" : "an hour") + " apart. Choose 1h to see the first minutes.")));
   }
-  const step = stepSeconds(ser0);
   const ser = bucket(ser0, 150);
   const lat = metric === "latency";
-  const val = (p) => (lat ? p.latency.p50_ms : p.queries / (step * (p.n || 1)));
+  const val = (p) => (lat ? p.latency.p50_ms : p.queries / p.secs);
   const raw = Math.max(...ser.map((p) => (lat ? p.latency.p95_ms : val(p))), lat ? 1 : 1);
   // four even steps of a round size
   const mag = 10 ** Math.floor(Math.log10(raw / 4)), stepY = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((m) => m * 4 >= raw * 1.05) || 10 * mag;
@@ -1503,11 +1518,13 @@ function upstreamsPage(main) {
       noteLatency(upstreams);
       const q = sum(upstreams.map((u) => u.queries)), errs = sum(upstreams.map((u) => u.errors));
       const healthyN = upstreams.filter((u) => u.healthy).length;
-      const lats = upstreams.filter((u) => u.healthy && u.role === "primary" && u.latency_ms).map((u) => u.latency_ms);
+      // with recursion every upstream is a fallback: average those instead
+      const primaries = upstreams.some((u) => u.role === "primary");
+      const lats = upstreams.filter((u) => u.healthy && (u.role === "primary" || !primaries) && u.latency_ms).map((u) => u.latency_ms);
       const tile = (color, ic, label, value, unit, note) => kpiCard(color, ic, label, value, unit, null, note, null, true);
       fill(body, h("div", { class: "dash" },
         tile("var(--c3)", "shieldcheck", "Healthy", `${healthyN}/${upstreams.length}`, null, healthyN === upstreams.length ? "every upstream answers" : "some upstreams fail"),
-        tile("var(--c1)", "bolt", "Primary latency", lats.length ? fmt.ms(sum(lats) / lats.length) : "–", lats.length ? "ms" : null, "average, smoothed"),
+        tile("var(--c1)", "bolt", primaries ? "Primary latency" : "Fallback latency", lats.length ? fmt.ms(sum(lats) / lats.length) : "–", lats.length ? "ms" : null, "average, smoothed"),
         tile("var(--c2)", "layers", "Success rate", q ? fmt.pct(1 - errs / q) : "–", null, `${fmt.int(errs)} errors`),
         tile("var(--c1)", "bars", "Queries sent", fmt.short(q), null, "since start")),
         h("section", { class: "card" }, h("div", { class: "tablewrap" }, h("table", { class: "stack" },
@@ -1520,7 +1537,7 @@ function upstreamsPage(main) {
           h("td", { class: "r num", "data-label": "Queries" }, fmt.int(u.queries)),
           h("td", { class: "r num", "data-label": "Errors" }, fmt.int(u.errors) + (u.queries ? ` · ${successRate(u)} ok` : "")),
           h("td", { class: "muted", "data-label": "Last error" }, u.last_error ? fmt.ago(u.last_error) : "never"))))))),
-        h("p", { class: "small muted" }, "Latency is smoothed over recent queries. Slow means over 500 ms, or three times slower than the other primaries and over 50 ms. Standby: a fallback, used only when the primaries fail. Change the list in ", h("a", { href: "#/settings/dns" }, "DNS & upstreams"), "; ask each one the same question in ", h("a", { href: "#/tools/lookup" }, "Compare upstreams"), "."));
+        h("p", { class: "small muted" }, "Latency is smoothed over recent answers; failures do not count in it. Idle: the last query failed over five minutes ago and none has been sent since. Slow means over 500 ms, or three times slower than the other primaries and over 50 ms. Standby: a fallback, used only when the primaries fail. Change the list in ", h("a", { href: "#/settings/dns" }, "DNS & upstreams"), "; ask each one the same question in ", h("a", { href: "#/tools/lookup" }, "Compare upstreams"), "."));
     } catch (e) { if (e.status !== 401) fill(body, errorBox(e)); }
   };
   load();

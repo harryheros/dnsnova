@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/harryheros/dnsnova/internal/config"
 	"github.com/harryheros/dnsnova/internal/cookie"
 	m "github.com/harryheros/dnsnova/internal/dnsmsg"
 	"github.com/harryheros/dnsnova/internal/dnstap"
@@ -28,6 +29,7 @@ import (
 	"github.com/harryheros/dnsnova/internal/proxyproto"
 	"github.com/harryheros/dnsnova/internal/resolver"
 	"github.com/harryheros/dnsnova/internal/stats"
+	"github.com/harryheros/dnsnova/internal/upstream"
 )
 
 // ---- UDP ----
@@ -661,15 +663,15 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	}
 	fmt.Fprintf(w, "# TYPE dnsnova_upstream_queries_total counter\n")
 	for _, u := range st.group.Members() {
-		fmt.Fprintf(w, "dnsnova_upstream_queries_total{upstream=%q,role=%q} %d\n", u.U.String(), role(u.Fallback), u.Queries())
+		fmt.Fprintf(w, "dnsnova_upstream_queries_total{upstream=%q,role=%q} %d\n", u.U.String(), memberRole(u, st.cfg), u.Queries())
 	}
 	fmt.Fprintf(w, "# TYPE dnsnova_upstream_errors_total counter\n")
 	for _, u := range st.group.Members() {
-		fmt.Fprintf(w, "dnsnova_upstream_errors_total{upstream=%q,role=%q} %d\n", u.U.String(), role(u.Fallback), u.Errors())
+		fmt.Fprintf(w, "dnsnova_upstream_errors_total{upstream=%q,role=%q} %d\n", u.U.String(), memberRole(u, st.cfg), u.Errors())
 	}
 	fmt.Fprintf(w, "# TYPE dnsnova_upstream_latency_seconds gauge\n")
 	for _, u := range st.group.Members() {
-		fmt.Fprintf(w, "dnsnova_upstream_latency_seconds{upstream=%q,role=%q} %.6f\n", u.U.String(), role(u.Fallback), u.Latency().Seconds())
+		fmt.Fprintf(w, "dnsnova_upstream_latency_seconds{upstream=%q,role=%q} %.6f\n", u.U.String(), memberRole(u, st.cfg), u.Latency().Seconds())
 	}
 	fmt.Fprintf(w, "# TYPE dnsnova_upstream_healthy gauge\n")
 	for _, u := range st.group.Members() {
@@ -677,14 +679,16 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 		if u.Healthy() {
 			h = 1
 		}
-		fmt.Fprintf(w, "dnsnova_upstream_healthy{upstream=%q,role=%q} %d\n", u.U.String(), role(u.Fallback), h)
+		fmt.Fprintf(w, "dnsnova_upstream_healthy{upstream=%q,role=%q} %d\n", u.U.String(), memberRole(u, st.cfg), h)
 	}
 	s.writeRecursionMetrics(w)
 	s.writeLogMetrics(w)
 }
 
-func role(fallback bool) string {
-	if fallback {
+// memberRole is an upstream's role as shown and exported: with recursion on,
+// every upstream is a fallback, asked only when no name server answers.
+func memberRole(m *upstream.Member, c *config.Config) string {
+	if m.Fallback || c.Recursion.Enabled {
 		return "fallback"
 	}
 	return "primary"

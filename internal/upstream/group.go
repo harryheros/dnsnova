@@ -21,15 +21,19 @@ type Member struct {
 	U        Upstream
 	Fallback bool
 
-	ewma    atomic.Int64 // smoothed latency in microseconds; 0 = unknown
+	ewma    atomic.Int64 // ranking score in microseconds: latency, raised by errors; 0 = unknown
+	rtt     atomic.Int64 // smoothed latency of answers only, in microseconds; 0 = unknown
 	queries atomic.Uint64
 	errors  atomic.Uint64
 	lastOK  atomic.Int64 // unix nanos
 	lastErr atomic.Int64
 }
 
-// Latency is the smoothed response time.
-func (m *Member) Latency() time.Duration { return time.Duration(m.ewma.Load()) * time.Microsecond }
+// Latency is the smoothed response time of the answers. Failures do not
+// count: they raise the score that ranks the upstreams (at least the timeout
+// each), but a failure says nothing about how fast the upstream answers, and
+// mixed in they kept a rarely asked fallback at seconds for days.
+func (m *Member) Latency() time.Duration { return time.Duration(m.rtt.Load()) * time.Microsecond }
 
 // Queries and Errors are lifetime counters.
 func (m *Member) Queries() uint64 { return m.queries.Load() }
@@ -51,6 +55,18 @@ func unixTime(n int64) time.Time {
 // has been sent yet.
 func (m *Member) Healthy() bool { return m.lastErr.Load() <= m.lastOK.Load() }
 
+// IdleAfter is how long after a failure, with nothing asked since, an
+// upstream counts as idle rather than failing.
+const IdleAfter = 5 * time.Minute
+
+// Idle reports an upstream whose last query failed more than IdleAfter ago
+// and that has been asked nothing since: how it is now is not known. A
+// fallback is asked only when the others fail, so one old failure would
+// otherwise show it failing for hours.
+func (m *Member) Idle(now time.Time) bool {
+	return !m.Healthy() && now.Sub(m.LastError()) > IdleAfter
+}
+
 func (m *Member) observe(d time.Duration, err error, timeout time.Duration) {
 	if err != nil && errors.Is(err, context.Canceled) {
 		return // lost the race to a faster upstream: not a failure
@@ -66,13 +82,18 @@ func (m *Member) observe(d time.Duration, err error, timeout time.Duration) {
 	} else {
 		m.lastOK.Store(now)
 		s := int64(d / time.Microsecond)
-		if old == 0 {
-			nv = s
-		} else {
-			nv = (old*4 + s) / 5
-		}
+		nv = smooth(old, s)
+		m.rtt.Store(smooth(m.rtt.Load(), s))
 	}
 	m.ewma.Store(nv)
+}
+
+// smooth is an exponential moving average, weight 1/5 to the new sample.
+func smooth(old, s int64) int64 {
+	if old == 0 {
+		return s
+	}
+	return (old*4 + s) / 5
 }
 
 // Group sends each query to the fastest primary upstreams in parallel and
@@ -133,6 +154,40 @@ func NewGroup(o Options) (*Group, error) {
 		return nil, err
 	}
 	return g, nil // with no members (DNS not set up yet) Exchange fails at once
+}
+
+// Adopt carries over what old learnt about the upstreams the two groups
+// share (same address, same role): counters, latency, ranking and health.
+// Every settings change builds a new group; without this, any change, even
+// an unrelated one, reset the counters and forgot a failing upstream, which
+// then ranked first again (an unknown latency sorts as the fastest).
+func (g *Group) Adopt(old *Group) {
+	if old == nil {
+		return
+	}
+	prev := map[string]*Member{}
+	for _, m := range old.Members() {
+		prev[memberKey(m)] = m
+	}
+	for _, m := range g.Members() {
+		o := prev[memberKey(m)]
+		if o == nil {
+			continue
+		}
+		m.ewma.Store(o.ewma.Load())
+		m.rtt.Store(o.rtt.Load())
+		m.queries.Store(o.queries.Load())
+		m.errors.Store(o.errors.Load())
+		m.lastOK.Store(o.lastOK.Load())
+		m.lastErr.Store(o.lastErr.Load())
+	}
+}
+
+func memberKey(m *Member) string {
+	if m.Fallback {
+		return "f " + m.U.String()
+	}
+	return "p " + m.U.String()
 }
 
 // Members returns primaries followed by fallbacks.

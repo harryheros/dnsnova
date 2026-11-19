@@ -4,6 +4,44 @@ All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
 **Security**.
 
+## 1.6.2 (2026-11-19)
+
+Fixes to what the web interface and the metrics show; how upstreams are
+picked and when the fallbacks are asked are unchanged.
+
+- **Upstream latency counts answers only.** A failure raised the latency by
+  at least the timeout (3 s) and took dozens of answers to wear off; a
+  fallback, asked rarely, showed seconds for days while it answered in a
+  few milliseconds. Failures still lower an upstream's rank when upstreams
+  are picked. Also in `dnsnova_upstream_latency_seconds`.
+- **Idle instead of Failing.** An upstream whose last query failed more
+  than five minutes ago, with none sent since, is shown as Idle: how it is
+  now is not known. A fallback stayed Failing for hours after one failed
+  query. `/healthz`, the alerts and `dnsnova_upstream_healthy` still go by
+  the last query.
+- **With recursion on, upstreams are fallbacks everywhere.** The Upstreams
+  page and the metrics called them primary while the overview called them
+  fallback. All four `dnsnova_upstream_*` metrics now carry the same role
+  (two of them disagreed before), and the public status page still counts a
+  healthy one as a way to answer, as `/healthz` does.
+- **Settings changes keep the upstreams' numbers.** Saving any setting,
+  even an unrelated one, reset every upstream's counters, latency and
+  health, and a failing upstream then ranked first again (an unknown
+  latency sorts as the fastest). Upstreams whose address and role stay the
+  same keep what was known about them.
+- **Percentages never round to 100% or 0% unless they are**: 99.6% of
+  queries over DoH3 next to 0.4% over UDP read as 100% and 0.4%. The same
+  for an upstream's success rate, which showed 100% with errors.
+- **The newest point of the traffic chart** covers only the time since the
+  last sample, and was divided as if it were a full minute (or hour), so
+  every chart ended in a drop. Each point is now divided by the time it
+  covers, a newest point under half a step is left off the chart (its
+  queries stay in the totals), and the average rate uses the report's real
+  span.
+- Large numbers switch unit where they round up (1.00M, not 1000.0k).
+- The overview's Resolution card says its counters run since start; the
+  rest of the page follows the chosen range.
+
 ## 1.6.1 (2026-11-15)
 
 Wording and documentation only; the resolver behaves exactly as in 1.6.0.

@@ -214,6 +214,7 @@ type Upstream struct {
 	Address   string    `json:"address"`
 	Role      string    `json:"role"` // primary or fallback
 	Healthy   bool      `json:"healthy"`
+	Idle      bool      `json:"idle,omitempty"` // not healthy, but nothing asked since a failure long ago
 	LatencyMS float64   `json:"latency_ms"`
 	Queries   uint64    `json:"queries"`
 	Errors    uint64    `json:"errors"`
