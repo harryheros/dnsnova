@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -96,5 +97,30 @@ func TestSettingsChangeKeepsUpstreamCounters(t *testing.T) {
 	}
 	if after := s.Upstreams()[0]; after.Queries != before.Queries || after.LatencyMS != before.LatencyMS {
 		t.Fatalf("reset by an unrelated change: %+v, was %+v", after, before)
+	}
+}
+
+// The recursion's lookup times and retries reach the metrics and the
+// overview (Resolution card).
+func TestRecursionTimingsAreExported(t *testing.T) {
+	s, _, _ := start(t, "\n[recursion]\nenabled = true\nfallback = true\nroot_hints = [\"127.0.0.1\"]\n")
+	_, _, _, metrics := s.Addrs()
+	hr, err := http.Get("http://" + metrics + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(hr.Body)
+	hr.Body.Close()
+	for _, want := range []string{
+		"dnsnova_recursion_lookup_seconds_bucket{le=\"0.1\"}", "dnsnova_recursion_lookup_seconds_count",
+		"dnsnova_recursion_server_rtt_seconds_count", "dnsnova_recursion_retries_total{result=\"answered\"}",
+	} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("metrics without %s", want)
+		}
+	}
+	st := s.RecursionStatus()
+	if st.LookupP50MS != 0 || st.Retries != 0 {
+		t.Fatalf("before any lookup: %+v", st)
 	}
 }

@@ -312,6 +312,14 @@ func (in *infra) fail(a netip.Addr, now time.Time) {
 	s.lastUsed = now
 }
 
+// backoff reports whether a has failed often enough in a row to be set
+// aside for a while (fail): most likely down, not just losing a packet.
+func (in *infra) backoff(a netip.Addr, now time.Time) bool {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	return now.Before(in.get(a).until)
+}
+
 func (in *infra) setLame(a netip.Addr, zone string, now time.Time) {
 	in.mu.Lock()
 	defer in.mu.Unlock()

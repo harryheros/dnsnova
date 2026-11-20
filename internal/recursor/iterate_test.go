@@ -30,12 +30,13 @@ type fakeZone struct {
 
 type fakeServer struct {
 	zones   []*fakeZone
-	refuse  bool // answer REFUSED
-	silent  bool // never answer
-	tc      bool // truncate UDP answers
-	entNX   bool // NXDOMAIN for empty non-terminals (a broken server)
-	entLame bool // an empty reply without authority for empty non-terminals (some load balancers)
-	extra   []rr // added to every answer (poisoning attempts)
+	refuse  bool         // answer REFUSED
+	silent  bool         // never answer
+	drop    atomic.Int64 // this many queries go unanswered first (packets lost)
+	tc      bool         // truncate UDP answers
+	entNX   bool         // NXDOMAIN for empty non-terminals (a broken server)
+	entLame bool         // an empty reply without authority for empty non-terminals (some load balancers)
+	extra   []rr         // added to every answer (poisoning attempts)
 	queries atomic.Int64
 	tcp     atomic.Int64
 	seen    sync.Map // qname -> true
@@ -174,7 +175,7 @@ func (n *fakeNet) send(ctx context.Context, addr netip.AddrPort, q []byte, tcp b
 	if tcp {
 		s.tcp.Add(1)
 	}
-	if s.silent {
+	if s.silent || s.drop.Add(-1) >= 0 {
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}

@@ -41,3 +41,23 @@ func BenchmarkResolveNew(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkExchangeCached: a question the recursor answers from its own
+// cache, the most common case; the lookup statistics must cost nothing
+// noticeable here.
+func BenchmarkExchangeCached(b *testing.B) {
+	n := world()
+	r := newTest(&testing.T{}, n, false)
+	q := buildQuery(1, dotted("www.example.com"), 1, true, nil)
+	q[2] |= 1
+	if _, err := r.Exchange(context.Background(), q); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := r.Exchange(context.Background(), q); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

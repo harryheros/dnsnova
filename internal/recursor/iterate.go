@@ -320,6 +320,16 @@ func usable(msg *message, zone, qname string) bool {
 
 // query asks the servers of d, best first, until one gives a usable reply.
 //
+// When none did and some only timed out, the best of those is asked once
+// more, given three times its usual round trip (400 ms to 2 s; 1 s when not
+// known): a lost packet is not a dead server, nor a slow one, and a zone
+// with one name server failed on the first loss where other resolvers
+// retry. One server only, so that
+// when all are down the error still comes in time for the upstreams to
+// answer instead. Not one in backoff (three timeouts in a row: down, most
+// likely), not IPv6 that may be broken, and not one that refused or
+// answered without authority.
+//
 // For a shortened name (minimised, RFC 9156), a reply that is not usable
 // says the server mishandles names that exist only as part of longer
 // ones, as some load balancers do; it may well answer the full name. So
@@ -332,30 +342,34 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 	addrs := r.serverAddrs(ctx, t, d, cfg, false)
 	now := r.now()
 	tried := 0
-	var asked []netip.Addr
-	more := false
-	var why []string // what each server did, for the error when none answers
+	var asked, timedOut []netip.Addr
+	more, retried := false, false
+	var retryWait time.Duration // for the server asked again
+	var why []string            // what each server did, for the error when none answers
 	note := func(a netip.Addr, s string) {
 		if len(why) < 8 {
 			why = append(why, a.String()+" "+s)
 		}
 	}
 	for tried < 8 {
-		if len(addrs) == 0 {
+		if len(addrs) == 0 && !more {
 			// every address known failed: look up the zone's other name
 			// servers (glueless ones are only partly looked up at first)
-			if more {
-				break
-			}
 			more = true
 			for _, a := range r.serverAddrs(ctx, t, d, cfg, true) {
 				if !slices.Contains(asked, a) {
 					addrs = append(addrs, a)
 				}
 			}
-			if len(addrs) == 0 {
-				break
-			}
+		}
+		if len(addrs) == 0 && !retried && len(timedOut) > 0 {
+			// none answered, and some only timed out: the best once more
+			retried = true
+			addrs, timedOut = timedOut[:1], nil
+			r.Stats.Retries.Add(1)
+		}
+		if len(addrs) == 0 {
+			break
 		}
 		scores := make(map[netip.Addr]time.Duration, len(addrs))
 		v6proven := r.v6Proven()
@@ -375,9 +389,23 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 		t.budget--
 		tried++
 		asked = append(asked, a)
+		wait := time.Duration(0)
+		if retried {
+			wait = retryWait
+		}
+		before := r.infra.rtt(a) // its usual round trip, before a failure raises it
 		start := time.Now()
-		msg, err := r.ask(ctx, a, d, name, qtype)
+		if t.asked.IsZero() {
+			t.asked = start
+		}
+		msg, err := r.ask(ctx, a, d, name, qtype, wait)
 		rtt := time.Since(start)
+		if err == nil {
+			r.Stats.RTT.Observe(rtt)
+			if retried {
+				r.Stats.RetriesAnswered.Add(1)
+			}
+		}
 		if err != nil {
 			if t.trace != nil {
 				r.traceQuery(t, d.zone, a, name, qtype, rtt, nil, err, false)
@@ -389,6 +417,15 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 			switch {
 			case errors.Is(err, context.DeadlineExceeded) || isTimeout(err):
 				note(a, "timed out")
+				if !retried && !r.infra.backoff(a, r.now()) && (a.Is4() || r.v6Proven()) {
+					if len(timedOut) == 0 {
+						retryWait = time.Second
+						if before > 0 {
+							retryWait = min(max(3*before, 400*time.Millisecond), 2*time.Second)
+						}
+					}
+					timedOut = append(timedOut, a)
+				}
 			case errors.As(err, &rw):
 				note(a, "answer rewritten on the way: "+rw.why)
 				if r.Intercepted() {
@@ -654,7 +691,9 @@ func (r *Recursor) v6Result(a netip.Addr, err error, now time.Time) {
 // Each UDP answer is judged as it arrives (see pick): forged ones are
 // dropped while the genuine one, which an injector on the path cannot stop,
 // is waited for. Only when none comes is the question asked over TCP.
-func (r *Recursor) ask(ctx context.Context, a netip.Addr, d *delegation, name string, qtype uint16) (*message, error) {
+// ask asks a, waiting up to wait for a UDP reply (0: as long as a's
+// round trips call for).
+func (r *Recursor) ask(ctx context.Context, a netip.Addr, d *delegation, name string, qtype uint16, wait time.Duration) (*message, error) {
 	now := r.now()
 	cfg := r.cfg.Load()
 	edns := r.infra.useEDNS(a, now)
@@ -735,7 +774,11 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, d *delegation, name st
 			return parseMessage(resp)
 		}
 		start = time.Now()
-		c, cancel := context.WithTimeout(withJudge(ctx, judge), r.infra.timeout(a))
+		udpWait := r.infra.timeout(a)
+		if wait > 0 {
+			udpWait = wait
+		}
+		c, cancel := context.WithTimeout(withJudge(ctx, judge), udpWait)
 		resp, err := r.send(c, ap, q, false)
 		cancel()
 		r.Stats.Queries.Add(1)

@@ -4,6 +4,28 @@ All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
 **Security**.
 
+## 1.6.6 (2026-11-20)
+
+- **A lost packet no longer fails a lookup.** A name server that did not
+  answer in time was not asked again, so a zone with a single name server
+  gave SERVFAIL on the first lost packet, where other resolvers, retrying,
+  answered. Now, when no server of a zone answered and one only timed out,
+  the best such server is asked once more. It is given three times its
+  usual round trip (400 ms to 2 s; 1 s when not known), not the 2 s its
+  failure has just raised the estimate to: a lost packet is not a slow
+  server, and a server that is down costs little more than before. One
+  server only, so that when every server is down the error still comes in
+  time for the upstreams to answer instead; and not one that has timed
+  out three times in a row (down, most likely), IPv6 not yet known to
+  work, or one that refused or answered without authority.
+- **How fast recursion is, measured.** The overview's Resolution card shows
+  the typical time of a lookup that asked name servers, and the time 95%
+  of them finish within; answers from the cache are not counted, and cost
+  no clock reading. Metrics: `dnsnova_recursion_lookup_seconds` and
+  `dnsnova_recursion_server_rtt_seconds` (histograms), and
+  `dnsnova_recursion_retries_total` by whether the retried server replied.
+  Only times and counts are kept: no names, no addresses.
+
 ## 1.6.5 (2026-11-20)
 
 Recursion resolves names served by load balancers that answer unusually

@@ -125,9 +125,13 @@ func (s *Server) RecursionStatus() admin.Recursion {
 		Secure: r.Stats.Secure.Load(), Insecure: r.Stats.Insecure.Load(), Bogus: r.Stats.Bogus.Load(),
 		Fallbacks: s.recFallbacks.Load(), Spoofed: r.Stats.Spoofed.Load(),
 		Forged: r.Stats.Forged.Load(), Rewritten: r.Stats.Rewritten.Load(), Intercepted: r.Intercepted(),
-		Cache: map[string]int{"rrsets": sets, "negative": negs, "zones": keys, "delegations": delegs, "servers": servers},
+		Cache:       map[string]int{"rrsets": sets, "negative": negs, "zones": keys, "delegations": delegs, "servers": servers},
+		LookupP50MS: ms(r.Stats.Lookups.Quantile(0.5)), LookupP95MS: ms(r.Stats.Lookups.Quantile(0.95)),
+		Retries: r.Stats.Retries.Load(), RetriesAnswered: r.Stats.RetriesAnswered.Load(),
 	}
 }
+
+func ms(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 }
 
 func (s *Server) writeRecursionMetrics(w io.Writer) {
 	r := s.Rec
@@ -140,6 +144,13 @@ func (s *Server) writeRecursionMetrics(w io.Writer) {
 	fmt.Fprintf(w, "# TYPE dnsnova_recursion_spoofed_total counter\ndnsnova_recursion_spoofed_total %d\n", r.Stats.Spoofed.Load())
 	fmt.Fprintf(w, "# HELP dnsnova_recursion_forged_total UDP answers from the path dropped as forged while the genuine answer was waited for.\n# TYPE dnsnova_recursion_forged_total counter\ndnsnova_recursion_forged_total %d\n", r.Stats.Forged.Load())
 	fmt.Fprintf(w, "# HELP dnsnova_recursion_no_tcp_total Doubtful UDP answers used because the name server does not answer over TCP.\n# TYPE dnsnova_recursion_no_tcp_total counter\ndnsnova_recursion_no_tcp_total %d\n", r.Stats.NoTCP.Load())
+	fmt.Fprintf(w, "# HELP dnsnova_recursion_lookup_seconds Lookups that asked name servers (not from the cache), end to end.\n# TYPE dnsnova_recursion_lookup_seconds histogram\n")
+	r.Stats.Lookups.WritePrometheus(w, "dnsnova_recursion_lookup_seconds", "")
+	fmt.Fprintf(w, "# HELP dnsnova_recursion_server_rtt_seconds How long name servers took to reply.\n# TYPE dnsnova_recursion_server_rtt_seconds histogram\n")
+	r.Stats.RTT.WritePrometheus(w, "dnsnova_recursion_server_rtt_seconds", "")
+	fmt.Fprintf(w, "# HELP dnsnova_recursion_retries_total Name servers that timed out asked once more, by whether they then replied.\n# TYPE dnsnova_recursion_retries_total counter\n")
+	fmt.Fprintf(w, "dnsnova_recursion_retries_total{result=\"answered\"} %d\n", r.Stats.RetriesAnswered.Load())
+	fmt.Fprintf(w, "dnsnova_recursion_retries_total{result=\"failed\"} %d\n", r.Stats.Retries.Load()-r.Stats.RetriesAnswered.Load())
 	fmt.Fprintf(w, "# HELP dnsnova_recursion_rewritten_total Answers no name server sends, over UDP and TCP: the network answers in their place.\n# TYPE dnsnova_recursion_rewritten_total counter\ndnsnova_recursion_rewritten_total %d\n", r.Stats.Rewritten.Load())
 	intercepted := 0
 	if r.Intercepted() {
