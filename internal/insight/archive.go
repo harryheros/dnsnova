@@ -86,6 +86,9 @@ func (a *Archive) Run(ctx context.Context) {
 			a.mu.Unlock()
 			return
 		case q := <-a.ch:
+			if testHookWriterTook != nil {
+				testHookWriterTook()
+			}
 			a.mu.Lock()
 			a.writeLocked(q)
 			a.pending.Add(-1)
@@ -99,6 +102,10 @@ func (a *Archive) Run(ctx context.Context) {
 		}
 	}
 }
+
+// Test hooks, nil outside tests: the writer has taken a record and not yet
+// locked; drain has just let go of the lock.
+var testHookWriterTook, testHookDrainUnlocked func()
 
 // drain writes everything queued so far, including a record the writer
 // has taken but not yet written (for at most a second).
@@ -116,8 +123,15 @@ func (a *Archive) drain() {
 			}
 		}
 		a.flushLocked()
+		// Checked before letting go of the lock: the writer may have written a
+		// record it had taken (it lowers pending under the lock) after this
+		// flush otherwise, and that record would stay in the buffer.
+		done := a.pending.Load() <= 0
 		a.mu.Unlock()
-		if a.pending.Load() <= 0 || time.Now().After(deadline) {
+		if testHookDrainUnlocked != nil {
+			testHookDrainUnlocked()
+		}
+		if done || time.Now().After(deadline) {
 			return
 		}
 		time.Sleep(time.Millisecond)
