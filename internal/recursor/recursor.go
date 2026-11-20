@@ -77,6 +77,9 @@ type Stats struct {
 	// answers that no name server sends, over UDP and TCP alike: the
 	// network answers in the servers' place (port 53 intercepted)
 	Rewritten atomic.Int64
+	// doubtful UDP answers used because the server does not answer over
+	// TCP (refused or silent): some load balancers
+	NoTCP atomic.Int64
 }
 
 // Recursor is safe for concurrent use.

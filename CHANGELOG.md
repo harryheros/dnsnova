@@ -4,6 +4,34 @@ All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
 **Security**.
 
+## 1.6.5 (2026-11-20)
+
+Recursion resolves names served by load balancers that answer unusually
+over UDP and not at all over TCP, as some large CDNs' name servers do;
+such names failed with SERVFAIL after about six seconds. What is done
+against forged answers is unchanged.
+
+- **An unusual UDP answer is used when TCP cannot be had.** An answer
+  without EDNS or AA (or without the cookie the server usually sends) was
+  dropped and the question asked over TCP for up to five seconds. It is
+  now kept, TCP gets a second (or four round trips), and if the connection
+  is refused or silent the kept answer is used. It is not used if anything
+  forged came with it, if two answers differ, or if TCP was reset after the
+  question, as injectors do. New metric `dnsnova_recursion_no_tcp_total`.
+- **Servers without TCP are remembered for an hour**, and TCP is not tried
+  again. Their unusual answers are used at once only when they come no
+  sooner than the server's own answers do (an injector on the path is
+  nearer and answers first); one that comes sooner waits as any doubtful
+  answer does, and is used only if no other answer comes.
+- **A missing DNS Cookie is doubtful, no longer proof of forgery.**
+  Instances of one anycast server can differ; a wrong cookie is still
+  proof.
+- **QNAME minimisation no longer marks servers lame for a whole zone.** A
+  server that gives no usable reply to a shortened name is not set aside
+  for the zone for ten minutes; the zone's other servers are asked it, and
+  if none answers, the full name. (Giving up minimisation because of one
+  server would send the full name to every later server.)
+
 ## 1.6.4 (2026-11-20)
 
 - **Configuration history can be deleted.** Admin › Configuration history

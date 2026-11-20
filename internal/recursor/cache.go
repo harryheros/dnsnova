@@ -207,6 +207,10 @@ type server struct {
 	// over UDP (no EDNS, no AA), so until then its UDP answers are not
 	// doubted for that
 	plainUntil time.Time
+	// noTCPUntil: it answers over UDP but not over TCP (the connection is
+	// refused or never answered), so until then a doubtful UDP answer from
+	// it is the best that will come, and is used
+	noTCPUntil time.Time
 }
 
 type infra struct {
@@ -397,6 +401,27 @@ func (in *infra) plain(a netip.Addr, now time.Time) bool {
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	return now.Before(in.get(a).plainUntil)
+}
+
+// setNoTCP: a answers over UDP, but its TCP connections are refused or
+// never answered: stop asking it over TCP for a merely doubtful answer.
+func (in *infra) setNoTCP(a netip.Addr, now time.Time) {
+	in.mu.Lock()
+	in.get(a).noTCPUntil = now.Add(time.Hour)
+	in.mu.Unlock()
+}
+
+// rtt is a's smoothed round-trip time; 0 when unknown.
+func (in *infra) rtt(a netip.Addr) time.Duration {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	return in.get(a).srtt
+}
+
+func (in *infra) noTCP(a netip.Addr, now time.Time) bool {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	return now.Before(in.get(a).noTCPUntil)
 }
 
 func (in *infra) size() int {

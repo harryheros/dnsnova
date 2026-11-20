@@ -43,7 +43,7 @@ func (r *Recursor) rootDeleg(ctx context.Context, t *task) *delegation {
 	cfg := r.cfg.Load()
 	hints := &delegation{zone: "", ns: []nsHost{{addrs: cfg.RootHints}}}
 	v, _ := r.fl.do(ctx, "prime", func() (any, error) {
-		msg, err := r.query(ctx, t, hints, "", m.TypeNS)
+		msg, err := r.query(ctx, t, hints, "", m.TypeNS, false)
 		if err == nil && msg.rcode == m.RcodeNoError {
 			if d, ttl := delegFrom(msg.answer, msg.additional, ""); d != nil &&
 				slices.ContainsFunc(d.ns, func(h nsHost) bool { return len(h.addrs) > 0 }) {
@@ -158,7 +158,7 @@ func (r *Recursor) iterateOnce(ctx context.Context, t *task, qname string, qtype
 			sendName, sendType = ancestorAt(qname, labelCount(known)+1), m.TypeA
 			steps++
 		}
-		msg, err := r.query(ctx, t, d, sendName, sendType)
+		msg, err := r.query(ctx, t, d, sendName, sendType, sendName != qname)
 		if err != nil {
 			if sendName != qname && errors.Is(err, ErrUnreachable) {
 				// no server gave a usable reply to the shortened name (some
@@ -319,7 +319,15 @@ func usable(msg *message, zone, qname string) bool {
 }
 
 // query asks the servers of d, best first, until one gives a usable reply.
-func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name string, qtype uint16) (*message, error) {
+//
+// For a shortened name (minimised, RFC 9156), a reply that is not usable
+// says the server mishandles names that exist only as part of longer
+// ones, as some load balancers do; it may well answer the full name. So
+// it is not marked lame for the zone: the zone's other servers are asked,
+// and if none answers, the caller asks for the full name (ErrUnreachable).
+// Giving up on the first such reply would send the full name onwards,
+// to every later server, because of one server.
+func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name string, qtype uint16, minimised bool) (*message, error) {
 	cfg := r.cfg.Load()
 	addrs := r.serverAddrs(ctx, t, d, cfg, false)
 	now := r.now()
@@ -396,14 +404,23 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 			if t.trace != nil {
 				r.traceQuery(t, d.zone, a, name, qtype, rtt, msg, nil, false)
 			}
-			r.infra.setLame(a, d.zone, now)
 			note(a, m.RcodeString(msg.rcode))
+			if !minimised {
+				r.infra.setLame(a, d.zone, now)
+			}
 			continue
 		}
 		scrub(msg, d.zone)
 		if !usable(msg, d.zone, name) {
 			if t.trace != nil {
 				r.traceQuery(t, d.zone, a, name, qtype, rtt, msg, nil, true)
+				if minimised {
+					t.trace.retell("no usable reply to the shortened name")
+				}
+			}
+			if minimised {
+				note(a, "no usable reply to the shortened name")
+				continue
 			}
 			r.infra.setLame(a, d.zone, now)
 			note(a, "not authoritative (lame)")
@@ -652,6 +669,15 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, d *delegation, name st
 		}
 	}
 	plain := r.infra.plain(a, now)
+	noTCP := r.infra.noTCP(a, now)
+	// From a server without TCP, an unusual answer is taken at once only if
+	// it came no sooner than the server answers: an injector on the path is
+	// nearer, and answers first. One that came sooner waits, as any doubtful
+	// answer does, and is used only if no other answer comes (pick).
+	var noTCPAfter time.Duration
+	if noTCP {
+		noTCPAfter = max(0, r.infra.rtt(a)*3/4-time.Millisecond)
+	}
 	// on a network that answers in the servers' place, nothing better
 	// than an impossible answer is coming
 	intercepted := r.Intercepted()
@@ -667,7 +693,12 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, d *delegation, name st
 		q := buildQuery(uint16(rand.Uint32()), name, qtype, edns, opts)
 		sentEDNS, sentCookie := edns, cc
 		var sawImpossible atomic.Value // why the last UDP answer could not be the server's
+		var start time.Time
+		var firstIn time.Duration // when the first answer came: the round trip
 		judge := func(resp []byte) verdict {
+			if firstIn == 0 {
+				firstIn = time.Since(start)
+			}
 			msg, err := parseMessage(resp)
 			if err != nil || msg.tc() {
 				return vAccept // broken answers are dealt with below; truncated ones go to TCP anyway
@@ -681,6 +712,11 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, d *delegation, name st
 				}
 			} else if !plain {
 				v, _ = r.doubt(msg, a, d, name, qtype, sentEDNS, sentCookie, now)
+				if v == vSuspect && noTCP && time.Since(start) >= noTCPAfter {
+					// merely unusual, from a server that cannot be asked
+					// over TCP, and as late as its own answers come
+					v = vAccept
+				}
 			}
 			if v != vAccept {
 				r.Stats.Forged.Add(1)
@@ -698,26 +734,50 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, d *delegation, name st
 			}
 			return parseMessage(resp)
 		}
-		start := time.Now()
+		start = time.Now()
 		c, cancel := context.WithTimeout(withJudge(ctx, judge), r.infra.timeout(a))
 		resp, err := r.send(c, ap, q, false)
 		cancel()
 		r.Stats.Queries.Add(1)
-		tcp, doubted := false, false
+		tcp, doubted, usedKept := false, false, false
 		switch {
 		case errors.Is(err, ErrSpoofed):
 			// Someone is guessing answers to this query: ask over TCP.
 			r.Stats.Spoofed.Add(1)
+			resp = nil
 			fallthrough
 		case errors.Is(err, ErrForged):
 			// Only forged or doubtful answers came: ask over TCP, where
 			// nothing can be forged from the path (an injector resets, at most).
 			doubted = errors.Is(err, ErrForged)
-			c, cancel := context.WithTimeout(ctx, 2*r.infra.timeout(a)+time.Second)
+			kept := resp // the one doubtful answer that came, if that is all
+			if kept != nil && noTCP {
+				// known not to answer over TCP, and nothing else came: use it
+				r.Stats.NoTCP.Add(1)
+				resp, err, usedKept = kept, nil, true
+				break
+			}
+			wait := 2*r.infra.timeout(a) + time.Second
+			if kept != nil || noTCP {
+				// with an answer in hand, or from a server that does not
+				// answer over TCP, TCP gets a short chance: a few round
+				// trips, not seconds
+				wait = min(wait, max(tcpChance, 4*firstIn))
+			}
+			c, cancel := context.WithTimeout(ctx, wait)
 			resp, err = r.send(c, ap, q, true)
 			cancel()
 			r.Stats.TCP.Add(1)
 			tcp = true
+			if err != nil && kept != nil && ctx.Err() == nil && noTCPAnswer(err) {
+				// The server answers over UDP, but not over TCP (some load
+				// balancers): its doubtful answer, the only one that came
+				// and with nothing forged beside it, is the genuine one.
+				// An injector would have reset the connection instead.
+				r.infra.setNoTCP(a, now)
+				r.Stats.NoTCP.Add(1)
+				resp, err, tcp, usedKept = kept, nil, false, true
+			}
 		}
 		if err != nil {
 			if why, ok := sawImpossible.Load().(string); ok && tcp && ctx.Err() == nil {
@@ -746,7 +806,11 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, d *delegation, name st
 				return nil, &rewritten{why: why}
 			}
 		}
-		r.infra.ok(a, time.Since(start), now)
+		rtt := time.Since(start)
+		if usedKept {
+			rtt = firstIn // the waits for TCP say nothing of how fast it answers
+		}
+		r.infra.ok(a, rtt, now)
 		r.v6Result(a, nil, now)
 		r.lastOK.Store(now.UnixNano())
 		r.failRun.Store(0)
@@ -760,7 +824,7 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, d *delegation, name st
 			}
 			tcp = true
 		}
-		if doubted && !plain {
+		if doubted && !plain && !usedKept {
 			// The genuine answer, over TCP, looks just like the doubted ones
 			// did: that is how this server answers. Stop doubting it.
 			if v, _ := r.doubt(msg, a, d, name, qtype, sentEDNS, nil, now); v != vAccept {
@@ -768,7 +832,13 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, d *delegation, name st
 				plain = true
 			}
 		}
-		if cc != nil {
+		if cc != nil && usedKept {
+			// no TCP to check a missing cookie against: not every
+			// instance of this server sends one
+			if msg.cookie == nil {
+				r.infra.cookieLoose(a, now)
+			}
+		} else if cc != nil {
 			switch r.checkCookie(a, cc, msg, tcp, badRetried, now) {
 			case cookieAgain: // BADCOOKIE: now with the server cookie it just gave
 				badRetried = true
@@ -797,6 +867,18 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, d *delegation, name st
 		return msg, nil
 	}
 	return nil, ErrUnreachable
+}
+
+// tcpChance is the least time TCP is given when a doubtful UDP answer is
+// already in hand.
+const tcpChance = time.Second
+
+// noTCPAnswer reports whether a TCP exchange failed the way it does with a
+// server that does not answer over TCP: refused (nothing listens), or no
+// answer in time. A connection reset or closed after the question was sent
+// is what injectors do, and does not count.
+func noTCPAnswer(err error) bool {
+	return errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, context.DeadlineExceeded) || isTimeout(err)
 }
 
 // rewritten is an answer that cannot have come from the server asked: the
@@ -856,7 +938,9 @@ func (r *Recursor) doubt(msg *message, a netip.Addr, d *delegation, name string,
 		case msg.cookie != nil && !valid:
 			return vForged, "another client's cookie"
 		case msg.cookie == nil && r.infra.cookieExpected(a, now):
-			return vForged, "no cookie from a server that always sends one"
+			// an injector cannot send the right cookie, but instances of
+			// one anycast server can differ: doubtful, not impossible
+			return vSuspect, "no cookie from a server that always sends one"
 		}
 	}
 	if qtype == m.TypeAAAA {

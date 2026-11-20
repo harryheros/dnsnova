@@ -38,6 +38,15 @@ type injector struct {
 	plain    map[netip.Addr]bool
 	soa      bool // with intercept: NXDOMAIN with the root's SOA, as a resolver would
 	tcpBlock bool // with intercept: TCP connections are reset instead
+	// servers that accept TCP connections but never answer on them (some
+	// load balancers): the question goes unanswered until the resolver
+	// gives up
+	noTCP map[netip.Addr]bool
+	// servers with nothing listening on TCP port 53: connections are refused
+	refuseTCP map[netip.Addr]bool
+	// servers whose TCP connections are reset once the question is sent,
+	// as an injector does, without forging anything over UDP
+	resetTCP map[netip.Addr]bool
 }
 
 func (c *injector) targeted(name string) bool {
@@ -101,6 +110,9 @@ func newPathLab(t *testing.T, c *injector, addrs []netip.Addr, base func(context
 		l.closer = append(l.closer, pc, ln)
 		l.udp[a] = pc.LocalAddr().(*net.UDPAddr).AddrPort()
 		l.tcp[a] = ln.Addr().(*net.TCPAddr).AddrPort()
+		if c.refuseTCP[a] {
+			ln.Close() // nothing listens on its port now
+		}
 		go l.serveUDP(pc, netip.AddrPortFrom(a, 53))
 		go l.serveTCP(ln, netip.AddrPortFrom(a, 53))
 	}
@@ -193,6 +205,13 @@ func (l *pathLab) serveTCP(ln *net.TCPListener, as netip.AddrPort) {
 			case l.c.targeted(qm.qname):
 				l.resets.Add(1)
 				c.SetLinger(0) // closing now sends RST, as the injector does
+				return
+			case l.c.resetTCP[as.Addr()]:
+				l.resets.Add(1)
+				c.SetLinger(0)
+				return
+			case l.c.noTCP[as.Addr()]:
+				io.Copy(io.Discard, c) // until the resolver gives up
 				return
 			default:
 				if resp, err = l.base(context.Background(), as, q, true); err != nil {

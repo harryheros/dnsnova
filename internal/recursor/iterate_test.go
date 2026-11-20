@@ -34,6 +34,7 @@ type fakeServer struct {
 	silent  bool // never answer
 	tc      bool // truncate UDP answers
 	entNX   bool // NXDOMAIN for empty non-terminals (a broken server)
+	entLame bool // an empty reply without authority for empty non-terminals (some load balancers)
 	extra   []rr // added to every answer (poisoning attempts)
 	queries atomic.Int64
 	tcp     atomic.Int64
@@ -141,6 +142,16 @@ func (s *fakeServer) answer(q *message) []byte {
 	}
 	if len(an) > 0 {
 		return buildMessage(q.id, flags, q.qname, q.qtype, append(an, s.extra...), nil, nil, false, false, nil)
+	}
+	if s.entLame {
+		own, below := false, false
+		for _, r := range z.recs {
+			own = own || r.name == q.qname
+			below = below || (r.name != q.qname && isSub(r.name, q.qname))
+		}
+		if !own && below {
+			return buildMessage(q.id, m.FlagQR, q.qname, q.qtype, nil, nil, nil, false, false, nil)
+		}
 	}
 	exists := false
 	for _, r := range z.recs {

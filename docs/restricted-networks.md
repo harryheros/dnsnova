@@ -30,8 +30,8 @@ one:
 | Unsigned, from a zone whose referral had DS records | Signed zones sign their answers |
 | A record of another type than asked | No server does that |
 | An AAAA address in `2001::/32` | The Teredo prefix injectors use |
-| A wrong DNS Cookie, or none from a server that always sends one | Only the server knows the cookie |
-| No EDNS to a question with EDNS, or no AA from the zone's own server | Unusual: kept only if nothing better arrives |
+| A wrong DNS Cookie | Only the server knows the cookie |
+| No EDNS to a question with EDNS, no AA from the zone's own server, or no cookie from a server that always sends one | Unusual: kept only if nothing better arrives (see below) |
 
 Answers that pass are used at once, so other names cost nothing extra.
 After a dropped answer, DNSNova waits up to 500 ms for the genuine one,
@@ -44,6 +44,39 @@ metric is `dnsnova_recursion_forged_total`.
 
 **Your clients:** the same device also forges answers sent to clients that
 reach DNSNova across it. Those clients must use DNS over HTTPS, TLS or QUIC.
+
+## Servers that do not answer over TCP
+
+Some load balancers in front of large sites (seen with the name servers of
+some large CDNs) answer over UDP without EDNS or AA, so their answers look
+unusual, and never answer over TCP: the connection is refused, or accepted
+and left silent.
+
+Before 1.6.5, DNSNova dropped such an answer and asked over TCP, waiting
+up to five seconds; with two or three such servers a lookup took longer
+than clients wait, and every one failed (SERVFAIL).
+
+Now an unusual answer is kept while TCP is tried. TCP gets a short chance
+(a second, or four round trips); if the connection is refused or not
+answered, the kept answer is used, and the server is asked only over UDP
+for an hour. The answer is used only when it is all that came: one
+answer, or the same one repeated. If an answer that cannot be the server's
+came too, or two that differ, or the TCP connection was reset after the
+question (what injectors do), it is not.
+
+During that hour, an unusual answer from the server is used at once only
+when it comes no sooner than the server's answers do (three quarters of
+its usual round trip, less a millisecond). An injector on the path is
+nearer than the server and answers first: its answer waits, as any
+doubtful answer does, and the genuine one that follows is used.
+They are counted in the metric `dnsnova_recursion_no_tcp_total`.
+
+The same servers often give an empty reply without authority for a name
+that only exists as part of longer ones, which QNAME minimisation asks
+for. DNSNova no longer marks such a server lame for its whole zone for ten
+minutes: it asks the zone's other servers for the shortened name, and only
+if none answers, for the full name, so that one server does not end
+minimisation for the rest of the lookup.
 
 ## Networks that take over port 53
 
