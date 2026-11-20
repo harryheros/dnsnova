@@ -139,6 +139,7 @@ func (s *Server) writeRecursionMetrics(w io.Writer) {
 	fmt.Fprintf(w, "dnsnova_recursion_cookie_rejected_total{reason=\"missing\"} %d\n", r.Stats.CookieMissing.Load())
 	fmt.Fprintf(w, "# TYPE dnsnova_recursion_spoofed_total counter\ndnsnova_recursion_spoofed_total %d\n", r.Stats.Spoofed.Load())
 	fmt.Fprintf(w, "# HELP dnsnova_recursion_forged_total UDP answers from the path dropped as forged while the genuine answer was waited for.\n# TYPE dnsnova_recursion_forged_total counter\ndnsnova_recursion_forged_total %d\n", r.Stats.Forged.Load())
+	fmt.Fprintf(w, "# HELP dnsnova_recursion_no_tcp_total Doubtful UDP answers used because the name server does not answer over TCP.\n# TYPE dnsnova_recursion_no_tcp_total counter\ndnsnova_recursion_no_tcp_total %d\n", r.Stats.NoTCP.Load())
 	fmt.Fprintf(w, "# HELP dnsnova_recursion_rewritten_total Answers no name server sends, over UDP and TCP: the network answers in their place.\n# TYPE dnsnova_recursion_rewritten_total counter\ndnsnova_recursion_rewritten_total %d\n", r.Stats.Rewritten.Load())
 	intercepted := 0
 	if r.Intercepted() {

@@ -232,7 +232,8 @@ func judgeOf(ctx context.Context) judgeFn {
 
 // ErrForged reports a UDP question whose answers were all judged forged
 // or doubtful, with no better one before the time ran out. The question
-// is asked again over TCP.
+// is asked again over TCP. With it, pick may return the doubtful answer
+// that came (see pick): the one to use if TCP cannot be had.
 var ErrForged = errors.New("only forged answers received")
 
 // forgedGrace is how long a better answer is waited for after a forged or
@@ -242,9 +243,16 @@ const forgedGrace = 500 * time.Millisecond
 // pick returns the first answer on ch that judge accepts (any, without a
 // judge). After one it rejects, it waits at most forgedGrace for a good
 // one, then gives up with ErrForged (at once for vGiveUp).
+//
+// With ErrForged it also returns the doubtful (vSuspect) answer, when that
+// is all that came: one answer, or several identical ones. Nothing is kept
+// when an answer judged forged came too, or two doubtful ones that differ:
+// someone on the path answers, and either could be theirs.
 func pick(ctx context.Context, judge judgeFn, ch <-chan []byte, spoofed <-chan struct{}) ([]byte, error) {
 	var grace <-chan time.Time
 	rejected := false
+	var kept []byte
+	tainted := false // a forged answer, or doubtful ones that differ
 	for {
 		select {
 		case resp := <-ch:
@@ -257,6 +265,15 @@ func pick(ctx context.Context, judge judgeFn, ch <-chan []byte, spoofed <-chan s
 				return resp, nil
 			case vGiveUp:
 				return nil, ErrForged
+			case vSuspect:
+				switch {
+				case kept == nil:
+					kept = resp
+				case !sameAnswer(kept, resp):
+					tainted = true
+				}
+			default:
+				tainted = true
 			}
 			if !rejected {
 				rejected = true
@@ -265,14 +282,27 @@ func pick(ctx context.Context, judge judgeFn, ch <-chan []byte, spoofed <-chan s
 				grace = t.C
 			}
 		case <-grace:
-			return nil, ErrForged
+			return keptAnswer(kept, tainted), ErrForged
 		case <-spoofed:
 			return nil, ErrSpoofed
 		case <-ctx.Done():
 			if rejected {
-				return nil, ErrForged
+				return keptAnswer(kept, tainted), ErrForged
 			}
 			return nil, ctx.Err()
 		}
 	}
+}
+
+func keptAnswer(kept []byte, tainted bool) []byte {
+	if tainted {
+		return nil
+	}
+	return kept
+}
+
+// sameAnswer reports whether two answers to one question say the same:
+// the same bytes after the ID (a server repeats itself exactly).
+func sameAnswer(a, b []byte) bool {
+	return len(a) == len(b) && len(a) >= 2 && string(a[2:]) == string(b[2:])
 }

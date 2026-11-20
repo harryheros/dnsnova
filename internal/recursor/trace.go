@@ -76,6 +76,13 @@ func (tr *tracer) add(t *task, s TraceStep) {
 	tr.steps = append(tr.steps, s)
 }
 
+// retell replaces what the last step says came of it.
+func (tr *tracer) retell(result string) {
+	if len(tr.steps) > 0 && !tr.cut {
+		tr.steps[len(tr.steps)-1].Result = result
+	}
+}
+
 // Trace resolves name (wire format) and type from scratch and records how.
 // With WithSubnet, name servers are asked for that network.
 func (r *Recursor) Trace(ctx context.Context, name string, qtype uint16) *TraceResult {
