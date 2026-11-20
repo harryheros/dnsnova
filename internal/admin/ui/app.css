@@ -190,9 +190,9 @@ h2 { margin: 0; font-size: 15px; font-weight: 600; }
 .pagehead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
 .crumb { font-size: 12px; color: var(--muted); letter-spacing: 0.02em; margin-bottom: 2px; }
 .hero-head { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 22px; padding: 2px 0 4px; }
-.hero-head .wordmark { font-size: 64px; filter: drop-shadow(0 2px 16px rgba(75, 147, 255, 0.28)); }
+.hero-head .wordmark { font-size: 56px; filter: drop-shadow(0 2px 16px rgba(75, 147, 255, 0.28)); }
 :root[data-theme="light"] .hero-head .wordmark { filter: none; }
-.hero-head .divider { width: 1px; height: 38px; background: var(--border-strong); }
+.hero-head .divider { width: 1px; height: 34px; background: var(--border-strong); }
 .hero-head .tagline { font-size: 22px; font-weight: 300; color: #b6c8e6; }
 :root[data-theme="light"] .hero-head .tagline { color: var(--muted); }
 .hero-head .ident { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
@@ -558,7 +558,7 @@ p.err:empty, div.err:empty, .problem:empty { display: none; }
   .main { padding: 0 16px 40px; }
   .topbar { margin: 0 -16px; padding: 10px 16px; min-height: 60px; }
   .topbar .sysstate .txt { display: none; }
-  .hero-head .wordmark { font-size: 44px; }
+  .hero-head .wordmark { font-size: 39px; }
   .hero-head .tagline { font-size: 16px; }
   .hero-head .divider { display: none; }
   .hero-head .ident { margin-left: 0; justify-content: flex-start; }
@@ -674,4 +674,12 @@ details.adv[open] > summary::before { content: "▾ "; }
   .uprows .mini { display: none; }
   .kcard .big { font-size: 30px; }
   .topbar .search { flex: 1 1 auto; }
+}
+
+/* Phones: Safari zooms into a field whose text is under 16px when it gets
+   the focus, and does not zoom back out, so the page opened larger than
+   the screen. 16px on touch screens. */
+@media (pointer: coarse) {
+  input[type=text], input[type=password], input[type=email], input[type=number], input[type=search],
+  input.mono, select, textarea, .search input, main .search input[type=search] { font-size: 16px; }
 }

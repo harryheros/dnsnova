@@ -4,6 +4,22 @@ All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
 **Security**.
 
+## 1.6.4 (2026-11-20)
+
+- **Configuration history can be deleted.** Admin › Configuration history
+  has *Delete all*, after a confirmation (`DELETE /api/v1/config/history`,
+  recorded in the service log). The last ten versions are still kept
+  automatically; a webhook address or key taken out of the settings stayed
+  in them until ten more changes pushed it out.
+- **The web interface no longer opens zoomed in on phones.** It put the
+  cursor in the first field, and Safari zooms into a field whose text is
+  under 16 pixels when it gets the cursor, without zooming back: the page
+  opened larger than the screen until pinched. On touch screens fields now
+  use 16-pixel text, and the cursor is not placed by itself (it opened the
+  keyboard before anything was tapped).
+- The DNSNova heading on the overview is a little smaller (56 pixels instead
+  of 64; 39 instead of 44 on phones).
+
 ## 1.6.3 (2026-11-20)
 
 Starts and keeps running on more machines, and installs cleanly on more of

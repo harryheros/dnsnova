@@ -324,7 +324,13 @@ function showLogin(note) {
       help,
       insecure ? h("p", { class: "foot" }, "Not encrypted until a domain is set up.") : null)),
     signFooter()));
-  user.focus();
+  autofocus(user);
+}
+
+// autofocus puts the cursor in the first field on a computer; on a touch
+// screen it would open the keyboard (and zoom) before anything is tapped.
+function autofocus(el) {
+  if (!matchMedia("(pointer: coarse)").matches) el.focus();
 }
 
 const PROJECT = "https://github.com/harryheros/dnsnova";
@@ -456,7 +462,7 @@ const WIZ_VIEWS = [
         await wizLoad(w);
         w.values["admin.listen"] = (w.adminLocal ? "127.0.0.1:" : ":") + p;
       }));
-    user.focus();
+    autofocus(user);
   },
   // 1: addresses
   (w, body, render) => {
@@ -2792,11 +2798,29 @@ function diffView(diff) {
 
 function historyCard() {
   const body = h("div", null, h("p", { class: "muted small" }, "Loading…"));
+  const clear = h("div");
   const card = h("section", { class: "card", "aria-label": "Configuration history" }, h("h2", null, "Configuration history"),
-    h("p", { class: "muted small", style: { margin: 0 } }, "The last 10 versions of the file, saved before each change."), body);
-  (async () => {
+    h("p", { class: "muted small", style: { margin: 0 } }, "The last 10 versions of the file, saved before each change."), body, clear);
+  // Delete all, after a second click: a key or webhook address taken out of
+  // the settings otherwise stays in these versions.
+  const drawClear = (n) => {
+    if (!n) { fill(clear); return; }
+    fill(clear, h("button", {
+      type: "button", class: "btn small danger", onclick: () => fill(clear,
+        h("p", { class: "small", style: { margin: "0 0 8px" } }, `Delete the ${n === 1 ? "saved version" : n + " saved versions"}? They can no longer be restored. The current settings stay as they are.`),
+        h("div", { class: "row" },
+          h("button", {
+            type: "button", class: "btn small danger", onclick: async () => {
+              try { await api("DELETE", "/config/history"); toast("Saved versions deleted"); load(); } catch (e) { toast(e.message, "err"); }
+            },
+          }, "Delete"),
+          h("button", { type: "button", class: "btn small", onclick: () => drawClear(n) }, "Cancel"))),
+    }, "Delete all"));
+  };
+  const load = async () => {
     try {
       const { versions } = await api("GET", "/config/history");
+      drawClear(versions.length);
       if (!versions.length) { fill(body, h("p", { class: "empty small" }, "No earlier versions yet.")); return; }
       fill(body, h("ul", { class: "list" }, versions.map((v) => {
         const out = h("div", { style: { width: "100%" } });
@@ -2823,7 +2847,8 @@ function historyCard() {
         return li;
       })));
     } catch (e) { if (e.status !== 401) fill(body, errorBox(e)); }
-  })();
+  };
+  load();
   return card;
 }
 

@@ -156,6 +156,7 @@ the previous file is put back and the response is `422` with
 | `GET /config/file` | | `{"hash", "content"}`: the whole file. |
 | `PUT /config/file` | `{"hash", "content", "preview"}` | Replaces the whole file; with `"preview": true` only checks it. |
 | `GET /config/history` | | `{"versions": [{"name", "saved"}]}`, newest first. |
+| `DELETE /config/history` | | Delete every saved version: `{"deleted": n}`. The current configuration is not changed; recorded in the service log. |
 | `GET /config/history/{name}` | | `{"name", "content", "diff"}`: a saved version and how it differs from the current file. |
 | `POST /config/history/{name}/restore` | `{"hash"}` | Makes that version current. The version it replaces is saved too, so a restore can be undone. |
 

@@ -270,6 +270,26 @@ func (s *Store) historyLocked() ([]HistoryEntry, error) {
 	return out, nil
 }
 
+// ClearHistory deletes every saved version and returns how many there
+// were. A secret taken out of the configuration (a webhook address, a key)
+// otherwise stays in the last versions until ten more changes push it out.
+func (s *Store) ClearHistory() (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	list, err := s.historyLocked()
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, e := range list {
+		if err := os.Remove(filepath.Join(s.HistoryDir, e.Name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
+}
+
 // Restore makes a saved version current. The version being replaced is
 // itself kept in history, so a restore can be undone.
 func (s *Store) Restore(name, expectedHash string) (*Snapshot, error) {
