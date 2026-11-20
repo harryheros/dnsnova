@@ -1350,7 +1350,9 @@ function recCard(rec) {
     ["ok", "Signed and verified", rec.dnssec ? share(rec.secure) : "off", "DNSSEC"],
     ["idle", "Not signed", rec.dnssec ? share(rec.insecure) : "–", "the domain does not use DNSSEC"],
     [rec.bogus ? "warn" : "idle", "Failed the check", fmt.short(rec.bogus), "refused (SERVFAIL)"],
-    ["cyan", "Queries to name servers", fmt.short(rec.queries), rec.queries ? `${fmt.pct(rec.timeouts / rec.queries)} timed out` : "none yet"],
+    // lookups that went to name servers (cache answers are instant)
+    ["cyan", "Lookup time", rec.lookup_p50_ms ? fmt.ms(rec.lookup_p50_ms) + " ms" : "–",
+      rec.lookup_p95_ms ? `95% within ${fmt.ms(rec.lookup_p95_ms)} ms · ${fmt.pct(rec.queries ? rec.timeouts / rec.queries : 0)} of queries timed out` : "none yet"],
   ];
   if (rec.fallback) rows.push(["idle", "Answered by upstreams", fmt.short(rec.fallbacks), "when no name server answered"]);
   if (rec.intercepted) rows.unshift(["err", "Network answers for name servers", fmt.short(rec.rewritten), "port 53 intercepted: use your own DNSNova elsewhere as upstream"]);

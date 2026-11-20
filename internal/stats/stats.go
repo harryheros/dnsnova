@@ -139,6 +139,12 @@ func (h *Histogram) Quantile(q float64) time.Duration {
 	return quantile(counts, q)
 }
 
+// Count is how many durations were recorded.
+func (h *Histogram) Count() uint64 { return h.count.Load() }
+
+// WritePrometheus renders h as a Prometheus histogram named name.
+func (h *Histogram) WritePrometheus(w io.Writer, name, labels string) { h.write(w, name, labels) }
+
 func (h *Histogram) write(w io.Writer, name, labels string) {
 	var cum uint64
 	sep := ""

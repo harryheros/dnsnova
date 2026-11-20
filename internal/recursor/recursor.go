@@ -17,6 +17,7 @@ import (
 	"time"
 
 	m "github.com/harryheros/dnsnova/internal/dnsmsg"
+	"github.com/harryheros/dnsnova/internal/stats"
 )
 
 // Config configures a Recursor. It can be replaced at run time.
@@ -80,6 +81,15 @@ type Stats struct {
 	// doubtful UDP answers used because the server does not answer over
 	// TCP (refused or silent): some load balancers
 	NoTCP atomic.Int64
+	// Lookups: how long lookups that asked name servers took, end to end
+	// (answers from the cache are not counted). RTT: how long name servers
+	// took to reply. Lock-free: a few atomic additions per lookup.
+	Lookups *stats.Histogram
+	RTT     *stats.Histogram
+	// a server that timed out asked once more (none other answered), and
+	// how often it then replied
+	Retries         atomic.Int64
+	RetriesAnswered atomic.Int64
 }
 
 // Recursor is safe for concurrent use.
@@ -172,6 +182,7 @@ func New(c Config, log *slog.Logger) *Recursor {
 		keys:   newTTLMap[*keyEntry](10000),
 		delegs: newTTLMap[*delegation](0),
 		infra:  newInfra(),
+		Stats:  Stats{Lookups: stats.NewHistogram(), RTT: stats.NewHistogram()},
 		log:    log,
 		now:    time.Now,
 		port:   53,
@@ -294,6 +305,10 @@ type task struct {
 	// the client's own names neither come from nor go into the shared
 	// cache (shared reports which lookups may use it)
 	private bool
+	// asked: when the first name server was asked (zero: answered from
+	// the cache), for the lookup time; set there, so a cached answer costs
+	// no clock reading
+	asked time.Time
 }
 
 // shared reports whether this lookup may read and fill the shared cache:
@@ -365,6 +380,9 @@ func (r *Recursor) answerQuery(ctx context.Context, msg []byte, private bool) ([
 	t := newTask()
 	t.private = private
 	ans, err := r.resolve(ctx, t, q.Name, q.Type, cfg.DNSSEC)
+	if !t.asked.IsZero() { // name servers were asked: not from the cache
+		r.Stats.Lookups.Observe(time.Since(t.asked))
+	}
 	if err != nil {
 		if errors.Is(err, errBudget) {
 			r.Stats.BudgetReached.Add(1)

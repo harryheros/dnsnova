@@ -167,23 +167,29 @@ type Node struct {
 
 // Recursion is the state of resolving from the root servers.
 type Recursion struct {
-	Enabled           bool           `json:"enabled"`
-	DNSSEC            bool           `json:"dnssec"`
-	QNameMinimisation bool           `json:"qname_minimisation"`
-	Fallback          bool           `json:"fallback"` // upstreams are asked when no authoritative server answers
-	Healthy           bool           `json:"healthy"`
-	Queries           int64          `json:"queries"` // sent to authoritative servers
-	Timeouts          int64          `json:"timeouts"`
-	TCP               int64          `json:"tcp"`
-	Secure            int64          `json:"secure"` // answers by DNSSEC result
-	Insecure          int64          `json:"insecure"`
-	Bogus             int64          `json:"bogus"`
-	Fallbacks         int64          `json:"fallbacks"`
-	Spoofed           int64          `json:"spoofed"`     // queries that drew forged answers and were asked again over TCP
-	Forged            int64          `json:"forged"`      // UDP answers dropped as forged on the path
-	Rewritten         int64          `json:"rewritten"`   // answers no name server sends: the network answers for them
-	Intercepted       bool           `json:"intercepted"` // the network answers DNS in place of the name servers now
-	Cache             map[string]int `json:"cache"`
+	Enabled           bool  `json:"enabled"`
+	DNSSEC            bool  `json:"dnssec"`
+	QNameMinimisation bool  `json:"qname_minimisation"`
+	Fallback          bool  `json:"fallback"` // upstreams are asked when no authoritative server answers
+	Healthy           bool  `json:"healthy"`
+	Queries           int64 `json:"queries"` // sent to authoritative servers
+	Timeouts          int64 `json:"timeouts"`
+	TCP               int64 `json:"tcp"`
+	Secure            int64 `json:"secure"` // answers by DNSSEC result
+	Insecure          int64 `json:"insecure"`
+	Bogus             int64 `json:"bogus"`
+	Fallbacks         int64 `json:"fallbacks"`
+	Spoofed           int64 `json:"spoofed"`     // queries that drew forged answers and were asked again over TCP
+	Forged            int64 `json:"forged"`      // UDP answers dropped as forged on the path
+	Rewritten         int64 `json:"rewritten"`   // answers no name server sends: the network answers for them
+	Intercepted       bool  `json:"intercepted"` // the network answers DNS in place of the name servers now
+	// lookups that asked name servers, end to end: typical and 95th
+	// percentile, in milliseconds (0 before the first)
+	LookupP50MS     float64        `json:"lookup_p50_ms"`
+	LookupP95MS     float64        `json:"lookup_p95_ms"`
+	Retries         int64          `json:"retries"`          // a timed-out server asked once more
+	RetriesAnswered int64          `json:"retries_answered"` // and it then replied
+	Cache           map[string]int `json:"cache"`
 }
 
 // Tops are the lists shown beside the statistics.
