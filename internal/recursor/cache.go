@@ -82,13 +82,6 @@ func (t *ttlMap[V]) set(k string, v V, expire time.Time) {
 	s.m[k] = ttlItem[V]{v, expire}
 }
 
-func (t *ttlMap[V]) del(k string) {
-	s := t.shard(k)
-	s.mu.Lock()
-	delete(s.m, k)
-	s.mu.Unlock()
-}
-
 func (t *ttlMap[V]) len() int {
 	n := 0
 	for i := range t.shards {
@@ -298,6 +291,21 @@ func (in *infra) ok(a netip.Addr, rtt time.Duration, now time.Time) {
 		s.srtt = (7*s.srtt + rtt) / 8
 	}
 	s.fails, s.until, s.lastUsed = 0, time.Time{}, now
+}
+
+// slow notes that a was still not answering after d, when another
+// server's answer was used: its round trip is at least that. Not a
+// failure: it is not set aside, only no longer preferred.
+func (in *infra) slow(a netip.Addr, d time.Duration, now time.Time) {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	s := in.get(a)
+	// at once, not averaged in: the next question goes to the faster
+	// server, not to this one for another wait
+	if d > s.srtt {
+		s.srtt = d
+	}
+	s.lastUsed = now
 }
 
 func (in *infra) fail(a netip.Addr, now time.Time) {

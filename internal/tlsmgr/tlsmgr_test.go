@@ -315,7 +315,11 @@ func (ca *fakeCA) verify(w http.ResponseWriter, r *http.Request) (payload []byte
 	if prot.JWK != nil {
 		x, _ := b64.DecodeString(prot.JWK.X)
 		y, _ := b64.DecodeString(prot.JWK.Y)
-		key = &ecdsa.PublicKey{Curve: elliptic.P256(), X: new(big.Int).SetBytes(x), Y: new(big.Int).SetBytes(y)}
+		var err error
+		if key, err = ecdsa.ParseUncompressedPublicKey(elliptic.P256(), append(append([]byte{4}, x...), y...)); err != nil {
+			ca.fail(w, 400, "badPublicKey", err.Error())
+			return
+		}
 		jwk = key
 	} else if key = ca.accounts[prot.KID]; key == nil {
 		ca.fail(w, 400, "accountDoesNotExist", "unknown kid")

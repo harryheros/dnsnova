@@ -351,8 +351,12 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 			why = append(why, a.String()+" "+s)
 		}
 	}
-	for tried < 8 {
-		if len(addrs) == 0 && !more {
+
+	// next takes the best server not yet asked (looking up the zone's
+	// other name servers, then a timed-out one once more, when none is
+	// left). With peek, it only says which, and takes nothing.
+	next := func(peek bool) (netip.Addr, bool) {
+		if len(addrs) == 0 && !more && !peek {
 			// every address known failed: look up the zone's other name
 			// servers (glueless ones are only partly looked up at first)
 			more = true
@@ -362,14 +366,14 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 				}
 			}
 		}
-		if len(addrs) == 0 && !retried && len(timedOut) > 0 {
+		if len(addrs) == 0 && !retried && len(timedOut) > 0 && !peek {
 			// none answered, and some only timed out: the best once more
 			retried = true
 			addrs, timedOut = timedOut[:1], nil
 			r.Stats.Retries.Add(1)
 		}
 		if len(addrs) == 0 {
-			break
+			return netip.Addr{}, false
 		}
 		scores := make(map[netip.Addr]time.Duration, len(addrs))
 		v6proven := r.v6Proven()
@@ -382,27 +386,86 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 		}
 		slices.SortStableFunc(addrs, func(a, b netip.Addr) int { return int(scores[a] - scores[b]) })
 		a := addrs[0]
-		addrs = addrs[1:]
-		if t.budget <= 0 {
-			return nil, errBudget
+		if peek {
+			// worth a hedge: not set aside (lame, failing), not IPv6 that
+			// may be broken
+			return a, scores[a] < hedgeWorth && (a.Is4() || v6proven)
 		}
+		addrs = addrs[1:]
+		return a, true
+	}
+
+	// The best server is asked here, on this goroutine. Should it take
+	// clearly longer than it usually does, the next is asked too, from a
+	// goroutine of its own (hedge); from then on replies are handled here
+	// one at a time, in the order they come, and the first good one is used.
+	type reply struct {
+		a      netip.Addr
+		msg    *message
+		err    error
+		rtt    time.Duration
+		before time.Duration // its usual round trip, before a failure raises it
+		retry  bool
+		hedge  bool
+	}
+	var replies chan *reply // made when the first hedge is set
+	type flight struct {
+		cancel  context.CancelCauseFunc
+		started time.Time
+	}
+	var inflight map[netip.Addr]flight
+	fly := func(a netip.Addr, f flight) {
+		if inflight == nil {
+			inflight = make(map[netip.Addr]flight, 2)
+		}
+		inflight[a] = f
+	}
+	defer func() {
+		for _, f := range inflight {
+			f.cancel(errCalledOff)
+		}
+	}()
+	// hedged asks a from a goroutine of its own; a usable reply calls off
+	// the question to the server asked before it (first).
+	hedged := func(a netip.Addr, first context.CancelCauseFunc) flight {
+		c, cancel := context.WithCancelCause(ctx)
+		start := time.Now()
+		rep := &reply{a: a, before: r.infra.rtt(a), hedge: true}
+		go func() {
+			rep.msg, rep.err = r.ask(c, a, d, name, qtype, 0)
+			rep.rtt = time.Since(start)
+			if first != nil && rep.err == nil && (rep.msg.rcode == m.RcodeNoError || rep.msg.rcode == m.RcodeNXDomain) {
+				first(errCalledOff)
+			}
+			replies <- rep
+		}()
+		return flight{cancel: cancel, started: start}
+	}
+	// took notes a question sent: one fewer to send
+	took := func(a netip.Addr) {
 		t.budget--
 		tried++
 		asked = append(asked, a)
-		wait := time.Duration(0)
-		if retried {
-			wait = retryWait
-		}
-		before := r.infra.rtt(a) // its usual round trip, before a failure raises it
-		start := time.Now()
-		if t.asked.IsZero() {
-			t.asked = start
-		}
-		msg, err := r.ask(ctx, a, d, name, qtype, wait)
-		rtt := time.Since(start)
+	}
+	// armed is a hedge set to go if the server asked takes too long.
+	type armed struct {
+		mu    sync.Mutex
+		off   bool // the server answered in time
+		fired bool // too late: the next was asked
+		b     netip.Addr
+		f     flight // the question to b
+		timer *time.Timer
+	}
+	hedgeable := func() bool {
+		return !retried && t.trace == nil && tried < 8 && t.budget > 0
+	}
+
+	// handle deals with one reply: the answer to use, or nil to go on.
+	handle := func(rp reply) (*message, error) {
+		a, msg, err, rtt := rp.a, rp.msg, rp.err, rp.rtt
 		if err == nil {
 			r.Stats.RTT.Observe(rtt)
-			if retried {
+			if rp.retry {
 				r.Stats.RetriesAnswered.Add(1)
 			}
 		}
@@ -420,8 +483,8 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 				if !retried && !r.infra.backoff(a, r.now()) && (a.Is4() || r.v6Proven()) {
 					if len(timedOut) == 0 {
 						retryWait = time.Second
-						if before > 0 {
-							retryWait = min(max(3*before, 400*time.Millisecond), 2*time.Second)
+						if rp.before > 0 {
+							retryWait = min(max(3*rp.before, 400*time.Millisecond), 2*time.Second)
 						}
 					}
 					timedOut = append(timedOut, a)
@@ -435,7 +498,7 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 			default:
 				note(a, err.Error())
 			}
-			continue
+			return nil, nil
 		}
 		if msg.rcode != m.RcodeNoError && msg.rcode != m.RcodeNXDomain {
 			if t.trace != nil {
@@ -445,7 +508,7 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 			if !minimised {
 				r.infra.setLame(a, d.zone, now)
 			}
-			continue
+			return nil, nil
 		}
 		scrub(msg, d.zone)
 		if !usable(msg, d.zone, name) {
@@ -457,11 +520,11 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 			}
 			if minimised {
 				note(a, "no usable reply to the shortened name")
-				continue
+				return nil, nil
 			}
 			r.infra.setLame(a, d.zone, now)
 			note(a, "not authoritative (lame)")
-			continue
+			return nil, nil
 		}
 		if qtype == typeDS {
 			if child, _ := referral(msg, d.zone, name); child != nil && child.zone == name {
@@ -472,15 +535,170 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 					r.traceQuery(t, d.zone, a, name, qtype, rtt, msg, nil, false)
 				}
 				note(a, "sent the DS question down")
-				continue
+				return nil, nil
 			}
 		}
 		if t.trace != nil {
 			r.traceQuery(t, d.zone, a, name, qtype, rtt, msg, nil, false)
 		}
+		if rp.hedge {
+			r.Stats.HedgesWon.Add(1)
+		}
 		return msg, nil
 	}
+
+	// the others have taken longer than the answer used: at least as long
+	// as they have been waited for
+	slowOthers := func() {
+		for a, f := range inflight {
+			r.infra.slow(a, time.Since(f.started), r.now())
+		}
+	}
+	for {
+		if len(inflight) == 0 {
+			// nothing in flight: ask the best server left, here
+			if tried >= 8 {
+				break
+			}
+			a, ok := next(false)
+			if !ok {
+				break
+			}
+			if t.budget <= 0 {
+				return nil, errBudget
+			}
+			took(a)
+			wait := time.Duration(0)
+			if retried {
+				wait = retryWait
+			}
+			rp := reply{a: a, before: r.infra.rtt(a), retry: retried}
+			c := ctx
+			var h *armed
+			var first context.CancelCauseFunc
+			if hedgeable() {
+				if b, ok := next(true); ok {
+					if replies == nil {
+						// one reply from each question sent from a goroutine
+						replies = make(chan *reply, 8)
+					}
+					c, first = context.WithCancelCause(ctx)
+					h = &armed{b: b}
+					h.timer = time.AfterFunc(r.hedgeAfter(a), func() {
+						h.mu.Lock()
+						defer h.mu.Unlock()
+						if !h.off {
+							h.fired, h.f = true, hedged(h.b, first)
+						}
+					})
+				}
+			}
+			start := time.Now()
+			if t.asked.IsZero() {
+				t.asked = start
+			}
+			rp.msg, rp.err = r.ask(c, a, d, name, qtype, wait)
+			rp.rtt = time.Since(start)
+			if h != nil {
+				h.timer.Stop()
+				h.mu.Lock()
+				h.off = true
+				fired, b, f := h.fired, h.b, h.f
+				h.mu.Unlock()
+				lost := rp.err != nil && calledOff(c)
+				first(nil)
+				if fired {
+					if i := slices.Index(addrs, b); i >= 0 {
+						addrs = slices.Delete(addrs, i, i+1)
+					}
+					took(b)
+					r.Stats.Hedges.Add(1)
+					fly(b, f)
+				}
+				if lost {
+					// the hedge has answered: its reply is next
+					r.infra.slow(a, rp.rtt, r.now())
+					continue
+				}
+			}
+			msg, err := handle(rp)
+			if msg != nil {
+				slowOthers()
+			}
+			if err != nil || msg != nil {
+				return msg, err
+			}
+			continue
+		}
+		// a hedge in flight: wait for it (and hedge it in turn, if it is
+		// the only one and takes clearly longer than it usually does)
+		var hedge <-chan time.Time
+		var timer *time.Timer
+		if len(inflight) == 1 && hedgeable() {
+			if _, ok := next(true); ok {
+				for a, f := range inflight {
+					timer = time.NewTimer(max(r.hedgeAfter(a)-time.Since(f.started), 0))
+					hedge = timer.C
+				}
+			}
+		}
+		stop := func() {
+			if timer != nil {
+				timer.Stop()
+			}
+		}
+		select {
+		case rp := <-replies:
+			stop()
+			if _, ok := inflight[rp.a]; !ok {
+				continue // called off already
+			}
+			inflight[rp.a].cancel(errCalledOff)
+			delete(inflight, rp.a)
+			msg, err := handle(*rp)
+			if msg != nil {
+				slowOthers()
+			}
+			if err != nil || msg != nil {
+				return msg, err
+			}
+		case <-hedge:
+			if b, ok := next(false); ok {
+				took(b)
+				r.Stats.Hedges.Add(1)
+				fly(b, hedged(b, nil))
+			}
+		case <-ctx.Done():
+			stop()
+			return nil, ctx.Err()
+		}
+	}
 	return nil, &unreachable{zone: d.zone, name: name, qtype: qtype, servers: len(d.ns), why: why}
+}
+
+// errCalledOff is why a query to a server is cancelled when another
+// server's answer is used.
+var errCalledOff = errors.New("another server answered first")
+
+// calledOff says whether ctx was cancelled because another server's
+// answer is used: not the server's failure.
+func calledOff(ctx context.Context) bool {
+	return errors.Is(context.Cause(ctx), errCalledOff)
+}
+
+// hedgeWorth: a server whose score is this or worse (set aside after
+// failures, lame) is not asked as a hedge.
+const hedgeWorth = 5 * time.Second
+
+// hedgeAfter is how long a's reply is waited for before the next server is
+// asked too: twice its usual round trip, and at least 50 ms more than it
+// (jitter is no reason); 400 ms for a server not asked before.
+func (r *Recursor) hedgeAfter(a netip.Addr) time.Duration {
+	srtt := r.infra.rtt(a)
+	if srtt == 0 {
+		return 400 * time.Millisecond
+	}
+	return max(2*srtt, srtt+50*time.Millisecond)
 }
 
 // unreachable is ErrUnreachable with what happened: which zone's servers
@@ -766,6 +984,9 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, d *delegation, name st
 			c, cancel := context.WithTimeout(ctx, 2*r.infra.timeout(a)+time.Second)
 			resp, err := r.send(c, ap, q, true)
 			cancel()
+			if calledOff(ctx) { // another server answered first
+				return nil, context.Cause(ctx)
+			}
 			r.Stats.TCP.Add(1)
 			if err != nil {
 				r.infra.fail(a, now)
@@ -782,7 +1003,12 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, d *delegation, name st
 		resp, err := r.send(c, ap, q, false)
 		cancel()
 		r.Stats.Queries.Add(1)
+		if calledOff(ctx) {
+			// another server answered first: nothing more to ask this one
+			return nil, context.Cause(ctx)
+		}
 		tcp, doubted, usedKept := false, false, false
+		var tcpStart time.Time
 		switch {
 		case errors.Is(err, ErrSpoofed):
 			// Someone is guessing answers to this query: ask over TCP.
@@ -808,8 +1034,12 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, d *delegation, name st
 				wait = min(wait, max(tcpChance, 4*firstIn))
 			}
 			c, cancel := context.WithTimeout(ctx, wait)
+			tcpStart = time.Now()
 			resp, err = r.send(c, ap, q, true)
 			cancel()
+			if calledOff(ctx) {
+				return nil, context.Cause(ctx)
+			}
 			r.Stats.TCP.Add(1)
 			tcp = true
 			if err != nil && kept != nil && ctx.Err() == nil && noTCPAnswer(err) {
@@ -829,6 +1059,10 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, d *delegation, name st
 				r.noteRewritten(a, why, now)
 				r.failRun.Add(1)
 				return nil, &rewritten{why: why}
+			}
+			if calledOff(ctx) {
+				// another server answered first: says nothing about this one
+				return nil, err
 			}
 			if errors.Is(err, context.DeadlineExceeded) || isTimeout(err) {
 				r.Stats.Timeouts.Add(1)
@@ -852,6 +1086,8 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, d *delegation, name st
 		rtt := time.Since(start)
 		if usedKept {
 			rtt = firstIn // the waits for TCP say nothing of how fast it answers
+		} else if tcp && !tcpStart.IsZero() {
+			rtt = time.Since(tcpStart) // nor does the wait for a UDP answer before it
 		}
 		r.infra.ok(a, rtt, now)
 		r.v6Result(a, nil, now)

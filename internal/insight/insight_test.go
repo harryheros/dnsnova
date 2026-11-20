@@ -54,6 +54,33 @@ func TestTopHidesRareNames(t *testing.T) {
 	}
 }
 
+// On a private server two devices are enough, even on one network; one
+// device alone, however often it asks, is still not listed.
+func TestTopPrivateCountsDevices(t *testing.T) {
+	now := time.Date(2026, 1, 1, 10, 30, 0, 0, time.UTC)
+	top := NewTop(true, 24, now)
+	top.SetPrivate(true)
+	for range 50 {
+		top.Add("shared.example", netip.MustParseAddr("192.168.1.10"))
+		top.Add("shared.example", netip.MustParseAddr("192.168.1.11"))
+		top.Add("mine.example", netip.MustParseAddr("192.168.1.10"))
+		// one IPv6 device whose address changes within its /64
+		top.Add("v6only.example", netip.MustParseAddr("2001:db8:1:2::1"))
+		top.Add("v6only.example", netip.MustParseAddr("2001:db8:1:2::abcd"))
+	}
+	l := top.List(time.Hour, now, 10)
+	if len(l) != 1 || l[0].Name != "shared.example" || l[0].Count != 100 {
+		t.Fatalf("list = %+v", l)
+	}
+	if n, dev := top.Threshold(); n != MinDevices || !dev {
+		t.Fatalf("threshold %d %v", n, dev)
+	}
+	top.SetPrivate(false)
+	if l := top.List(time.Hour, now, 10); len(l) != 0 {
+		t.Fatalf("public: %+v", l)
+	}
+}
+
 func TestTopBounded(t *testing.T) {
 	now := time.Now()
 	top := NewTop(false, 2, now)

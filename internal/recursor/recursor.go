@@ -90,6 +90,10 @@ type Stats struct {
 	// how often it then replied
 	Retries         atomic.Int64
 	RetriesAnswered atomic.Int64
+	// the next server asked too because the first took clearly longer
+	// than it usually does, and how often its answer was the one used
+	Hedges    atomic.Int64
+	HedgesWon atomic.Int64
 }
 
 // Recursor is safe for concurrent use.

@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/netip"
 	"slices"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -81,7 +80,6 @@ func (c *injector) hijacked(q *message) []byte {
 type pathLab struct {
 	c      *injector
 	base   func(ctx context.Context, addr netip.AddrPort, q []byte, tcp bool) ([]byte, error)
-	mu     sync.Mutex
 	udp    map[netip.Addr]netip.AddrPort
 	tcp    map[netip.Addr]netip.AddrPort
 	closer []io.Closer
@@ -391,14 +389,19 @@ func TestPlainServerLearnt(t *testing.T) {
 	if r.Stats.TCP.Load() == 0 {
 		t.Fatal("the doubted answers were not checked over TCP")
 	}
-	// each of the zone's two servers is learnt the first time it is asked
-	for i := 0; !r.infra.plain(exA, r.now()) || !r.infra.plain(ex2A, r.now()); i++ {
-		if i == 20 {
-			t.Fatalf("not learnt: %v %v", r.infra.plain(exA, r.now()), r.infra.plain(ex2A, r.now()))
-		}
-		r.sets.clear()
-		r.negs.clear()
-		ask(t, r, "www.example.com.", m.TypeA)
+	// the server that answered is learnt, and is the one asked first from
+	// now on: its round trip is that of its TCP answer, not the wait for
+	// a UDP one (and the other, asked too while waiting, took longer)
+	now, zone := r.now(), dotted("example.com.")
+	learnt, other := exA, ex2A
+	if !r.infra.plain(exA, now) {
+		learnt, other = ex2A, exA
+	}
+	if !r.infra.plain(learnt, now) {
+		t.Fatal("not learnt")
+	}
+	if a, b := r.infra.score(learnt, zone, now), r.infra.score(other, zone, now); a >= b {
+		t.Fatalf("learnt server scores %v, the other %v", a, b)
 	}
 	tcp := r.Stats.TCP.Load()
 	start := time.Now()

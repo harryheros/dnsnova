@@ -424,10 +424,16 @@ func (s *Server) Listeners() map[string][]string {
 // Tops implements admin.Backend.
 func (s *Server) Tops(span time.Duration) admin.Tops {
 	now := time.Now()
+	need, devices := s.Domains.Threshold()
+	by := "networks"
+	if devices {
+		by = "devices"
+	}
 	return admin.Tops{
 		Domains:   s.Domains.List(span, now, 20),
 		NXDomains: s.NXDomains.List(span, now, 20),
 		Limited:   s.Limited.List(min(span, 24*time.Hour), now, 10),
+		ListMin:   need, ListBy: by,
 	}
 }
 
