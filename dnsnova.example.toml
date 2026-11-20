@@ -140,7 +140,11 @@ persist = "auto"        # keep the cache across restarts (data_dir/cache.bin,
                         # saved every 10 minutes and on shutdown). "auto": on in
                         # public mode, off in private mode. The file lists names
                         # looked up, never by whom; with few users, as at home,
-                        # that is close to their browsing. Deleted when off
+                        # that is close to their browsing. Deleted when off.
+                        # With recursion, how fast each name server answered
+                        # is kept beside it (data_dir/servers.bin: addresses
+                        # and times only), so the first lookups after a
+                        # restart go to the fast servers at once
 
 [access]
 # Private mode only.

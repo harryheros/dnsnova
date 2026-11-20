@@ -439,6 +439,7 @@ func (s *Server) Start() error {
 	s.res = resolver.New(settingsFrom(snap.Config, st), s.exchanger(snap.Config, st), s.Stats)
 	s.applyCookies(snap.Config)
 	s.loadCache(snap.Config) // before any listener: the first queries already find it
+	s.loadServers(snap.Config)
 	s.applyRetention(snap.Config)
 	s.QArchive.Configure(archiveSettings(snap.Config))
 	s.Tap.Configure(s.tapSettings(snap.Config))

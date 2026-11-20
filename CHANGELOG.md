@@ -4,6 +4,33 @@ All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
 **Security**.
 
+## 1.6.8 (2026-11-20)
+
+- **Name servers remembered across restarts.** With recursion and
+  `cache.persist` on (the default on public servers), what was learnt
+  about name servers is saved with the cache, every 10 minutes and at
+  shutdown, in `data_dir/servers.bin`, and read back at start: how fast
+  each answered, and the quirks some have (no EDNS, unusual but genuine
+  answers, no TCP). The first lookups after a restart or an upgrade then
+  go to the fast servers at once instead of learning them again; in tests
+  where one of a zone's two servers is down, the first lookup after a
+  restart took 401 ms half the time, and now takes no extra time.
+  - Only what still counts is kept: round trips of servers used in the
+    last 15 minutes, and quirks still in force (an hour at most). Failures
+    and back-offs are not kept, so every server gets a fresh try after a
+    restart; nor are lame zones or DNS Cookies.
+  - The file is checked as a whole (CRC-32) and value by value: a damaged
+    file, a round trip from the future or a quirk longer than an hour is
+    ignored. It is fuzzed with the other parsers.
+  - Privacy: name server addresses and timings only; no names, zones or
+    clients. It is kept and deleted with `cache.bin`: never in private
+    mode unless `cache.persist = "on"`.
+  - Speed: lookups are unchanged; a save of 5,000 servers takes about
+    1 ms, in the background.
+- The weekly fuzzing now also covers the query records, the newly seen
+  domains file and dnstap's control frames, which had fuzz targets but
+  were not run.
+
 ## 1.6.7 (2026-11-20)
 
 - **A slow name server no longer holds up a lookup.** When the server

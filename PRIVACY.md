@@ -37,6 +37,7 @@ is your responsibility.
 | --- | --- | --- |
 | Cached DNS answers | Memory | Their TTL, plus up to `cache.serve_stale` |
 | The same answers, in public mode or with `cache.persist = "on"` (names and records; no client addresses, no times of queries) | `/var/lib/dnsnova/cache.bin`, mode 0600, saved every 10 minutes and on shutdown | Replaced at each save; answers past their TTL plus `cache.serve_stale` are left out. Deleted when saving is off (private mode, or `cache.persist = "off"`) and when the cache is cleared |
+| With recursion, what was learnt about name servers, saved with the answers above (their addresses, round-trip times and quirks; no names, no zones, no clients) | `/var/lib/dnsnova/servers.bin`, mode 0600, saved with `cache.bin` | Replaced at each save; only servers used in the last 15 minutes, or with a quirk still in force (an hour at most). Deleted with `cache.bin` |
 | DNS Cookie secret (makes server cookies; no client data) | `/var/lib/dnsnova/secrets/cookie-secret`, mode 0600 | Until you delete it (a new one is then made) |
 | Counters and response-time histograms | Memory | Until the process stops |
 | Rate-limit state (per client address or network) | Memory | About a minute after the last query |

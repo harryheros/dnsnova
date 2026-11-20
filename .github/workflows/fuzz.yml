@@ -41,6 +41,10 @@ jobs:
           - proxyproto:FuzzReadV1
           - cookie:FuzzCookie
           - upstream:FuzzParseSpec
+          - recursor:FuzzLoadServers
+          - insight:FuzzArchiveLine
+          - insight:FuzzNODLoad
+          - dnstap:FuzzReadControl
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
