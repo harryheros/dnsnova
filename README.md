@@ -2,9 +2,9 @@
 
 > A secure DNS server, from one box at home to a public resolver on several continents.
 
-[![Version](https://img.shields.io/badge/version-v1.6.2-blue)](https://github.com/harryheros/dnsnova/releases)
+[![Version](https://img.shields.io/badge/version-v1.6.3-blue)](https://github.com/harryheros/dnsnova/releases)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](./LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Linux%20amd64%20%7C%20arm64-lightgrey.svg)](#)
+[![Platform](https://img.shields.io/badge/platform-Linux%20amd64%20%7C%20arm64%20%7C%20arm-lightgrey.svg)](#)
 [![CI](https://github.com/harryheros/dnsnova/actions/workflows/ci.yml/badge.svg)](https://github.com/harryheros/dnsnova/actions/workflows/ci.yml)
 [![Fuzz](https://github.com/harryheros/dnsnova/actions/workflows/fuzz.yml/badge.svg)](https://github.com/harryheros/dnsnova/actions/workflows/fuzz.yml)
 
@@ -30,7 +30,7 @@ Upgrading from 1.2 or earlier: see the [changelog](./CHANGELOG.md) first.
 
 ## Install
 
-On Linux with systemd (amd64 or arm64), as root:
+On Linux with systemd (amd64, arm64, or 32-bit ARM such as Raspberry Pi OS 32-bit), as root:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/harryheros/dnsnova/main/install.sh | sh
@@ -43,6 +43,8 @@ Without root it uses sudo (or run `su -` first where there is none). The install
 
 The wizard sets the administrator, who the server is for, recursion or upstreams, a domain for encrypted DNS and filtering, then shows what to set on your router or devices. Every choice is also a command-line option: `install.sh --help`.
 
+- **Firewall**: open what you use: port 53 over UDP and TCP; 853 (TCP and UDP) and 443 (TCP and UDP) for encrypted DNS. With ufw or firewalld on, the installer prints the commands.
+- **Containers**: in LXC or OpenVZ containers that cannot sandbox services, the installer runs DNSNova without the sandbox (a drop-in in `/etc/systemd/system/dnsnova.service.d`). Without systemd (Docker, Alpine), run the binary from the release yourself: `dnsnova -c /etc/dnsnova/dnsnova.toml`.
 - **Upgrade**: run the install command again. The configuration is kept; if the new version fails to start, the previous one is restored.
 - **Uninstall**: add `-u` (`| sh -s -- -u`). The configuration stays in `/etc/dnsnova` unless you add `--purge`.
 - **Lost password**: run `dnsnova -reset-admin` on the server, then create the administrator again in the web interface. Settings are kept.
@@ -80,6 +82,21 @@ The wizard sets the administrator, who the server is for, recursion or upstreams
 - **Quick to recover**: the cache survives restarts (by default on public servers), and recent failures are remembered so a broken domain cannot flood upstreams.
 - **Private by default**: queries and client addresses are not written to disk unless you choose to keep them for a number of days, as an office may have to (searchable and downloadable in the web interface, and shown on the status page); no telemetry ([PRIVACY.md](./PRIVACY.md)).
 - **Status page** (optional): addresses, setup steps per device, and a check that shows visitors whether they use the server.
+
+### On the server itself
+
+Programs on the server (apt, certificate renewal, mail) can use DNSNova too. The web setup and the installer listen on 127.0.0.1:53 for this; check that `127.0.0.1:53` is among the plain DNS addresses (Settings › Access & limits), then set `/etc/resolv.conf` to:
+
+```
+nameserver 127.0.0.1
+options edns0 trust-ad
+```
+
+- **127.0.0.1 alone**, without a public resolver as a second `nameserver`: the system asks the second one not only when DNSNova is down but whenever it answers SERVFAIL (a DNSSEC failure, say), and `trust-ad` would then trust that answer's DNSSEC flag although it crossed the network unprotected. DNSNova itself does not depend on `/etc/resolv.conf` to reach its upstreams or name servers.
+- **`trust-ad`** lets programs see that DNSNova validated an answer with DNSSEC (SSH `VerifyHostKeyDNS`, DANE); without it the system clears the flag.
+- If `/etc/resolv.conf` is a link to systemd-resolved (`127.0.0.53`), queries reach DNSNova only after `DNS=127.0.0.1` and `Domains=~.` in `/etc/systemd/resolved.conf`; DHCP clients and cloud-init may also rewrite the file.
+- The server's own queries count against the per-address limits (`limits.client_qps`, 100 a second by default) like any other client's.
+- **A machine without a battery-backed clock** (a Raspberry Pi) that was off for over a week starts with an old time, and DNSSEC then rejects answers as not yet valid; setting the time needs DNS. Give the time service a server by address, so it works without DNS: `NTP=162.159.200.1` in `/etc/systemd/timesyncd.conf` (Cloudflare's time server), then `systemctl restart systemd-timesyncd`.
 
 ## Encrypted DNS
 

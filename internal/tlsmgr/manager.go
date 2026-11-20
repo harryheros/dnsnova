@@ -14,6 +14,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -526,6 +527,11 @@ func (m *Manager) loadFiles(force bool) error {
 		return nil
 	}
 	c, err := tls.LoadX509KeyPair(s.CertFile, s.KeyFile)
+	if errors.Is(err, fs.ErrPermission) {
+		// certbot's files are for root only, and dnsnova runs as its own user
+		return fmt.Errorf("tls: %w: dnsnova runs as the user dnsnova and cannot read it; give it a copy "+
+			"(for certbot, a deploy hook as in dnsnova.example.toml)", err)
+	}
 	if err != nil {
 		return fmt.Errorf("tls: %w", err)
 	}

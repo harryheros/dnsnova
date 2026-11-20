@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/harryheros/dnsnova/internal/config"
@@ -53,12 +54,23 @@ func udpSockets() int {
 	return min(max(runtime.NumCPU(), 1), 16)
 }
 
+// dnsListenConfig binds DNS listeners (plain, DoT, DoQ, DoH): an address
+// not on this machine yet is bound anyway (freeBind).
+func dnsListenConfig(reuse bool) net.ListenConfig {
+	return net.ListenConfig{Control: func(network, address string, c syscall.RawConn) error {
+		if err := freeBind(network, address, c); err != nil {
+			return err
+		}
+		if reuse {
+			return reusePort(network, address, c)
+		}
+		return nil
+	}}
+}
+
 func (s *Server) listenUDP(addr string) (*udpListener, error) {
-	lc := net.ListenConfig{}
 	n := udpSockets()
-	if n > 1 {
-		lc.Control = reusePort
-	}
+	lc := dnsListenConfig(n > 1)
 	l := &udpListener{key: addr}
 	bind := addr
 	for i := 0; i < n; i++ {
@@ -318,7 +330,8 @@ type tcpListener struct {
 // listenTCP serves length-prefixed DNS over TCP, or over TLS (DoT) when
 // tlsConf is set.
 func (s *Server) listenTCP(addr string, tlsConf *tls.Config, proto int, name string) (*tcpListener, error) {
-	raw, err := net.Listen("tcp", addr)
+	lc := dnsListenConfig(false)
+	raw, err := lc.Listen(context.Background(), "tcp", addr)
 	if err != nil {
 		return nil, err
 	}
@@ -516,7 +529,8 @@ func (s *Server) listenHTTPS(addr, path string, h http.Handler, tlsConf, h3Conf 
 		return s.listenHTTP(addr, path, h, tlsConf)
 	}
 	// Bind TCP first: with port 0 (tests) UDP must use the port TCP got.
-	ln, err := net.Listen("tcp", addr)
+	lc := dnsListenConfig(false)
+	ln, err := lc.Listen(context.Background(), "tcp", addr)
 	if err != nil {
 		return nil, err
 	}

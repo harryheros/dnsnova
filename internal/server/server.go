@@ -56,6 +56,9 @@ func (st *state) close() {
 
 // Server is a running dnsnova instance.
 type Server struct {
+	// started is set once Start has opened the listeners (under mu).
+	started bool
+
 	Store *config.Store
 	Stats *stats.Stats
 	Log   *slog.Logger
@@ -454,6 +457,10 @@ func (s *Server) Start() error {
 		s.closeAllLocked()
 		return err
 	}
+	s.started = true
+	for _, a := range missingListen(snap.Config, nil) {
+		s.Log.Warn("listen address not on this machine (yet): DNS is answered on it once it is", "addr", a)
+	}
 	s.hash = snap.Hash
 	go s.res.Janitor(s.ctx)
 	s.wg.Add(1)
@@ -737,20 +744,25 @@ func (s *Server) syncListeners(c *config.Config) error {
 				}
 			}
 		}
-		if err != nil {
+		if err != nil && s.sideListenerOptional("admin", c.Admin.Listen, err) {
+			newAdmin = nil
+		} else if err != nil {
 			rollback()
 			if newDoH != nil {
 				newDoH.close()
 			}
 			return fmt.Errorf("listen admin %s: %w", c.Admin.Listen, err)
+		} else {
+			changes = append(changes, change{undo: func() { newAdmin.close() }})
 		}
-		changes = append(changes, change{undo: func() { newAdmin.close() }})
 	}
 	if c.Metrics.Listen != "" && (s.metrics == nil || s.metrics.addr != c.Metrics.Listen) {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/metrics", s.handleMetrics)
 		mux.HandleFunc("/healthz", s.handleHealth)
-		if newMetrics, err = s.listenHTTP(c.Metrics.Listen, "", mux, nil); err != nil {
+		if newMetrics, err = s.listenHTTP(c.Metrics.Listen, "", mux, nil); err != nil && s.sideListenerOptional("metrics", c.Metrics.Listen, err) {
+			newMetrics = nil
+		} else if err != nil {
 			rollback()
 			if newDoH != nil {
 				newDoH.close()
@@ -811,6 +823,27 @@ func (s *Server) syncListeners(c *config.Config) error {
 		s.adminL = newAdmin
 	}
 	return nil
+}
+
+// sideListenerOptional reports whether the admin interface or the metrics
+// failing to bind addr may leave DNS running: at startup, and when a
+// reload keeps the address it already had (the port is still taken). Only
+// a change made now to that address is refused. Another program on port
+// 9153 (a common metrics port) or 7000 stopped the whole server.
+func (s *Server) sideListenerOptional(name, addr string, err error) bool {
+	if s.started {
+		if snap := s.snap.Load(); snap != nil {
+			prev := snap.Config.Metrics.Listen
+			if name == "admin" {
+				prev = snap.Config.Admin.Listen
+			}
+			if prev != addr {
+				return false
+			}
+		}
+	}
+	s.Log.Error(name+" not available: its address could not be bound; DNS is served without it, and it is tried again when the configuration is next applied", "addr", addr, "err", err)
+	return true
 }
 
 // collide reports whether two listen addresses cannot be bound together:

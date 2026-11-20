@@ -35,6 +35,14 @@ jobs:
           done
       - name: build
         run: |
-          for arch in amd64 arm64; do
-            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags "-s -w" -o dist/dnsnova-linux-$arch ./cmd/dnsnova
+          for arch in amd64 arm64 arm; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch GOARM=6 go build -trimpath -ldflags "-s -w" -o dist/dnsnova-linux-$arch ./cmd/dnsnova
           done
+      - name: installer
+        # simulated machines; as root for the certbot case (paths in /etc)
+        run: sudo env "PATH=$PATH" "HOME=$HOME" "GOCACHE=$(go env GOCACHE)" "GOMODCACHE=$(go env GOMODCACHE)" bash tools/test-install.sh
+      - name: test on 32-bit ARM (emulated)
+        # int and pointers are 32 bits there: run everything once that way
+        run: |
+          sudo apt-get install -y -q qemu-user-static
+          CGO_ENABLED=0 GOARCH=arm GOARM=6 go test -count=1 -exec qemu-arm-static ./...

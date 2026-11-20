@@ -65,9 +65,12 @@ email = ""                      # optional contact for Let's Encrypt
 # challenge = "tls-alpn-01"
 # http_challenge_listen = ":80"
 # acme_directory = "https://acme-v02.api.letsencrypt.org/directory"
-# For "files":
-# cert_file = "/etc/letsencrypt/live/dns.example.com/fullchain.pem"
-# key_file = "/etc/letsencrypt/live/dns.example.com/privkey.pem"
+# For "files": dnsnova runs as the user dnsnova, which must be able to read
+# both files. certbot's own (/etc/letsencrypt/live) are for root only: copy
+# them on each renewal with a deploy hook, as install.sh --cert-file does
+# (/etc/letsencrypt/renewal-hooks/deploy/dnsnova.sh).
+# cert_file = "/etc/dnsnova/tls/fullchain.pem"
+# key_file = "/etc/dnsnova/tls/privkey.pem"
 
 [ddr]
 # Answer _dns.resolver.arpa (RFC 9462) so clients discover DoT, DoH and DoQ.

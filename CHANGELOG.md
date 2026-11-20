@@ -4,6 +4,75 @@ All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
 **Security**.
 
+## 1.6.3 (2026-11-20)
+
+Starts and keeps running on more machines, and installs cleanly on more of
+them. How queries are answered is unchanged.
+
+Starting and running:
+
+- **One listen address that is not there no longer stops the server.** At
+  boot an address can come up after DNSNova starts (DHCP, or IPv6 still
+  checking that the address is unique), and a home server's address can
+  change; any listen address that could not be bound stopped DNSNova on
+  every address, and after a few quick restarts systemd gave up. DNS
+  listeners now bind such an address anyway (`IP_FREEBIND`), answer on it
+  once it is up, and the log says it is
+  missing. Saving a new address this machine does not have in the web
+  interface is still refused, as a likely typo.
+- **The metrics or the web interface failing to bind no longer stops DNS.**
+  Another program on 127.0.0.1:9153 (a common metrics port) or on the
+  admin port kept DNSNova from starting. Now the error is logged and DNS is
+  served; the address is tried again when the configuration is next
+  applied. Changing either to a port that is taken is still refused.
+- **systemd keeps restarting it**: after five quick failures (another
+  program still holding port 53 at boot, say) systemd gave up for good;
+  now it tries again every 5 seconds. The installer updates the unit.
+- **32-bit ARM** (Raspberry Pi OS 32-bit, every Pi from the Zero up): a
+  release build (`dnsnova-linux-arm`), and the installer picks it. The
+  tests run on 32-bit ARM in CI.
+- A certificate file dnsnova may not read says why and what to do
+  (certbot's files are root's only; dnsnova runs as its own user).
+
+Installing:
+
+- **Another DNS server on its own address is no conflict.** dnsmasq for
+  libvirt (192.168.122.1) or NetworkManager (127.0.1.1) made the installer
+  refuse every install; conflicts are now checked address by address, and
+  addresses another program already answers on are left out with a note.
+- **Default addresses leave out virtual bridges and IPv6 privacy
+  addresses**, as the web setup does: Docker, libvirt, LXD and the like,
+  and temporary IPv6 addresses, which change every day or so.
+- **Containers that cannot sandbox services** (LXC without nesting,
+  OpenVZ): the unit's sandbox kept DNSNova from starting
+  (`status=226/NAMESPACE`). The installer tries it first and, where it
+  fails, adds a drop-in that runs DNSNova without it (still as its own user
+  with only the right to bind low ports); `-u` removes it.
+- **Certificates from certbot** (`--cert-file` under `/etc/letsencrypt/live`,
+  as with `--doh-proxy` behind nginx): dnsnova could not read them, so it
+  did not start. The installer now copies them to `/etc/dnsnova/tls` and
+  writes a certbot deploy hook that copies them again on every renewal.
+- **Using DNSNova on the server itself.** `install.sh` run with DNS options
+  but no `--listen` now also listens on 127.0.0.1:53, as the web setup
+  already did, so `nameserver 127.0.0.1` in `/etc/resolv.conf` works; it
+  had listened only on the public addresses, and that setting left the
+  server unable to resolve anything (apt, certificate renewal). Not when
+  `ss` shows another program on 127.0.0.1:53 or on every address, and
+  never for DNS over TLS, QUIC or HTTPS. New installs only: existing
+  configurations are not changed. The README has a new section on
+  `/etc/resolv.conf`: 127.0.0.1 alone, with `trust-ad`, and why not a
+  public resolver as a second line; and on machines without a
+  battery-backed clock.
+- **Metrics port**: 9153, or the next free one when another program has it.
+- **Firewall**: with ufw or firewalld on, the summary gives the exact
+  commands for the ports in use.
+- A server with only private addresses is no longer taken for a home one:
+  the hint to use `--lan` also says that cloud servers behind NAT (AWS,
+  Google Cloud) look the same and should keep the internet install.
+- Options given to an installed server are reported as ignored (they are
+  for new installs) instead of silently ignored.
+- Started by `sh` with wget but no curl, the installer now runs.
+
 ## 1.6.2 (2026-11-19)
 
 Fixes to what the web interface and the metrics show; how upstreams are

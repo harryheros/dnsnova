@@ -12,10 +12,14 @@
 # --help for the options that configure everything here instead.
 # Run by sh (curl ... | sh): fetch the script again and run it with bash.
 if [ -z "${BASH_VERSION:-}" ]; then
-    if command -v bash >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
-        exec bash -c "$(curl -fsSL https://raw.githubusercontent.com/harryheros/dnsnova/main/install.sh)" install.sh "$@"
+    if command -v bash >/dev/null 2>&1; then
+        if command -v curl >/dev/null 2>&1; then
+            exec bash -c "$(curl -fsSL https://raw.githubusercontent.com/harryheros/dnsnova/main/install.sh)" install.sh "$@"
+        elif command -v wget >/dev/null 2>&1; then
+            exec bash -c "$(wget -qO- https://raw.githubusercontent.com/harryheros/dnsnova/main/install.sh)" install.sh "$@"
+        fi
     fi
-    echo "error: this installer needs bash and curl" >&2
+    echo "error: this installer needs bash, and curl or wget" >&2
     exit 1
 fi
 set -euo pipefail
@@ -39,6 +43,8 @@ CONF="$ETC/dnsnova.toml"
 VAR="$ROOT/var/lib/dnsnova"
 UNIT="$ROOT/etc/systemd/system/dnsnova.service"
 SYSCTL="$ROOT/etc/sysctl.d/90-dnsnova.conf"
+DROPIN="$ROOT/etc/systemd/system/dnsnova.service.d"
+CERTBOT_HOOK="$ROOT/etc/letsencrypt/renewal-hooks/deploy/dnsnova.sh"
 USER_NAME="dnsnova"
 SKIP_SYSTEMD="${DNSNOVA_SKIP_SYSTEMD:-0}"     # tests only
 
@@ -46,6 +52,7 @@ SKIP_SYSTEMD="${DNSNOVA_SKIP_SYSTEMD:-0}"     # tests only
 YES=0 FORCE=0 UNINSTALL=0 PURGE=0 DOH_PROXY=0 IP_CERT=1 LAN=0
 MODE="" VERSION="" DOMAIN="" EMAIL="" CERT_FILE="" KEY_FILE="" ADMIN="" ADMIN_PORT=7000
 LISTEN=() UPSTREAMS=() FALLBACKS=() ALLOW=()
+METRICS_PORT=9153 CERTBOT_LIVE="" GIVEN=0
 
 usage() {
     cat <<'EOF'
@@ -97,6 +104,7 @@ Remove:
 EOF
 }
 
+for a in "$@"; do case "$a" in -u|--uninstall|--purge|-h|--help|--yes|-y|--force|--version) ;; -*) GIVEN=1 ;; esac; done
 while [ $# -gt 0 ]; do
     case "$1" in
         --mode)      MODE="${2:-}"; shift ;;
@@ -158,7 +166,8 @@ preflight() {
     case "$(uname -m)" in
         x86_64|amd64)  ARCH=amd64 ;;
         aarch64|arm64) ARCH=arm64 ;;
-        *) die "unsupported CPU architecture: $(uname -m) (amd64 and arm64 are supported)" ;;
+        armv6l|armv7l|armv8l|armhf) ARCH=arm ;;  # 32-bit ARM, e.g. Raspberry Pi OS 32-bit
+        *) die "unsupported CPU architecture: $(uname -m) (amd64, arm64 and 32-bit ARM are supported)" ;;
     esac
     have sha256sum || die "sha256sum is required"
     have tar || die "tar is required"
@@ -208,25 +217,52 @@ download() {
 }
 
 # ── ports ──
-port_users() { # port_users PORT -> "proc proc" (empty if free)
+# listeners PORT -> "program address" for every other program listening on
+# PORT (TCP or UDP); nothing without ss.
+listeners() {
     have ss || return 0
-    local users
-    users="$(ss -H -lnup "sport = :$1" 2>/dev/null; ss -H -lntp "sport = :$1" 2>/dev/null)"
-    # systemd-resolved's stub on 127.0.0.53/54 does not conflict with public addresses
-    users="$(printf '%s\n' "$users" | grep -v -E '127\.0\.0\.5[34]%?[a-z0-9]*:' | grep -v 'dnsnova' || true)"
-    [ -n "$(printf '%s' "$users" | tr -d '[:space:]')" ] || return 0
-    local procs
-    procs="$(printf '%s\n' "$users" | grep -o 'users:(("[^"]*"' | sed 's/users:(("//; s/"$//' | sort -u | tr '\n' ' ')"
-    printf '%s' "${procs:-another program}"
+    { ss -H -lnup "sport = :$1"; ss -H -lntp "sport = :$1"; } 2>/dev/null |
+        awk '/"dnsnova"/ { next } { p = "another-program"; if (match($0, /users:\(\("[^"]*"/)) p = substr($0, RSTART + 9, RLENGTH - 10); print p, $4 }' |
+        sort -u || true
 }
 
-check_ports() {
-    local p busy=0 users
-    for p in "$@"; do
-        users="$(port_users "$p")"
+# host_of ADDR:PORT -> the address alone: no brackets, no %interface
+host_of() { local h="${1%:*}"; h="${h#[}"; h="${h%]}"; printf '%s' "${h%%%*}"; }
+
+# taken_by HOST PORT -> the programs whose sockets keep dnsnova from binding
+# HOST:PORT: on the same address, or either side on every address. Another
+# DNS server on its own address (systemd-resolved on 127.0.0.53, dnsmasq on
+# libvirt's 192.168.122.1, NetworkManager's on 127.0.1.1) is no conflict.
+taken_by() {
+    local want="$1" port="$2" prog addr h
+    case "$want" in "*"|"") want="::" ;; esac # ":7000": every address, both families
+    listeners "$port" | while read -r prog addr; do
+        h="$(host_of "$addr")"
+        case "$h" in
+            "*"|"::") echo "$prog"; continue ;;                 # every address, both families
+            0.0.0.0) case "$want" in *:*) ;; *) echo "$prog" ;; esac; continue ;;
+        esac
+        case "$want" in
+            0.0.0.0) case "$h" in *:*) ;; *) echo "$prog" ;; esac ;;
+            ::) echo "$prog" ;;
+            *) if [ "$h" = "$want" ]; then echo "$prog"; fi ;;
+        esac
+    done | sort -u | tr '\n' ' ' | sed 's/ $//' || true
+}
+
+# port_users PORT -> "prog (addr), ..." of every other program on PORT
+port_users() {
+    listeners "$1" |
+        awk '$2 ~ /^127\.0\.0\.5[34](%[a-z0-9]+)?:/ { next } { a[$1] = a[$1] (a[$1] ? " " : "") $2 } END { for (p in a) printf "%s%s (%s)", (n++ ? ", " : ""), p, a[p] }' || true
+}
+
+check_ports() { # check_ports HOST:PORT...
+    local l busy=0 users
+    for l in "$@"; do
+        users="$(taken_by "$(host_of "$l")" "${l##*:}")"
         [ -n "$users" ] || continue
         busy=1
-        warn "port $p is already in use by: $users"
+        warn "$l is already in use by: $users"
         case "$users" in *AdGuardHome*) warn "stop it first: systemctl disable --now AdGuardHome" ;; esac
     done
     [ "$busy" -eq 1 ] || return 0
@@ -235,17 +271,33 @@ check_ports() {
         ask "Continue anyway? dnsnova will fail to start on addresses that are taken (y/N)" "n"
         case "$REPLY" in y|Y|yes) return 0 ;; esac
     fi
-    die "a port dnsnova needs is in use; stop the other program or run with --force"
+    die "an address dnsnova needs is in use; stop the other program, choose other addresses with --listen, or run with --force"
+}
+
+# metrics_port: 9153 (a common metrics port), or the next free one
+metrics_port() {
+    local p
+    for p in $(seq 9153 9163); do
+        [ -n "$(taken_by 127.0.0.1 "$p")" ] || { METRICS_PORT="$p"; return; }
+    done
 }
 
 # ── configuration (new installs only) ──
+# This host's addresses, IPv4 first. As the web setup: not those of virtual
+# bridges (containers, VMs) and not IPv6 privacy addresses, which change
+# every day or so (a listen address that goes away is no longer answered).
+VIRTUAL_IFS='^(docker|veth|br-|virbr|cni|flannel|lxc|lxd|vmnet|vboxnet|zt)'
 public_addrs() {
     if ! have ip; then
         hostname -I 2>/dev/null | tr ' ' '\n' | grep -v -i -e '^$' -e '^fe80' -e '^127\.' -e '^::1$' || true
         return 0
     fi
-    ip -o -4 addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1
-    ip -o -6 addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -v -i '^fe80' || true
+    local fam
+    for fam in -4 -6; do
+        ip -o "$fam" addr show scope global 2>/dev/null |
+            awk -v virt="$VIRTUAL_IFS" '$2 ~ virt || / temporary/ || / deprecated/ { next } { split($4, a, "/"); print a[1] }' |
+            grep -v -i '^fe80' || true
+    done
 }
 
 public_listen_ips() { # prints listen IPs that a public CA could reach
@@ -328,7 +380,7 @@ configure_simple() {
         echo "primary = []"
         echo
         echo "[metrics]"
-        echo 'listen = "127.0.0.1:9153"'
+        echo "listen = \"127.0.0.1:$METRICS_PORT\""
         echo
         echo "[admin]"
         echo "listen = \"$listen\""
@@ -349,8 +401,17 @@ configure() {
 
     # listen addresses
     if [ ${#LISTEN[@]} -eq 0 ]; then
-        local defaults=()
-        for a in "${addrs[@]}"; do defaults+=("$(fmt_addr "$a")"); done
+        local defaults=() users
+        for a in "${addrs[@]}"; do
+            users="$(taken_by "$a" 53)"
+            if [ -n "$users" ]; then warn "not serving on $a: $users already answers there"; continue; fi
+            defaults+=("$(fmt_addr "$a")")
+        done
+        # As the web setup does: also 127.0.0.1, so programs on this machine
+        # can use it (nameserver 127.0.0.1 in /etc/resolv.conf). Only when ss
+        # shows it free (without ss that cannot be told), and not alone: no
+        # address for anyone else.
+        if [ ${#defaults[@]} -gt 0 ] && have ss && [ -z "$(taken_by 127.0.0.1 53)" ]; then defaults+=("127.0.0.1:53"); fi
         if [ -n "$TTY" ]; then
             echo "  This host's public addresses: ${addrs[*]:-(none found)}"
             ask "Serve DNS on (space-separated address:port)" "${defaults[*]:-}"
@@ -358,6 +419,9 @@ configure() {
         else
             LISTEN=("${defaults[@]}")
         fi
+    fi
+    if [ ${#LISTEN[@]} -eq 0 ] && [ ${#addrs[@]} -gt 0 ]; then
+        die "port 53 is taken on every address of this host (see above): stop the other DNS server, or pass --listen"
     fi
     [ ${#LISTEN[@]} -gt 0 ] || die "no listen address: pass --listen 203.0.113.10:53"
 
@@ -449,6 +513,10 @@ configure() {
 
     [ -z "$DOMAIN" ] || [ "$DOH_PROXY" -eq 0 ] || die "--domain and --doh-proxy cannot be combined: nginx owns port 443; use --cert-file/--key-file for DoT"
     if [ -n "$CERT_FILE" ] && [ -z "$KEY_FILE" ]; then die "--cert-file needs --key-file"; fi
+    if [ -n "$CERT_FILE" ]; then
+        [ -r "$CERT_FILE" ] || die "cannot read $CERT_FILE"
+        [ -r "$KEY_FILE" ] || die "cannot read $KEY_FILE"
+    fi
 
     # DoT, DoQ and DoH listen on the same addresses as port 53
     DOT_LISTEN=() HTTPS_LISTEN=()
@@ -456,6 +524,7 @@ configure() {
         local l host
         for l in "${LISTEN[@]}"; do
             host="${l%:*}"
+            case "$host" in 127.*|"[::1]"|localhost) continue ;; esac # as the web setup: not on loopback
             DOT_LISTEN+=("$host:853")
             [ -n "$DOMAIN" ] && HTTPS_LISTEN+=("$host:443")
         done
@@ -508,7 +577,7 @@ configure() {
         fi
         echo
         echo "[metrics]"
-        echo 'listen = "127.0.0.1:9153"'
+        echo "listen = \"127.0.0.1:$METRICS_PORT\""
         case "$ADMIN" in
             local)  printf '\n[admin]\nlisten = "127.0.0.1:%s"   # reach it through an SSH tunnel\n' "$ADMIN_PORT" ;;
             public) if [ "$MODE" = private ]; then
@@ -525,7 +594,37 @@ configure() {
         die "the configuration is not valid; nothing was installed"
     fi
     ok "configuration valid"
+    # certbot keeps keys in directories only root can enter (0700), and
+    # dnsnova runs as its own user: use copies that a certbot deploy hook
+    # refreshes on every renewal (dnsnova reloads changed files)
+    case "$CERT_FILE" in
+        /etc/letsencrypt/live/*/*)
+            CERTBOT_LIVE="$(dirname "$CERT_FILE")"
+            sed -i "s#^cert_file = .*#cert_file = \"/etc/dnsnova/tls/$(basename "$CERT_FILE")\"#; s#^key_file = .*#key_file = \"/etc/dnsnova/tls/$(basename "$KEY_FILE")\"#" "$f" ;;
+    esac
     NEW_CONF="$f"
+}
+
+# certbot_hook writes the deploy hook that copies a certbot certificate to
+# /etc/dnsnova/tls for dnsnova, and runs it once.
+certbot_hook() {
+    [ -n "$CERTBOT_LIVE" ] || return 0
+    install -d -m 755 "$(dirname "$CERTBOT_HOOK")"
+    cat > "$CERTBOT_HOOK" <<HOOK
+#!/bin/sh
+# Written by the dnsnova installer: dnsnova runs as its own user and cannot
+# read certbot's files, so each renewal copies them to /etc/dnsnova/tls
+# (dnsnova reloads them by itself).
+[ -z "\${RENEWED_LINEAGE:-}" ] || [ "\$RENEWED_LINEAGE" = "$CERTBOT_LIVE" ] || exit 0
+install -d -m 750 -o $USER_NAME -g $USER_NAME $ROOT/etc/dnsnova/tls
+install -m 644 -o $USER_NAME -g $USER_NAME "$ROOT$CERTBOT_LIVE/$(basename "$CERT_FILE")" $ROOT/etc/dnsnova/tls/
+install -m 600 -o $USER_NAME -g $USER_NAME "$ROOT$CERTBOT_LIVE/$(basename "$KEY_FILE")" $ROOT/etc/dnsnova/tls/
+HOOK
+    chmod 755 "$CERTBOT_HOOK"
+    if [ -z "$ROOT" ]; then
+        "$CERTBOT_HOOK" || die "could not copy the certificate from $CERTBOT_LIVE"
+    fi
+    ok "certificate copied to /etc/dnsnova/tls; certbot copies it again on each renewal ($CERTBOT_HOOK)"
 }
 
 # ── install ──
@@ -551,7 +650,47 @@ install_files() {
     install -m 755 "$PKG/dnsnova" "$BIN.new"
     mv -f "$BIN.new" "$BIN"
     ok "installed $BIN"
+    certbot_hook
     tune_udp
+    sandbox_check
+}
+
+# Some containers (LXC without nesting, OpenVZ) cannot give a service its
+# own view of the file system, and the unit's sandbox then keeps dnsnova
+# from starting at all ("status=226/NAMESPACE"). Try the same settings on a
+# throwaway unit; if they fail, run without them here.
+sandbox_check() {
+    local ok_=1
+    if [ -n "${DNSNOVA_TEST_SANDBOX:-}" ]; then            # tests only
+        [ "$DNSNOVA_TEST_SANDBOX" = ok ] || ok_=0
+    elif [ "$SKIP_SYSTEMD" != "1" ] && have systemd-run; then
+        systemd-run --quiet --wait --collect -p PrivateTmp=yes -p PrivateDevices=yes \
+            -p ProtectSystem=strict -p ProtectHome=yes /bin/sh -c true >/dev/null 2>&1 || ok_=0
+    fi
+    if [ "$ok_" -eq 1 ]; then
+        rm -f "$DROPIN/sandbox.conf"
+        rmdir "$DROPIN" 2>/dev/null || true
+        return 0
+    fi
+    install -d -m 755 "$DROPIN"
+    cat > "$DROPIN/sandbox.conf" <<'UNIT'
+# Written by the dnsnova installer: this system (a container) cannot set up
+# the sandbox, so dnsnova runs without it, still as its own user with only
+# the right to bind low ports.
+[Service]
+PrivateTmp=no
+PrivateDevices=no
+ProtectSystem=no
+ProtectHome=no
+ProtectKernelTunables=no
+ProtectKernelModules=no
+ProtectKernelLogs=no
+ProtectControlGroups=no
+ProtectClock=no
+ProtectHostname=no
+RestrictNamespaces=no
+UNIT
+    warn "this system cannot sandbox services (a container?): dnsnova runs without the sandbox ($DROPIN/sandbox.conf)"
 }
 
 # The kernel caps socket buffers (net.core.rmem_max, often about 200 KB),
@@ -575,14 +714,21 @@ tune_udp() {
     fi
 }
 
+# metrics_addr: the [metrics] listen address in the configuration, if any
+metrics_addr() {
+    awk -F'"' '/^\[/ { sec = $0 } sec == "[metrics]" && $1 ~ /^listen *= *$/ { print $2; exit }' "$CONF" 2>/dev/null
+}
+
 healthy() { # wait up to 10 s for the service to answer its health check
     [ "$SKIP_SYSTEMD" = "1" ] && return 0
-    local i
+    local i m
+    m="$(metrics_addr)"
+    case "$m" in :*) m="127.0.0.1$m" ;; 0.0.0.0:*) m="127.0.0.1:${m##*:}" ;; esac
     for i in $(seq 1 20); do
         if systemctl is-active --quiet dnsnova; then
-            if [ "$DL" = curl ]; then curl -fsS -m 2 http://127.0.0.1:9153/healthz >/dev/null 2>&1 && return 0
-            else wget -q -T 2 -O /dev/null http://127.0.0.1:9153/healthz && return 0; fi
-            grep -q '^listen = "127.0.0.1:9153"' "$CONF" 2>/dev/null || return 0 # metrics not enabled
+            [ -n "$m" ] || return 0 # metrics not enabled
+            if [ "$DL" = curl ]; then curl -fsS -m 2 "http://$m/healthz" >/dev/null 2>&1 && return 0
+            else wget -q -T 2 -O /dev/null "http://$m/healthz" && return 0; fi
         fi
         sleep 0.5
     done
@@ -593,8 +739,9 @@ fresh_install() {
     preflight
     download
     if simple; then
+        metrics_port
         configure_simple
-        check_ports "$ADMIN_PORT"
+        if [ "$ADMIN" = local ]; then check_ports "127.0.0.1:$ADMIN_PORT"; else check_ports ":$ADMIN_PORT"; fi
         local dns
         dns="$(port_users 53)"
         if [ -n "$dns" ]; then
@@ -611,11 +758,13 @@ fresh_install() {
         summary_simple
         return
     fi
+    metrics_port
     configure
-    local ports=(53)
-    [ ${#DOT_LISTEN[@]} -eq 0 ] || ports+=(853)
-    [ ${#HTTPS_LISTEN[@]} -eq 0 ] || ports+=(443)
-    [ "$ADMIN" = off ] || ports+=("$ADMIN_PORT")
+    local ports=("${LISTEN[@]}" ${DOT_LISTEN[@]+"${DOT_LISTEN[@]}"} ${HTTPS_LISTEN[@]+"${HTTPS_LISTEN[@]}"})
+    case "$ADMIN" in
+        local)  ports+=("127.0.0.1:$ADMIN_PORT") ;;
+        public) ports+=(":$ADMIN_PORT") ;;
+    esac
     check_ports "${ports[@]}"
     install_files
     systemd daemon-reload
@@ -631,6 +780,10 @@ upgrade() {
     local old
     old="$("$BIN" -v 2>/dev/null | awk '{print $2}' || true)"
     step "Upgrading dnsnova ${old:-}"
+    if [ "$GIVEN" -eq 1 ]; then
+        warn "dnsnova is already installed: the options given apply to new installs only, and $CONF is kept"
+        warn "change settings in the web interface or in $CONF (or remove it first: -u --purge)"
+    fi
     download
     if [ -n "$old" ] && [ "$old" = "$NEW_VERSION" ] && [ -z "$VERSION" ]; then
         ok "already up to date"
@@ -656,7 +809,8 @@ uninstall() {
     if [ "$SKIP_SYSTEMD" != "1" ] && systemctl list-unit-files dnsnova.service >/dev/null 2>&1; then
         systemctl disable --now dnsnova >/dev/null 2>&1 || true
     fi
-    rm -f "$UNIT" "$BIN" "$VAR/dnsnova.prev" "$SYSCTL"
+    rm -f "$UNIT" "$BIN" "$VAR/dnsnova.prev" "$SYSCTL" "$CERTBOT_HOOK"
+    rm -rf "$DROPIN"
     rm -rf "$ROOT/usr/local/share/doc/dnsnova"
     systemd daemon-reload || true
     ok "service and program removed"
@@ -677,8 +831,11 @@ summary() {
     echo "${B}dnsnova is installed.${N}"
     echo "  Configuration:  $CONF  (applied automatically when saved)"
     echo "  Logs:           journalctl -u dnsnova -f"
-    echo "  Health:         curl http://127.0.0.1:9153/healthz"
+    echo "  Health:         curl http://$(metrics_addr)/healthz"
     echo "  Serving DNS on: ${LISTEN[*]}  (mode: $MODE)"
+    case " ${LISTEN[*]} " in *" 127.0.0.1:53 "*)
+        echo "  This server:    nameserver 127.0.0.1 in /etc/resolv.conf to use it here too (README)" ;;
+    esac
     if [ "$DOH_PROXY" -eq 1 ]; then
         echo "  DoH backend:    http://127.0.0.1:8053/dns-query  (nginx example: /usr/local/share/doc/dnsnova)"
     fi
@@ -691,14 +848,37 @@ summary() {
         echo "    journalctl -u dnsnova -f | grep tls"
     elif [ -n "$CERT_FILE" ]; then
         echo "  DNS over TLS and QUIC: port 853, certificate $CERT_FILE"
-        echo "  dnsnova must be able to read the key: e.g. setfacl -m u:dnsnova:r $KEY_FILE"
+        if [ -z "$CERTBOT_LIVE" ]; then
+            echo "  dnsnova runs as the user dnsnova and must be able to read the key and the"
+            echo "  directories above it (for example: chown dnsnova $KEY_FILE)"
+        fi
     fi
-    local open="53 (UDP and TCP)"
-    [ ${#DOT_LISTEN[@]} -eq 0 ] || open="$open, 853 (TCP and UDP)"
-    [ ${#HTTPS_LISTEN[@]} -eq 0 ] || open="$open, 443 (TCP and UDP)"
-    if [ "$ADMIN" = public ] && { [ "$MODE" = private ] || has_cert; }; then open="$open, $ADMIN_PORT (TCP)"; fi
-    echo "  Remember to open port $open in your firewall."
+    local open="53 (UDP and TCP)" tcp=(53) udp=(53)
+    if [ ${#DOT_LISTEN[@]} -gt 0 ]; then open="$open, 853 (TCP and UDP)"; tcp+=(853); udp+=(853); fi
+    if [ ${#HTTPS_LISTEN[@]} -gt 0 ]; then open="$open, 443 (TCP and UDP)"; tcp+=(443); udp+=(443); fi
+    if [ "$ADMIN" = public ] && { [ "$MODE" = private ] || has_cert; }; then open="$open, $ADMIN_PORT (TCP)"; tcp+=("$ADMIN_PORT"); fi
+    if ! firewall_hint "${tcp[*]}" "${udp[*]}"; then
+        echo "  Remember to open port $open in your firewall."
+    fi
     admin_summary
+}
+
+# firewall_hint "TCP ports" "UDP ports": the commands for the firewall that
+# is on (ufw or firewalld); fails when neither is, to say it in general.
+firewall_hint() {
+    local p cmds=()
+    if have ufw && ufw status 2>/dev/null | grep -q '^Status: active'; then
+        for p in $1; do cmds+=("ufw allow $p/tcp"); done
+        for p in $2; do cmds+=("ufw allow $p/udp"); done
+    elif have firewall-cmd && firewall-cmd --state >/dev/null 2>&1; then
+        for p in $1; do cmds+=("firewall-cmd --permanent --add-port=$p/tcp"); done
+        for p in $2; do cmds+=("firewall-cmd --permanent --add-port=$p/udp"); done
+        cmds+=("firewall-cmd --reload")
+    else
+        return 1
+    fi
+    echo "  The firewall is on; open the ports with:"
+    printf '    %s\n' "${cmds[@]}"
 }
 
 setup_code() { # waits for the service to write the code
@@ -738,7 +918,7 @@ summary_simple() {
     if [ "$LAN" -eq 1 ] && [ "$ADMIN" = public ]; then
         echo "Open one of these addresses from a device on your network and follow the setup wizard:"
         { lan_urls; echo "http://127.0.0.1:$ADMIN_PORT"; } | sed 's/^/  /'
-        echo "If a firewall is on, open TCP port $ADMIN_PORT to your network."
+        firewall_hint "$ADMIN_PORT" "" || echo "If a firewall is on, open TCP port $ADMIN_PORT to your network."
     else
         echo "The web interface is not encrypted yet, so it opens only on this server."
         echo "On your computer, open a tunnel:"
@@ -750,8 +930,10 @@ summary_simple() {
         fi
         if [ "$LAN" -eq 0 ] && [ -n "$(lan_urls)" ] && [ "$(public_addrs | sort -u | wc -l)" -eq "$(lan_urls | wc -l)" ]; then
             echo
-            echo "This server has only private addresses. For a home or office network, install"
-            echo "with --lan instead, and the web interface opens directly from that network:"
+            echo "This server has only private addresses: a cloud server behind NAT (as on AWS"
+            echo "or Google Cloud; then keep this install), or a machine on a home or office"
+            echo "network. For a home or office network, install with --lan instead, and the"
+            echo "web interface opens directly from that network:"
             echo "  curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | sh -s -- -u --purge"
             echo "  curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | sh -s -- --lan"
         fi
