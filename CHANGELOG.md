@@ -19,6 +19,11 @@ All notable changes are listed here. Versions follow
   keyboard before anything was tapped).
 - The DNSNova heading on the overview is a little smaller (56 pixels instead
   of 64; 39 instead of 44 on phones).
+- **A query-record search could miss the last second's queries.** Before
+  searching, the records still queued are written out; one the writer had
+  just taken could be written right after that and stay unwritten to the
+  file, so the search missed it until the next second. Found by the tests
+  on 32-bit ARM in CI, where the emulator is slow enough to hit it.
 
 ## 1.6.3 (2026-11-20)
 
