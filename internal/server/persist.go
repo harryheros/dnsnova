@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -21,6 +22,38 @@ const cacheSaveEvery = 10 * time.Minute
 var cacheSaveMu sync.Mutex // one save at a time
 
 func cachePath(c *config.Config) string { return filepath.Join(c.Server.DataDir, cacheFile) }
+
+// serversFile keeps what recursion learnt about name servers (how fast
+// each answers, and quirks) with the cache: addresses and timings only.
+const serversFile = "servers.bin"
+
+func serversPath(c *config.Config) string { return filepath.Join(c.Server.DataDir, serversFile) }
+
+// loadServers teaches recursion what it knew about name servers before
+// the restart, when the cache is kept. Like the cache, a damaged file is
+// only logged.
+func (s *Server) loadServers(c *config.Config) {
+	if !c.PersistCache() || s.Rec == nil {
+		return
+	}
+	f, err := os.Open(serversPath(c))
+	if errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	if err != nil {
+		s.Log.Warn("name server file not loaded", "err", err)
+		return
+	}
+	defer f.Close()
+	n, err := s.Rec.LoadServers(f)
+	if err != nil {
+		s.Log.Warn("name server file not loaded: their speeds are learnt again", "file", serversPath(c), "err", err)
+		return
+	}
+	if n > 0 {
+		s.Log.Info("name servers remembered", "servers", n)
+	}
+}
 
 // loadCache fills the answer cache from the file saved last time, when
 // the cache is kept (Config.PersistCache). A damaged or unreadable file is only logged: the
@@ -58,8 +91,19 @@ func (s *Server) saveCache() error {
 	}
 	cacheSaveMu.Lock()
 	defer cacheSaveMu.Unlock()
-	path := cachePath(st.cfg)
-	tmp, err := os.CreateTemp(filepath.Dir(path), "."+cacheFile+".tmp-*")
+	if err := writeFileAtomic(cachePath(st.cfg), func(w io.Writer) error { _, err := s.res.SaveCache(w); return err }); err != nil {
+		return err
+	}
+	if s.Rec == nil {
+		return nil
+	}
+	return writeFileAtomic(serversPath(st.cfg), func(w io.Writer) error { _, err := s.Rec.SaveServers(w); return err })
+}
+
+// writeFileAtomic writes path through a temporary file (mode 0600) that
+// then replaces it, so a crash while writing leaves the previous file.
+func writeFileAtomic(path string, write func(io.Writer) error) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return err
 	}
@@ -68,7 +112,7 @@ func (s *Server) saveCache() error {
 		tmp.Close()
 		return err
 	}
-	if _, err := s.res.SaveCache(tmp); err != nil {
+	if err := write(tmp); err != nil {
 		tmp.Close()
 		return err
 	}
@@ -90,6 +134,7 @@ func (s *Server) dropCacheFile(c *config.Config) {
 	if err := os.Remove(cachePath(c)); err == nil {
 		s.Log.Info("saved cache removed", "file", cachePath(c))
 	}
+	os.Remove(serversPath(c))
 }
 
 // cacheSaver saves the cache every cacheSaveEvery until the server stops

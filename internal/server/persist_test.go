@@ -31,6 +31,10 @@ func TestCachePersistAcrossRestart(t *testing.T) {
 	if fi.Mode().Perm() != 0o600 {
 		t.Fatalf("cache file mode %04o, want 0600", fi.Mode().Perm())
 	}
+	// what recursion learnt about name servers is kept with it
+	if fi, err := os.Stat(filepath.Join(filepath.Dir(path), serversFile)); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("name server file: %v %v", fi, err)
+	}
 
 	s2, err := New(config.NewStore(path), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
@@ -77,6 +81,9 @@ func TestCachePersistOffRemovesFile(t *testing.T) {
 	}
 	if _, err := os.Stat(file); !os.IsNotExist(err) {
 		t.Fatal("cache file kept after persist was turned off")
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(path), serversFile)); !os.IsNotExist(err) {
+		t.Fatal("name server file kept after persist was turned off")
 	}
 	s.Shutdown()
 	if _, err := os.Stat(file); !os.IsNotExist(err) {
