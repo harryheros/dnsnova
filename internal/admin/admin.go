@@ -53,6 +53,7 @@ type Backend interface {
 	// back and the error is returned.
 	ApplyConfig(src []byte, expected string) (*config.Snapshot, error)
 	ConfigHistory() ([]config.HistoryEntry, error)
+	ClearConfigHistory() (int, error)
 	ConfigHistoryFile(name string) ([]byte, error)
 	Report(span time.Duration) stats.Report
 	// Guide describes the server for the setup guide.
@@ -342,6 +343,7 @@ func (a *Admin) routes() {
 	m.Handle("GET /api/v1/config/file", auth(a.getConfigFile))
 	m.Handle("PUT /api/v1/config/file", auth(a.putConfigFile))
 	m.Handle("GET /api/v1/config/history", auth(a.listHistory))
+	m.Handle("DELETE /api/v1/config/history", auth(a.clearHistory))
 	m.Handle("GET /api/v1/config/history/{name}", auth(a.getHistory))
 	m.Handle("POST /api/v1/config/history/{name}/restore", auth(a.restoreHistory))
 

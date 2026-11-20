@@ -334,6 +334,9 @@ func (s *Server) ApplyConfig(src []byte, expected string) (*config.Snapshot, err
 // ConfigHistory implements admin.Backend.
 func (s *Server) ConfigHistory() ([]config.HistoryEntry, error) { return s.Store.History() }
 
+// ClearConfigHistory implements admin.Backend.
+func (s *Server) ClearConfigHistory() (int, error) { return s.Store.ClearHistory() }
+
 // ConfigHistoryFile implements admin.Backend.
 func (s *Server) ConfigHistoryFile(name string) ([]byte, error) {
 	if name != filepath.Base(name) || !strings.HasSuffix(name, ".toml") || strings.HasPrefix(name, ".") {

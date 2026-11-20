@@ -76,6 +76,7 @@ func (f *fake) Cache() (int, int)                             { return 3, 1 }
 func (f *fake) ClearCache()                                   { f.mu.Lock(); f.cleared++; f.mu.Unlock() }
 func (f *fake) Listeners() map[string][]string                { return map[string][]string{"udp": {"127.0.0.1:53"}} }
 func (f *fake) ConfigHistory() ([]config.HistoryEntry, error) { return f.store.History() }
+func (f *fake) ClearConfigHistory() (int, error)              { return f.store.ClearHistory() }
 func (f *fake) ConfigHistoryFile(name string) ([]byte, error) {
 	if name != filepath.Base(name) {
 		return nil, errors.New("bad name")
@@ -533,6 +534,22 @@ func TestConfigEditing(t *testing.T) {
 	}
 	if e.b.Snapshot().Config.Server.Mode != "public" {
 		t.Fatal("restore did not apply")
+	}
+
+	// history: delete every saved version (a secret taken out stays there otherwise)
+	had := len(e.do(e.c, "GET", "/api/v1/config/history", nil).body["versions"].([]any))
+	r = e.do(e.c, "DELETE", "/api/v1/config/history", nil)
+	if r.code != 200 || r.body["deleted"] != float64(had) {
+		t.Fatalf("delete history: %d %s (had %d)", r.code, r.raw, had)
+	}
+	if v := e.do(e.c, "GET", "/api/v1/config/history", nil).body["versions"].([]any); len(v) != 0 {
+		t.Fatalf("still %d versions", len(v))
+	}
+	if r := e.do(&http.Client{}, "DELETE", "/api/v1/config/history", nil); r.code != 401 {
+		t.Fatalf("deleted without signing in: %d", r.code)
+	}
+	if e.b.Snapshot().Config.Server.Mode != "public" {
+		t.Fatal("deleting history changed the configuration")
 	}
 
 	// whole-file editing

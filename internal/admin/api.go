@@ -853,6 +853,16 @@ func (a *Admin) listHistory(w http.ResponseWriter, r *http.Request, c *call) {
 	writeJSON(w, http.StatusOK, map[string]any{"versions": out})
 }
 
+func (a *Admin) clearHistory(w http.ResponseWriter, r *http.Request, c *call) {
+	n, err := a.b.ClearConfigHistory()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	a.log.Info("admin: configuration history deleted", "user", c.sess.user, "versions", n)
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": n})
+}
+
 func (a *Admin) historyFile(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 	src, err := a.b.ConfigHistoryFile(r.PathValue("name"))
 	if err != nil {
