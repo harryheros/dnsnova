@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -312,6 +313,14 @@ func (s *Server) ApplyConfig(src []byte, expected string) (*config.Snapshot, err
 	snap, err := s.Store.Write(src, expected)
 	if err != nil {
 		return nil, err
+	}
+	// A new address that is not on this machine is most likely a typo:
+	// refuse it here (from a file, it is bound anyway and answered once up).
+	if miss := missingListen(snap.Config, old.Config); len(miss) > 0 {
+		if _, rerr := s.Store.Write(old.Doc.Src, snap.Hash); rerr != nil {
+			s.Log.Error("could not restore the previous configuration file", "err", rerr)
+		}
+		return nil, fmt.Errorf("%s: not an address of this machine", strings.Join(miss, ", "))
 	}
 	if err := s.Apply(snap); err != nil {
 		if _, rerr := s.Store.Write(old.Doc.Src, snap.Hash); rerr != nil {

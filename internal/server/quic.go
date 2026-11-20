@@ -58,14 +58,12 @@ type quicListener struct {
 // listenQUIC opens a UDP socket and a QUIC listener offering the ALPN
 // protocols in tlsConf.
 func (s *Server) listenQUIC(addr string, tlsConf *tls.Config) (*quicListener, error) {
-	ua, err := net.ResolveUDPAddr("udp", addr)
+	lc := dnsListenConfig(false)
+	p, err := lc.ListenPacket(context.Background(), "udp", addr)
 	if err != nil {
 		return nil, err
 	}
-	pc, err := net.ListenUDP("udp", ua)
-	if err != nil {
-		return nil, err
-	}
+	pc := p.(*net.UDPConn)
 	l := &quicListener{pc: pc, conns: map[*quic.Conn]struct{}{}}
 	l.tr = &quic.Transport{
 		Conn:                pc,

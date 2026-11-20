@@ -3,6 +3,9 @@ Description=dnsnova DNS server
 Documentation=https://github.com/harryheros/dnsnova
 After=network-online.target
 Wants=network-online.target
+# Keep trying: at boot another program may still hold a port DNSNova needs
+# (it gives up after 5 failures in 10 seconds otherwise, for good).
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -12,7 +15,7 @@ ExecStartPre=/usr/local/bin/dnsnova -t -c /etc/dnsnova/dnsnova.toml
 ExecStart=/usr/local/bin/dnsnova -c /etc/dnsnova/dnsnova.toml
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
-RestartSec=2
+RestartSec=5
 
 # Only the right to bind ports below 1024.
 AmbientCapabilities=CAP_NET_BIND_SERVICE
