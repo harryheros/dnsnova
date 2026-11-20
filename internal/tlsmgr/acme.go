@@ -183,7 +183,12 @@ func (c *Client) saveNonce(h http.Header) {
 // JWK returns the public account key as a JSON Web Key, members in the
 // lexicographic order required for the thumbprint (RFC 7638).
 func JWK(k *ecdsa.PublicKey) string {
-	x, y := k.X.FillBytes(make([]byte, 32)), k.Y.FillBytes(make([]byte, 32))
+	// 0x04, then X and Y, 32 bytes each (an uncompressed P-256 point)
+	b, err := k.Bytes()
+	if err != nil || len(b) != 65 {
+		return ""
+	}
+	x, y := b[1:33], b[33:]
 	return fmt.Sprintf(`{"crv":"P-256","kty":"EC","x":"%s","y":"%s"}`, b64.EncodeToString(x), b64.EncodeToString(y))
 }
 

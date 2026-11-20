@@ -189,6 +189,8 @@ type Recursion struct {
 	LookupP95MS     float64        `json:"lookup_p95_ms"`
 	Retries         int64          `json:"retries"`          // a timed-out server asked once more
 	RetriesAnswered int64          `json:"retries_answered"` // and it then replied
+	Hedges          int64          `json:"hedges"`           // a slow server's question also sent to the next
+	HedgesWon       int64          `json:"hedges_won"`       // and that answer was the one used
 	Cache           map[string]int `json:"cache"`
 }
 
@@ -197,6 +199,10 @@ type Tops struct {
 	Domains   []insight.Entry `json:"top_domains"`
 	NXDomains []insight.Entry `json:"top_nxdomains"`
 	Limited   []insight.Entry `json:"top_limited_networks"` // at most the last 24 hours
+	// what a domain needs to be listed: this many different askers within
+	// an hour, "devices" (a private server) or "networks"
+	ListMin int    `json:"list_min"`
+	ListBy  string `json:"list_by"`
 }
 
 // HostAddress is one of the server's IP addresses.

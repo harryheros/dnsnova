@@ -276,6 +276,7 @@ input[aria-invalid="true"], textarea[aria-invalid="true"], select[aria-invalid="
 }
 @media (max-width: 560px) {
   .dash > .s3 { grid-column: span 12; }
+  .search kbd { display: none; } /* no keyboard shortcut on a phone, and room for the placeholder */
 }
 
 /* key figures */
@@ -317,12 +318,12 @@ input[aria-invalid="true"], textarea[aria-invalid="true"], select[aria-invalid="
 .dfoot > * { min-width: 0; }
 .strong { font-weight: 600; color: var(--text); }
 .slots { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
-.slot { display: grid; grid-template-columns: minmax(0, 1fr) minmax(40px, 30%) 56px; align-items: center; gap: 12px; height: 38px; border-top: 1px solid var(--hairline); font-size: 13.5px; }
+.slot { display: grid; grid-template-columns: minmax(0, 1fr) minmax(36px, 26%) 44px; align-items: center; gap: 12px; height: 38px; border-top: 1px solid var(--hairline); font-size: 13.5px; }
 .slot:first-child { border-top: 0; }
 .slot .num { text-align: right; font-size: 12.5px; }
 .slot .nm { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .skel { display: block; height: 6px; border-radius: 3px; background: var(--raised); opacity: 0.7; }
-.slot:has(.rank) { grid-template-columns: 20px minmax(0, 1fr) minmax(40px, 30%) 56px; }
+.slot:has(.rank) { grid-template-columns: 20px minmax(0, 1fr) minmax(36px, 26%) 44px; }
 .slot .rank { font-family: var(--mono); font-size: 12px; color: var(--muted); }
 .slot.off { opacity: 0.5; }
 .slot.tall { display: flex; height: auto; min-height: 50px; gap: 12px; }
@@ -350,11 +351,11 @@ input[aria-invalid="true"], textarea[aria-invalid="true"], select[aria-invalid="
 .toprows .share { font-size: 12px; color: var(--muted); text-align: right; font-family: var(--mono); }
 
 /* upstream rows */
-.uprows .slot { grid-template-columns: 12px minmax(0, 1fr) 62px 78px 58px; height: 44px; }
+.uprows .slot { grid-template-columns: 12px minmax(0, 1fr) 50px 64px 54px; height: 44px; }
 .uprows .rate { font-family: var(--mono); font-size: 12.5px; text-align: right; }
 .uprows .lat { font-family: var(--mono); font-size: 13px; text-align: right; color: var(--accent-2); font-weight: 600; }
-.uprows .role { display: block; font-size: 11px; color: var(--muted); }
-.mini { width: 78px; height: 24px; display: block; }
+.uprows .role { display: block; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mini { width: 64px; height: 24px; display: block; }
 .mini .l { fill: none; stroke: var(--accent); stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
 .mini .base { stroke: var(--border-strong); stroke-dasharray: 2 4; stroke-width: 1; }
 
@@ -683,3 +684,12 @@ details.adv[open] > summary::before { content: "▾ "; }
   input[type=text], input[type=password], input[type=email], input[type=number], input[type=search],
   input.mono, select, textarea, .search input, main .search input[type=search] { font-size: 16px; }
 }
+
+/* a left-aligned column right after a right-aligned one */
+th.gap, td.gap { padding-left: 28px; }
+
+/* query log: the bar above the table, and names that filter on a click */
+.qlbar { align-items: center; gap: 8px; }
+.qlbar .grow { flex: 1 1 auto; }
+.pick { cursor: pointer; border-bottom: 1px dotted transparent; }
+.pick:hover { color: var(--accent); border-bottom-color: currentColor; }

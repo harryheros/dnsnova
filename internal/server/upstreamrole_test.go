@@ -114,6 +114,7 @@ func TestRecursionTimingsAreExported(t *testing.T) {
 	for _, want := range []string{
 		"dnsnova_recursion_lookup_seconds_bucket{le=\"0.1\"}", "dnsnova_recursion_lookup_seconds_count",
 		"dnsnova_recursion_server_rtt_seconds_count", "dnsnova_recursion_retries_total{result=\"answered\"}",
+		"dnsnova_recursion_hedges_total{result=\"won\"}",
 	} {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("metrics without %s", want)

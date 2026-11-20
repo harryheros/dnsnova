@@ -9,6 +9,11 @@
 // that is replaced every hour and never stored. A name is shown only when
 // at least MinNetworks bits are set, which proves that at least that many
 // different networks asked for it within one hour.
+//
+// A private server (a home or an office) sees one or a few networks, so
+// there the sketch counts devices (an IPv4 address, an IPv6 /64) instead,
+// and MinDevices of them are enough: a name that only one device asks for
+// still never shows.
 package insight
 
 import (
@@ -18,6 +23,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/net/publicsuffix"
@@ -26,6 +32,10 @@ import (
 // MinNetworks is how many different networks must ask for a domain within
 // one hour before it can appear on a list.
 const MinNetworks = 5
+
+// MinDevices is how many different devices must ask for a domain within
+// one hour on a private server (SetPrivate).
+const MinDevices = 2
 
 const (
 	shards    = 16
@@ -57,7 +67,8 @@ type shard struct {
 
 // Top counts names in hourly buckets.
 type Top struct {
-	sketch bool // whether entries need MinNetworks networks to be shown
+	sketch  bool        // whether entries need MinNetworks networks to be shown
+	devices atomic.Bool // private: devices are counted, MinDevices needed
 
 	live    [shards]shard
 	seed    maphash.Seed // per live hour; replaced at every roll
@@ -95,6 +106,9 @@ func (t *Top) Add(key string, ip netip.Addr) {
 	var bit uint64
 	if t.sketch {
 		p := NetworkOf(ip)
+		if t.devices.Load() {
+			p = DeviceOf(ip)
+		}
 		b := p.Addr().As16()
 		bit = 1 << (maphash.Bytes(seed, b[:]) % 64)
 	}
@@ -218,9 +232,13 @@ func (t *Top) List(span time.Duration, now time.Time, n int) []Entry {
 		}
 		sh.mu.Unlock()
 	}
+	need := MinNetworks
+	if t.devices.Load() {
+		need = MinDevices
+	}
 	out := make([]Entry, 0, n)
 	for k, a := range sum {
-		if t.sketch && a.spread < MinNetworks {
+		if t.sketch && a.spread < need {
 			continue
 		}
 		out = append(out, Entry{Name: k, Count: a.count})
@@ -235,6 +253,33 @@ func (t *Top) List(span time.Duration, now time.Time, n int) []Entry {
 		out = out[:n]
 	}
 	return out
+}
+
+// SetPrivate makes a list on a private server count devices rather than
+// networks (see the package comment). Hours already counted keep how they
+// were counted.
+func (t *Top) SetPrivate(on bool) { t.devices.Store(on) }
+
+// Threshold says what a name needs to be listed: how many different
+// askers, and whether they are devices or networks.
+func (t *Top) Threshold() (n int, devices bool) {
+	if t.devices.Load() {
+		return MinDevices, true
+	}
+	return MinNetworks, false
+}
+
+// DeviceOf is the device an address is counted as on a private server: the
+// address itself for IPv4, its /64 for IPv6 (a device's addresses change
+// within it).
+func DeviceOf(ip netip.Addr) netip.Prefix {
+	ip = ip.Unmap()
+	bits := 64
+	if ip.Is4() {
+		bits = 32
+	}
+	p, _ := ip.Prefix(bits)
+	return p
 }
 
 // NetworkOf is the network an address is counted in: /24 for IPv4, /48

@@ -4,6 +4,70 @@ All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
 **Security**.
 
+## 1.6.7 (2026-11-20)
+
+- **A slow name server no longer holds up a lookup.** When the server
+  asked first has not replied within twice its usual round trip (and at
+  least 50 ms more than it; 400 ms when not known yet), the next of the
+  zone's servers is asked too, and the first good answer is used. Before,
+  a lost packet cost the whole timeout (three round trips, at least
+  150 ms) before the next server was asked. In tests with 5% of packets
+  lost, the slowest 1% of lookups went from 151 ms to 56 ms; with no loss
+  nothing changes, and no question is sent twice. At most two servers are
+  waited for at once; a zone with one server, a server asked again, IPv6
+  not yet known to work and servers set aside after failures are not
+  hedged with.
+  - The server that was out-run is not counted as failed (it may only
+    have been slow once): it is no longer preferred, and is tried again
+    once its round trip is forgotten. A question called off this way is
+    not taken further (no TCP, no counting as a timeout).
+  - The first server is asked as before, on the lookup's own goroutine; a
+    second goroutine starts only when a hedge is sent. An uncached lookup
+    costs about 1.5 µs more CPU; cached answers are unchanged.
+  - Privacy: the question only ever goes to another authoritative server
+    of the same zone, the one that would have been asked next anyway,
+    with the same minimised name. No new party sees it.
+  - Metric: `dnsnova_recursion_hedges_total`, by whether the hedge's
+    answer was the one used; also `hedges` and `hedges_won` in the
+    recursion status.
+- **Round trips measured more truly.** An answer checked over TCP after a
+  doubtful UDP one now counts the TCP exchange as the server's round
+  trip, not the wait for a UDP answer before it, so a server whose
+  answers are merely unusual is not taken to be slow.
+- **Query log you can read and copy.** The live query log redrew its
+  whole table every five seconds, even with nothing new, so rows moved
+  under the pointer and text could hardly be selected or copied. Now the
+  table changes only when queries arrive; while text in it is selected,
+  or after *Pause*, new queries wait behind a *Show N new* button instead.
+  *Copy* puts the queries shown on the clipboard as tab-separated text
+  (for a message or a spreadsheet), *Download* saves them as a `.tsv`
+  file, and a click on a client or a domain shows only its queries. The
+  same buttons, and *Refresh*, are on the Query records search.
+- **Copy buttons work over plain HTTP.** Browsers offer the clipboard only
+  to HTTPS pages and to the server itself, so on a home network, where the
+  web interface is opened over plain HTTP, every *Copy* button did nothing.
+  They now fall back to copying a hidden text field.
+- **Top domains on home and office servers.** A domain was listed only
+  once five different networks (IPv4 /24, IPv6 /48) had asked for it,
+  which a server for one home or office never sees: *Top Domains* and
+  *Not Found* stayed empty. In private mode devices are counted instead
+  (an IPv4 address, an IPv6 /64), and two are enough. A domain that only
+  one device looks up is still never listed, and no addresses are kept;
+  public servers are unchanged. The overview says which rule applies.
+- **Web interface.** Upstream names and roles on the overview, and the
+  reasons on the Rejected card, are no longer cut short; the upstream
+  table keeps its last two columns apart; phones no longer show the search
+  box's keyboard shortcut over its placeholder. The setup guide, when DNS
+  answers only on the server itself, now says so and points to where the
+  addresses are set (Encrypted DNS › Protocols), not to Access & limits.
+- **ACME account key** encoded without the elliptic-curve coordinates
+  deprecated since Go 1.26; the result is the same.
+- **Documentation.** The README is shorter: the release history is left to
+  this changelog, and the notes on using DNSNova for the server's own
+  programs moved to [docs/server-itself.md](./docs/server-itself.md).
+  Documentation and this changelog describe behaviour, not particular
+  networks or sites.
+
 ## 1.6.6 (2026-11-20)
 
 - **A lost packet no longer fails a lookup.** A name server that did not
@@ -29,8 +93,7 @@ All notable changes are listed here. Versions follow
 ## 1.6.5 (2026-11-20)
 
 Recursion resolves names served by load balancers that answer unusually
-over UDP and not at all over TCP, as some large CDNs' name servers do;
-such names failed with SERVFAIL after about six seconds. What is done
+over UDP and not at all over TCP; such names failed with SERVFAIL after about six seconds. What is done
 against forged answers is unchanged.
 
 - **An unusual UDP answer is used when TCP cannot be had.** An answer
@@ -351,26 +414,25 @@ Two more causes of SERVFAIL found the same way as in 1.3.4:
 
 - With QNAME minimisation, a shortened name that no server of a zone
   answers usably is asked again in full, instead of ending the lookup.
-  Some servers mishandle names that only exist as part of longer ones
-  (Huawei Cloud's CDN name servers, behind nia.gov.cn and others).
+  Some servers mishandle names that only exist as part of longer ones.
 - A name server whose only known addresses are IPv6, when they fail, has
   its IPv4 addresses looked up and asked. On a server whose IPv6 path to
   some networks is poor, a zone could fail although its name servers
-  answered over IPv4 (esspt.com's, for one).
+  answered over IPv4.
 
 ## 1.3.4 (2026-11-11)
 
-Found by comparing, for some 5,000 domains hosted in Asia, what this
-resolver answers with what a large public resolver answers:
+Found by comparing, for some 5,000 domains, what this resolver answers
+with what a large public resolver answers:
 
 - An answer from a zone's server without the AA flag is accepted when it
   is for the very name asked. Some load balancers that zones delegate
-  their names to leave AA off (Huawei Cloud's storage endpoints, for
-  one); their answers were taken for lame replies and the lookup failed.
+  their names to leave AA off; their answers were taken for lame replies
+  and the lookup failed.
 - When every address known for a zone's name servers fails, its other
   name servers are looked up and asked. Name servers without glue were
   looked up only partly, two or three of them; when those did not answer
-  from where this server is (sgcc.com.cn's, for one), the lookup gave up
+  from where this server is, the lookup gave up
   although other name servers would have answered.
 - When no name server of a zone gives a usable answer, the error says
   which question, which zone, and what each server did (timed out,
@@ -381,10 +443,9 @@ resolver answers with what a large public resolver answers:
 ## 1.3.3 (2026-11-11)
 
 - Resolving from the root, with DNSSEC on: some names under zones that are
-  not signed failed with SERVFAIL ("no authoritative server answered"),
-  qqmusic.com among them. To check a zone, the resolver asked its parent
-  for the zone's DS record, and some parents (qq.com's servers, for one)
-  wrongly send that question down to the child zone instead of answering
+  not signed failed with SERVFAIL ("no authoritative server answered").
+  To check a zone, the resolver asked its parent for the zone's DS record,
+  and some parents wrongly send that question down to the child zone instead of answering
   it, which ended the lookup. Two changes:
   - below a zone that is not signed, nothing is checked any more and no DS
     question is asked (RFC 4035 5): the zone above is looked at first. This
@@ -407,7 +468,7 @@ resolver answers with what a large public resolver answers:
 
 - `ecs.client_path`: a lookup may take up to 9 seconds instead of 6. Each
   name of such a lookup is asked afresh, and from a server with a lossy
-  path to the name servers (across some international links, for one) the
+  path to the name servers the
   first servers tried often do not answer in time; the spare seconds go
   into trying the others. Measured on such a path, a few percent of
   domains failed for this alone.

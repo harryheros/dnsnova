@@ -6,18 +6,16 @@ by itself and what you need to set up.
 
 ## Answers injected on the path
 
-**Where:** some national and ISP networks.
-
-**What they do:** for a question about certain names, a device on the path
+**What happens:** on some networks, for a question about certain names, a device on the path
 sends a forged answer at once, from the name server's address, with the
 right port, ID and question. It cannot stop the genuine answer, which
 arrives later (in published measurements, 99% of forged answers led by at
 most 364 ms). Over TCP, it resets the connection.
 
-Before 1.4, DNSNova took the first matching answer, the forged one. For
-signed zones (the root, `com`, `net` and most top-level domains) it failed
-DNSSEC validation (SERVFAIL); for unsigned zones the forged address was
-used and cached.
+A resolver that takes the first matching answer takes the forged one: for
+signed zones (the root, `com`, `net` and most top-level domains) validation
+then fails (SERVFAIL); for unsigned zones the forged address is used and
+cached.
 
 **What DNSNova does:** each UDP answer is judged on arrival. An answer the
 server would not send is dropped, and the socket stays open for the genuine
@@ -47,16 +45,12 @@ reach DNSNova across it. Those clients must use DNS over HTTPS, TLS or QUIC.
 
 ## Servers that do not answer over TCP
 
-Some load balancers in front of large sites (seen with the name servers of
-some large CDNs) answer over UDP without EDNS or AA, so their answers look
+Some load balancers in front of large sites answer over UDP without EDNS or AA, so their answers look
 unusual, and never answer over TCP: the connection is refused, or accepted
 and left silent.
 
-Before 1.6.5, DNSNova dropped such an answer and asked over TCP, waiting
-up to five seconds; with two or three such servers a lookup took longer
-than clients wait, and every one failed (SERVFAIL).
-
-Now an unusual answer is kept while TCP is tried. TCP gets a short chance
+Treating such an answer as forged and waiting for TCP would make every
+lookup there fail. Instead, an unusual answer is kept while TCP is tried. TCP gets a short chance
 (a second, or four round trips); if the connection is refused or not
 answered, the kept answer is used, and the server is asked only over UDP
 for an hour. The answer is used only when it is all that came: one
@@ -73,17 +67,14 @@ They are counted in the metric `dnsnova_recursion_no_tcp_total`.
 
 The same servers often give an empty reply without authority for a name
 that only exists as part of longer ones, which QNAME minimisation asks
-for. DNSNova no longer marks such a server lame for its whole zone for ten
-minutes: it asks the zone's other servers for the shortened name, and only
-if none answers, for the full name, so that one server does not end
-minimisation for the rest of the lookup.
+for. DNSNova does not mark such a server lame for its whole zone: it asks
+the zone's other servers for the shortened name, and only if none answers,
+for the full name, so that one server does not end minimisation for the
+rest of the lookup.
 
 ## Networks that take over port 53
 
-**Where:** some national, ISP and corporate networks (RIPE Labs found it
-in 48 countries in 2022).
-
-**What they do:** every DNS question, to any address, is answered or refused
+**What happens:** on some networks, every DNS question, to any address, is answered or refused
 by the network's own resolver, often over TCP too. No name server is
 reachable, so no resolver can resolve privately there.
 

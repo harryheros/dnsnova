@@ -207,7 +207,7 @@ async function boot() {
   ];
   const privacy = dcard("s6", "What this server keeps", "shield",
     h("dl", { class: "kvs" }, privRows.map(([k, v, c]) => h("div", null, h("dt", null, k), h("dd", { class: c }, v)))),
-    h("footer", { class: "dfoot" }, h("span", null, "Counts and popular domains (asked by 5+ networks) are kept in memory only."), h("span")));
+    h("footer", { class: "dfoot" }, h("span", null, `Counts and popular domains (asked by ${info.mode === "private" ? "2+ devices" : "5+ networks"}) are kept in memory only.`), h("span")));
   const about = dcard("s6", "About this server", "code",
     h("p", { class: "small", style: { margin: 0 } }, info.recursion
       ? "Runs DNSNova, an open-source DNS server. It answers from its cache or asks each domain's own name servers; they see this server's address, not yours."

@@ -128,6 +128,7 @@ func (s *Server) RecursionStatus() admin.Recursion {
 		Cache:       map[string]int{"rrsets": sets, "negative": negs, "zones": keys, "delegations": delegs, "servers": servers},
 		LookupP50MS: ms(r.Stats.Lookups.Quantile(0.5)), LookupP95MS: ms(r.Stats.Lookups.Quantile(0.95)),
 		Retries: r.Stats.Retries.Load(), RetriesAnswered: r.Stats.RetriesAnswered.Load(),
+		Hedges: r.Stats.Hedges.Load(), HedgesWon: r.Stats.HedgesWon.Load(),
 	}
 }
 
@@ -151,6 +152,9 @@ func (s *Server) writeRecursionMetrics(w io.Writer) {
 	fmt.Fprintf(w, "# HELP dnsnova_recursion_retries_total Name servers that timed out asked once more, by whether they then replied.\n# TYPE dnsnova_recursion_retries_total counter\n")
 	fmt.Fprintf(w, "dnsnova_recursion_retries_total{result=\"answered\"} %d\n", r.Stats.RetriesAnswered.Load())
 	fmt.Fprintf(w, "dnsnova_recursion_retries_total{result=\"failed\"} %d\n", r.Stats.Retries.Load()-r.Stats.RetriesAnswered.Load())
+	fmt.Fprintf(w, "# HELP dnsnova_recursion_hedges_total Another of a zone's name servers asked too because the first took clearly longer than it usually does, by whether its answer was the one used.\n# TYPE dnsnova_recursion_hedges_total counter\n")
+	fmt.Fprintf(w, "dnsnova_recursion_hedges_total{result=\"won\"} %d\n", r.Stats.HedgesWon.Load())
+	fmt.Fprintf(w, "dnsnova_recursion_hedges_total{result=\"lost\"} %d\n", r.Stats.Hedges.Load()-r.Stats.HedgesWon.Load())
 	fmt.Fprintf(w, "# HELP dnsnova_recursion_rewritten_total Answers no name server sends, over UDP and TCP: the network answers in their place.\n# TYPE dnsnova_recursion_rewritten_total counter\ndnsnova_recursion_rewritten_total %d\n", r.Stats.Rewritten.Load())
 	intercepted := 0
 	if r.Intercepted() {

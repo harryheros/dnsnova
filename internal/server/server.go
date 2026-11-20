@@ -251,6 +251,10 @@ func (s *Server) applyRetention(c *config.Config) {
 	s.History.SetHours(h + 1)
 	s.Domains.SetHours(h)
 	s.NXDomains.SetHours(h)
+	// a home or office sees few networks: count devices there
+	private := c.Server.Mode == config.ModePrivate
+	s.Domains.SetPrivate(private)
+	s.NXDomains.SetPrivate(private)
 }
 
 // ClearStats implements admin.Backend: it forgets the statistics and the

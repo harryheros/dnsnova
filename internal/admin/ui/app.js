@@ -223,8 +223,33 @@ async function api(method, path, body) {
   return data;
 }
 
-function copy(text) {
-  navigator.clipboard?.writeText(text).then(() => toast("Copied"), () => toast("Could not copy", "err"));
+// copy puts text on the clipboard. The Clipboard API exists only on HTTPS
+// and on the server itself; over plain HTTP on a home network (the usual
+// way in there) a hidden text area is copied instead.
+function copy(text, what) {
+  const done = () => toast(what ? `Copied ${what}` : "Copied");
+  const fallback = () => {
+    const ta = h("textarea", { readonly: "", style: { position: "fixed", top: "0", left: "-9999px", opacity: "0" } });
+    ta.value = text;
+    document.body.append(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+    ta.remove();
+    if (ok) done(); else toast("Could not copy: select the text and press Ctrl+C (⌘C)", "err");
+  };
+  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done, fallback);
+  else fallback();
+}
+
+// saveFile offers text as a file to download.
+function saveFile(name, text, type) {
+  const url = URL.createObjectURL(new Blob([text], { type: type || "text/plain" }));
+  const a = h("a", { href: url, download: name, style: { display: "none" } });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 // ---------- boot ----------
@@ -1266,9 +1291,14 @@ function drawOverview(d, { range, metric, seg, mseg }) {
 
   // ---- the three lists ----
   const most = Math.max(1, ...(stats.top_domains || []).map((x) => x.count));
-  const privacyNote = "Only names asked from at least 5 different networks are listed, so no one person's browsing shows up.";
+  // what a name needs to be listed (fewer askers on a private server)
+  const need = stats.list_min || 5, by = stats.list_by || "networks";
+  const privacyNote = by === "devices"
+    ? `Only names asked from at least ${need} different devices are listed, so what one device alone looks up never shows.`
+    : `Only names asked from at least ${need} different networks are listed, so no one person's browsing shows up.`;
+  const needShort = `${need}+ ${by}`;
   const top = (stats.top_domains || []).length
-    ? card("s4", "Top Domains", "trophy", h("span", { class: "small muted", title: privacyNote }, "asked from 5+ networks"),
+    ? card("s4", "Top Domains", "trophy", h("span", { class: "small muted", title: privacyNote }, "asked from " + needShort),
       slots(stats.top_domains, SLOTS, (x, i) => h("li", { class: "slot" }, h("span", { class: "rank" }, i + 1), h("span", { class: "nm mono ellipsis", title: x.name }, x.name),
         meter(x.count / most), h("span", { class: "num" }, fmt.short(x.count)), h("span", { class: "share" }, total ? fmt.pct(x.count / total) : "")), "toprows"))
     : card("s4", "Top Domains", "trophy", null, h("p", { class: "empty small muted" }, "No domains to show yet. ", privacyNote));
@@ -1299,7 +1329,7 @@ function drawOverview(d, { range, metric, seg, mseg }) {
     return card("s3", title, ic, null,
       slots(list, SLOTS, (x, i) => h("li", { class: "slot" }, h("span", { class: "rank" }, i + 1), h("span", { class: "nm mono ellipsis", title: x.name }, x.name),
         meter(x.count / m), h("span", { class: "num" }, fmt.short(x.count)))),
-      h("footer", { class: "dfoot" }, h("span", null, `Top ${Math.min(list.length, SLOTS)} of ${list.length}`), h("span", { class: "muted", title: privacyNote }, "5+ networks")));
+      h("footer", { class: "dfoot" }, h("span", null, `Top ${Math.min(list.length, SLOTS)} of ${list.length}`), h("span", { class: "muted", title: privacyNote }, needShort)));
   };
   const rej = Object.entries(stats.rejected).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
   const rejMax = Math.max(1, ...rej.map(([, v]) => v));
@@ -1375,7 +1405,7 @@ function upName(a) {
 }
 
 function miniTrend(vals) {
-  const W = 78, H = 24;
+  const W = 64, H = 24;
   // samples are taken while the overview is open; a dashed line until there are a few
   if (vals.length < 3) return s("svg", { class: "mini", viewBox: `0 0 ${W} ${H}`, "aria-hidden": "true" }, s("line", { class: "base", x1: 2, x2: W - 2, y1: H / 2, y2: H / 2 }));
   const max = Math.max(...vals), min = Math.min(...vals), r = max - min || 1;
@@ -1536,7 +1566,7 @@ function upstreamsPage(main) {
         tile("var(--c2)", "layers", "Success rate", q ? fmt.pct(1 - errs / q) : "–", null, `${fmt.int(errs)} errors`),
         tile("var(--c1)", "bars", "Queries sent", fmt.short(q), null, "since start")),
         h("section", { class: "card" }, h("div", { class: "tablewrap" }, h("table", { class: "stack" },
-        h("thead", null, h("tr", null, ["State", "Upstream", "Role", "Trend", "Latency", "Queries", "Errors", "Last error"].map((t, i) => h("th", { scope: "col", class: i >= 4 && i <= 6 ? "r" : "" }, t)))),
+        h("thead", null, h("tr", null, ["State", "Upstream", "Role", "Trend", "Latency", "Queries", "Errors", "Last error"].map((t, i) => h("th", { scope: "col", class: i >= 4 && i <= 6 ? "r" : i === 7 ? "gap" : "" }, t)))),
         h("tbody", null, upstreams.map((u) => h("tr", null,
           h("td", { "data-label": "State" }, (() => { const st = upState(u, upstreams); return h("span", { class: "state " + st.cls }, h("span", { class: "dot " + st.cls }), st.label); })()),
           h("td", { class: "mono head" }, u.address), h("td", { class: "muted", "data-label": "Role" }, u.role),
@@ -1544,7 +1574,7 @@ function upstreamsPage(main) {
           h("td", { class: "r num", "data-label": "Latency" }, u.latency_ms ? fmt.ms(u.latency_ms) + " ms" : "–"),
           h("td", { class: "r num", "data-label": "Queries" }, fmt.int(u.queries)),
           h("td", { class: "r num", "data-label": "Errors" }, fmt.int(u.errors) + (u.queries ? ` · ${successRate(u)} ok` : "")),
-          h("td", { class: "muted", "data-label": "Last error" }, u.last_error ? fmt.ago(u.last_error) : "never"))))))),
+          h("td", { class: "muted gap", "data-label": "Last error" }, u.last_error ? fmt.ago(u.last_error) : "never"))))))),
         h("p", { class: "small muted" }, "Latency is smoothed over recent answers; failures do not count in it. Idle: the last query failed over five minutes ago and none has been sent since. Slow means over 500 ms, or three times slower than the other primaries and over 50 ms. Standby: a fallback, used only when the primaries fail. Change the list in ", h("a", { href: "#/settings/dns" }, "DNS & upstreams"), "; ask each one the same question in ", h("a", { href: "#/tools/lookup" }, "Compare upstreams"), "."));
     } catch (e) { if (e.status !== 401) fill(body, errorBox(e)); }
   };
@@ -1808,17 +1838,32 @@ function lookupPage(main) {
 
 const QL_LENGTHS = [[15, "15 minutes"], [60, "1 hour"], [360, "6 hours"], [1440, "24 hours"]];
 
+// qlTSV is query records as tab-separated text with a header line, in the
+// same columns as the files of Query records: for a spreadsheet, or to
+// paste into a message.
+function qlTSV(entries) {
+  const head = ["time", "client", "protocol", "domain", "type", "result", "from", "ms", "filtered", "group"];
+  const clean = (v) => String(v ?? "").replace(/[\t\r\n]+/g, " ");
+  return [head.join("\t"), ...entries.map((q) => [new Date(q.time).toISOString(), q.client, q.proto, q.name, q.type, q.rcode, q.source,
+    q.ms ? Number(q.ms.toFixed(2)) : 0, q.filtered ? "yes" : "", q.group || ""].map(clean).join("\t"))].join("\n") + "\n";
+}
+
 // qlTable shows query records; withDate adds the date (for the archive).
-function qlTable(entries, withDate) {
+// With pick, a click on a client or a domain filters by it (not when the
+// click ends a text selection).
+function qlTable(entries, withDate, pick) {
   const when = (t) => withDate ? new Date(t).toLocaleString([], { hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }) : new Date(t).toLocaleTimeString([], { hour12: false });
+  const pickable = (v, kind) => pick ? h("span", {
+    class: "pick", title: `Show only this ${kind}`, onclick: () => { const sel = getSelection(); if (!sel || sel.isCollapsed) pick(v, kind); },
+  }, v) : v;
   return h("div", { class: "tablewrap" }, h("table", null,
     h("thead", null, h("tr", null, ["Time", "Client", "Protocol", "Domain", "Type", "Result", "From", "Time taken"].map((t, i) => h("th", { scope: "col", class: i === 7 ? "r" : "" }, t)))),
     h("tbody", null, entries.map((q) => h("tr", null,
       h("td", { class: "mono small" }, when(q.time)),
-      h("td", { class: "mono small" }, q.client, q.group ? h("span", { class: "tag", title: "Client group" }, q.group) : null), h("td", { class: "small" }, q.proto, q.filtered ? h("span", { class: "tag", title: "The block lists applied" }, "filtered") : null),
-      h("td", { class: "mono small ellipsis", title: q.name }, q.name, q.new_domain ? h("span", { class: "tag warn", title: "The first lookup of this domain here" }, "new") : null), h("td", { class: "small" }, q.type),
+      h("td", { class: "mono small" }, pickable(q.client, "client"), q.group ? h("span", { class: "tag", title: "Client group" }, q.group) : null), h("td", { class: "small" }, q.proto, q.filtered ? h("span", { class: "tag", title: "The block lists applied" }, "filtered") : null),
+      h("td", { class: "mono small ellipsis", title: q.name }, pickable(q.name, "domain"), q.new_domain ? h("span", { class: "tag warn", title: "The first lookup of this domain here" }, "new") : null), h("td", { class: "small" }, q.type),
       h("td", { class: "small " + (q.rcode === "NOERROR" ? "" : "warn") }, q.rcode),
-      h("td", { class: "small " + (q.source.startsWith("blocked") ? "warn" : "muted"), title: q.source === "blocked (group)" ? "By a rule of the client's group (Settings › DNS › Clients)" : null }, q.source,
+      h("td", { class: "small " + (q.source.startsWith("blocked") ? "warn" : "muted"), title: q.source === "blocked (group)" ? "By a rule of the client's group (Settings › DNS & upstreams › Clients)" : null }, q.source,
         q.source === "blocked" ? h("button", { type: "button", class: "btn link small", title: "Never block " + q.name, onclick: () => allowDomain(q.name).catch((e) => toast(e.message, "err")) }, "Allow") : null),
       h("td", { class: "r num small" }, (q.ms ? fmt.ms(q.ms) : "<0.1") + " ms"))))));
 }
@@ -1855,6 +1900,8 @@ function archiveView(box, ar, files) {
   const day = h("select", { "aria-label": "Day" }, h("option", { value: "" }, "Every day"), files.map((f) => h("option", { value: f.day }, f.day + " (UTC)")));
   const table = h("div");
   const note = h("p", { class: "small muted", style: { margin: 0 } });
+  const copyBtn = h("button", { type: "button", class: "btn small", disabled: true, title: "Copy the queries shown, tab-separated, for a message or a spreadsheet", onclick: () => copy(qlTSV(shown), `${fmt.int(shown.length)} queries`) }, "Copy");
+  const saveBtn = h("button", { type: "button", class: "btn small", disabled: true, title: "Download the queries shown as a tab-separated file", onclick: () => saveFile(`dnsnova-queries-${new Date().toISOString().slice(0, 19).replace(/:/g, "")}.tsv`, qlTSV(shown), "text/tab-separated-values") }, "Download");
   const warn = ar.dropped || ar.errors ? h("p", { class: "notice warn small", style: { margin: 0 } },
     ar.dropped ? `${fmt.int(ar.dropped)} queries could not be written fast enough and are missing. ` : "",
     ar.errors ? `Writing failed ${fmt.int(ar.errors)} times${ar.last_error ? ": " + ar.last_error : ""}.` : "") : null;
@@ -1869,12 +1916,18 @@ function archiveView(box, ar, files) {
       h("div", { class: "row", style: { alignItems: "center" } },
         h("div", { style: { flex: "2 1 220px" } }, name), h("div", { style: { flex: "1 1 160px" } }, client),
         h("div", { style: { flex: "0 1 190px" } }, result), h("div", { style: { flex: "0 1 190px" } }, day)),
-      note, table),
+      h("div", { class: "row qlbar" }, note, h("span", { class: "grow" }),
+        h("button", { type: "button", class: "btn small", title: "Search again, with the queries written since", onclick: () => load() }, "Refresh"), copyBtn, saveBtn),
+      table),
     files.length ? h("section", { class: "card" }, h("h2", null, "Download"),
       h("p", { class: "small muted", style: { margin: 0 } }, "One file per day (UTC), tab-separated: time, client, protocol, domain, type, result, from, milliseconds, filtered, group. Finished days are gzipped. Each download is recorded in the service log."),
       h("div", { class: "addrs" }, files.map((f) => h("div", { class: "copyrow" }, h("span", { class: "k" }, f.day), h("code", null, `${f.name} · ${fmtBytes(f.size)}`),
         h("a", { class: "btn small", href: "/api/v1/querylog/files/" + encodeURIComponent(f.name), download: "" }, "Download"))))) : null);
-  let seq = 0;
+  let seq = 0, shown = [];
+  const pick = (v, kind) => {
+    if (kind === "domain") name.value = v; else client.value = v;
+    load();
+  };
   const load = async () => {
     const my = ++seq;
     note.textContent = "Searching…";
@@ -1884,7 +1937,9 @@ function archiveView(box, ar, files) {
       if (my !== seq) return;
       note.textContent = r.partial ? r.partial : r.entries.length === 500 ? "The newest 500 matches." : `${fmt.int(r.entries.length)} ${r.entries.length === 1 ? "match" : "matches"}.`;
       note.className = "small " + (r.partial ? "warn" : "muted");
-      fill(table, r.entries.length ? qlTable(r.entries, true) : h("p", { class: "empty small", style: { margin: 0 } }, "No queries match."));
+      shown = r.entries;
+      copyBtn.disabled = saveBtn.disabled = !shown.length;
+      fill(table, r.entries.length ? qlTable(r.entries, true, pick) : h("p", { class: "empty small", style: { margin: 0 } }, "No queries match."));
     } catch (e) { if (my === seq && e.status !== 401) { note.textContent = ""; fill(table, errorBox(e)); } }
   };
   let deb;
@@ -1901,8 +1956,44 @@ function liveLogView(main) {
   const head = h("section", { class: "card" });
   const filter = h("input", { type: "search", placeholder: "Filter by domain or client", "aria-label": "Filter by domain or client", spellcheck: "false" });
   const table = h("div");
-  main.append(head, h("section", { class: "card" }, h("div", { class: "row", style: { alignItems: "center" } }, h("div", { style: { flex: "1 1 260px" } }, filter)), table));
-  let st = null, timer = null;
+  // The table changes only when there are new queries, and not while it
+  // is being read: with Pause, or while text in it is selected, new queries
+  // wait behind a button instead of moving the rows.
+  let st = null, shown = [], pending = null, paused = false;
+  const pauseBtn = h("button", { type: "button", class: "btn small", "aria-pressed": "false", title: "Stop adding new queries while you read or copy", onclick: () => setPaused(!paused) }, "Pause");
+  const newBtn = h("button", { type: "button", class: "btn small primary", hidden: true, onclick: () => { setPaused(false); load(true); } });
+  const copyBtn = h("button", { type: "button", class: "btn small", disabled: true, title: "Copy the queries shown, tab-separated, for a message or a spreadsheet", onclick: () => copy(qlTSV(shown), `${fmt.int(shown.length)} queries`) }, "Copy");
+  const saveBtn = h("button", { type: "button", class: "btn small", disabled: true, title: "Download the queries shown as a tab-separated file", onclick: () => saveFile(`dnsnova-queries-${new Date().toISOString().slice(0, 19).replace(/:/g, "")}.tsv`, qlTSV(shown), "text/tab-separated-values") }, "Download");
+  const liveNote = h("span", { class: "small muted" });
+  main.append(head, h("section", { class: "card" },
+    h("div", { class: "row qlbar" }, h("div", { style: { flex: "1 1 260px" } }, filter), newBtn, pauseBtn, copyBtn, saveBtn),
+    liveNote, table));
+  const setPaused = (on) => {
+    paused = on;
+    pauseBtn.textContent = on ? "Resume" : "Pause";
+    pauseBtn.setAttribute("aria-pressed", String(on));
+    pauseBtn.classList.toggle("primary", on && !pending);
+    if (!on && pending) render(pending);
+    showNote();
+  };
+  const showNote = () => {
+    liveNote.textContent = !st || !st.on ? "" : paused ? "Paused: new queries are not added until you resume." : "New queries appear every few seconds, newest first. Selecting text holds them back.";
+  };
+  const keyOf = (q) => q ? `${q.time}|${q.client}|${q.name}|${q.type}|${q.proto}` : "";
+  const reading = () => {
+    const sel = getSelection();
+    return !!sel && !sel.isCollapsed && table.contains(sel.anchorNode);
+  };
+  const pick = (v) => { filter.value = v; load(true); };
+  const render = (entries) => {
+    shown = entries;
+    pending = null;
+    newBtn.hidden = true;
+    pauseBtn.classList.toggle("primary", paused);
+    copyBtn.disabled = saveBtn.disabled = !shown.length;
+    fill(table, entries.length ? qlTable(entries, false, pick)
+      : h("p", { class: "empty small", style: { margin: 0 } }, st.on ? (filter.value ? "No queries match." : "Waiting for queries…") : "No queries recorded."));
+  };
   const drawHead = () => {
     if (st.on) {
       fill(head,
@@ -1932,28 +2023,43 @@ function liveLogView(main) {
             const r = await api("POST", "/querylog", { minutes: Number(len.value), full_ip: full.checked });
             st = r.state;
             drawHead();
-            load();
+            showNote();
+            load(true);
           } catch (e) { err.textContent = e.message; }
         },
       }, "Start the query log")));
   };
   const stop = async () => {
-    try { await api("DELETE", "/querylog"); toast("Query log stopped and deleted"); load(); } catch (e) { toast(e.message, "err"); }
+    try { await api("DELETE", "/querylog"); toast("Query log stopped and deleted"); load(true); } catch (e) { toast(e.message, "err"); }
   };
-  const load = async () => {
+  // load fetches the newest queries; force shows them even while held.
+  const load = async (force) => {
     try {
       const r = await api("GET", "/querylog?limit=500&q=" + encodeURIComponent(filter.value));
       const was = st && st.on;
       st = r.state;
-      if (!head.childNodes.length || was !== st.on) drawHead();
-      fill(table, r.entries.length ? qlTable(r.entries, false)
-        : h("p", { class: "empty small", style: { margin: 0 } }, st.on ? (filter.value ? "No queries match." : "Waiting for queries…") : "No queries recorded."));
+      if (!head.childNodes.length || was !== st.on) { drawHead(); showNote(); }
+      const e = r.entries;
+      if (!force && e.length === shown.length && keyOf(e[0]) === keyOf(shown[0]) && keyOf(e[e.length - 1]) === keyOf(shown[shown.length - 1])) return; // nothing new
+      if (!force && shown.length && (paused || reading())) {
+        pending = e;
+        const at = e.findIndex((q) => keyOf(q) === keyOf(shown[0]));
+        const n = at < 0 ? e.length : at;
+        if (n > 0) {
+          newBtn.textContent = `Show ${n >= 500 ? "500+" : fmt.int(n)} new`;
+          newBtn.title = "Show the newest queries";
+          newBtn.hidden = false;
+          pauseBtn.classList.remove("primary");
+        }
+        return;
+      }
+      render(e);
     } catch (e) { if (e.status !== 401) fill(table, errorBox(e)); }
   };
   let deb;
-  filter.addEventListener("input", () => { clearTimeout(deb); deb = setTimeout(load, 250); });
-  load();
-  state.timer = setInterval(() => { if (document.visibilityState === "visible" && st && st.on) load(); }, 5000);
+  filter.addEventListener("input", () => { clearTimeout(deb); deb = setTimeout(() => load(true), 250); });
+  load(true);
+  state.timer = setInterval(() => { if (document.visibilityState === "visible" && st && st.on) load(false); }, 5000);
 }
 
 // ---------- newly observed domains ----------
@@ -2005,7 +2111,7 @@ function guidePage(main) {
     try {
       const info = await api("GET", "/guide");
       if (!(info.plain || []).length && !info.doh && !info.dot) {
-        fill(body, h("p", { class: "notice" }, "DNS is not listening on any address yet. Choose addresses in ", h("a", { href: "#/settings/access" }, "Access & limits"), "."));
+        fill(body, h("p", { class: "notice" }, "DNS answers only on this server itself, so no other device can use it yet. Add an address devices can reach under Plain DNS in ", h("a", { href: "#/settings/encryption" }, "Encrypted DNS › Protocols"), "."));
         return;
       }
       const addrs = [...(info.plain || []).map((ip) => ["DNS server", ip]), info.doh ? ["DNS over HTTPS", info.doh] : null, info.dot ? ["DNS over TLS", info.dot] : null, info.doq ? ["DNS over QUIC", info.doq] : null].filter(Boolean);

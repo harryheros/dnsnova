@@ -81,6 +81,12 @@ carries a 64-bit sketch in which a network sets one bit, chosen by a hash
 with a random key. The key changes every hour and is never stored, so the
 sketch cannot be turned back into addresses; it is discarded with the hour.
 
+A private server (`server.mode = "private"`, a home or an office) sees
+only one or a few networks, so it counts devices instead (an IPv4 address,
+an IPv6 /64) and lists a domain once two different devices asked for it
+within the hour. A domain that only one device looks up is still never
+listed. The counting is the same: no addresses are stored.
+
 ## Status page check
 
 The public status page (off by default) can tell visitors whether their
