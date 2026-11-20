@@ -41,8 +41,11 @@ jobs:
       - name: installer
         # simulated machines; as root for the certbot case (paths in /etc)
         run: sudo env "PATH=$PATH" "HOME=$HOME" "GOCACHE=$(go env GOCACHE)" "GOMODCACHE=$(go env GOMODCACHE)" bash tools/test-install.sh
+      # 32-bit ARM, emulated: int and pointers are 32 bits there, so run
+      # everything once that way. The kernel runs ARM programs through QEMU
+      # (binfmt), whatever the runner's distribution calls its packages.
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm
       - name: test on 32-bit ARM (emulated)
-        # int and pointers are 32 bits there: run everything once that way
-        run: |
-          sudo apt-get install -y -q qemu-user-static
-          CGO_ENABLED=0 GOARCH=arm GOARM=6 go test -count=1 -exec qemu-arm-static ./...
+        run: CGO_ENABLED=0 GOARCH=arm GOARM=6 go test -count=1 ./...
