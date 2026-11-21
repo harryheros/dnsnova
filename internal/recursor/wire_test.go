@@ -142,9 +142,19 @@ func FuzzParseMessage(f *testing.F) {
 				}
 			}
 		}
-		proveNXDomainNSEC(nsecs(sets), msg.qname)
-		proveNoDataNSEC(nsecs(sets), msg.qname, msg.qtype)
-		if s, _ := nsec3sFor(sets, msg.qname); len(s.list) > 0 {
+		zone := ""
+		for _, s := range sets {
+			if s.typ == typeNSEC3 || s.typ == typeNSEC {
+				zone = parent(s.name)
+				if s.typ == typeNSEC {
+					zone = commonAncestor(msg.qname, s.name)
+				}
+				break
+			}
+		}
+		proveNXDomainNSEC(nsecs(sets, zone), msg.qname)
+		proveNoDataNSEC(nsecs(sets, zone), msg.qname, msg.qtype)
+		if s, _ := nsec3sFor(sets, msg.qname, zone); len(s.list) > 0 {
 			proveNXDomainNSEC3(s, msg.qname)
 			proveNoDataNSEC3(s, msg.qname, msg.qtype)
 		}

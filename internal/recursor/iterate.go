@@ -78,7 +78,7 @@ func delegFrom(nsRecs, glue []rr, zone string) (*delegation, uint32) {
 			if g.name != host || (g.typ != m.TypeA && g.typ != m.TypeAAAA) {
 				continue
 			}
-			if a, ok := netip.AddrFromSlice(g.data); ok {
+			if a, ok := netip.AddrFromSlice(g.data); ok && len(h.addrs) < maxAddrsPerNS && !slices.Contains(h.addrs, a.Unmap()) {
 				h.addrs = append(h.addrs, a.Unmap())
 			}
 		}
@@ -732,7 +732,7 @@ func (e *unreachable) Is(target error) bool { return target == ErrUnreachable }
 func (r *Recursor) serverAddrs(ctx context.Context, t *task, d *delegation, cfg *Config, more bool) []netip.Addr {
 	var out []netip.Addr
 	add := func(a netip.Addr) {
-		if r.allowed(cfg, a) && !(a.Is6() && r.v6Down()) && !slices.Contains(out, a) {
+		if len(out) < maxAddrsPerZone && r.allowed(cfg, a) && !(a.Is6() && r.v6Down()) && !slices.Contains(out, a) {
 			out = append(out, a)
 		}
 	}
@@ -805,7 +805,7 @@ func (r *Recursor) cachedAddrs(host string, cfg *Config) []netip.Addr {
 	for _, qt := range types {
 		if cs, exp, ok := r.sets.get(tkey(host, qt)); ok && now.Before(exp) {
 			for _, data := range cs.set.data {
-				if a, ok := netip.AddrFromSlice(data); ok {
+				if a, ok := netip.AddrFromSlice(data); ok && len(out) < maxAddrsPerNS {
 					out = append(out, a.Unmap())
 				}
 			}
@@ -813,6 +813,15 @@ func (r *Recursor) cachedAddrs(host string, cfg *Config) []netip.Addr {
 	}
 	return out
 }
+
+// A name server name is taken at no more than maxAddrsPerNS addresses, a
+// zone's servers at no more than maxAddrsPerZone (duplicates once): a zone
+// whose many NS records share one long list of addresses cannot make each
+// lookup sort and score hundreds.
+const (
+	maxAddrsPerNS   = 6
+	maxAddrsPerZone = 32
+)
 
 // v6Down reports whether IPv6 is not to be used now: this machine has no
 // IPv6 address that reaches the internet, or IPv6 failed recently.

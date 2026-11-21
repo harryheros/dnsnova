@@ -2,6 +2,7 @@ package recursor
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
@@ -105,7 +106,7 @@ func (r *Recursor) checkSet(ctx context.Context, t *task, cs *cachedSet) (*cache
 	if int(labels) < labelCount(cs.set.name) { // a wildcard expansion: the name itself must not exist
 		p, pttl := r.checkProof(cs.proof, signer, ke, t)
 		v.orig = min(v.orig, pttl) // the proof must not outlive its signatures either
-		if ns := nsecs(p); len(ns) > 0 && proveWildcardNSEC(ns, cs.set.name) {
+		if ns := nsecs(p, signer); len(ns) > 0 && proveWildcardNSEC(ns, cs.set.name) {
 			// remembered for RFC 8198: the wildcard's RRset and the NSEC records
 			wild := "\x01*" + ancestorAt(cs.set.name, int(labels))
 			ws := *cs.set
@@ -118,7 +119,7 @@ func (r *Recursor) checkSet(ctx context.Context, t *task, cs *cachedSet) (*cache
 			r.nsecs.add(signer, nil, p, v.orig, now)
 			return &v, nil
 		}
-		if s, insecure := nsec3sFor(p, cs.set.name); len(s.list) > 0 {
+		if s, insecure := nsec3sFor(p, cs.set.name, signer); len(s.list) > 0 {
 			switch proveWildcardNSEC3(s, cs.set.name, int(labels)) {
 			case proofSecure:
 				return &v, nil
@@ -257,7 +258,7 @@ func (r *Recursor) checkNeg(ctx context.Context, t *task, ne *negEntry, qname st
 		v.sec, v.ede, v.why = secBogus, edeNSECMissing, "no proof of non-existence for "+m.NameString(qname)
 		return &v, nil
 	}
-	if ns := nsecs(checked); len(ns) > 0 {
+	if ns := nsecs(checked, signer); len(ns) > 0 {
 		ok, cut := false, false
 		if ne.rcode == m.RcodeNXDomain {
 			ok = proveNXDomainNSEC(ns, qname)
@@ -272,7 +273,7 @@ func (r *Recursor) checkNeg(ctx context.Context, t *task, ne *negEntry, qname st
 			return &v, nil
 		}
 	}
-	s, insecure := nsec3sFor(checked, qname)
+	s, insecure := nsec3sFor(checked, qname, signer)
 	if len(s.list) == 0 {
 		if insecure {
 			v.sec, v.ede, v.why = secInsecure, edeNSEC3Iterations, "NSEC3 iterations above the limit"
@@ -416,7 +417,7 @@ func (r *Recursor) fetchKeys(ctx context.Context, t *task, zone string) (*keyEnt
 		}
 		a, dt := algSupported(d[2]), digestSupported(d[3])
 		algOK, digestOK = algOK || a, digestOK || dt
-		if a && dt && !(better && d[3] == digestSHA1) {
+		if a && dt && !(better && d[3] == digestSHA1) && len(usable) < maxDSUsed {
 			usable = append(usable, d)
 		}
 	}
@@ -440,21 +441,7 @@ func (r *Recursor) fetchKeys(ctx context.Context, t *task, zone string) (*keyEnt
 	if keyset == nil {
 		return keep(&keyEntry{sec: secBogus, ede: edeDNSKEYMissing, why: "no DNSKEY for " + m.NameString(zone)}, bogusTTL)
 	}
-	var keys, sep []*dnskey
-	for _, d := range keyset.data {
-		k, ok := parseKey(d)
-		if !ok || k.flags&keyFlagZone == 0 || k.flags&keyFlagRevoke != 0 {
-			continue
-		}
-		if len(keys) < maxKeysPerSet {
-			keys = append(keys, k)
-		}
-		for _, d := range usable {
-			if dsMatches(zone, d, k) && !slices.Contains(sep, k) {
-				sep = append(sep, k)
-			}
-		}
-	}
+	keys, sep, _ := matchDS(zone, keyset, usable)
 	if len(sep) == 0 {
 		return keep(&keyEntry{sec: secBogus, ede: edeDNSKEYMissing, why: "no DNSKEY matches the DS for " + m.NameString(zone)}, bogusTTL)
 	}
@@ -470,6 +457,36 @@ func (r *Recursor) fetchKeys(ctx context.Context, t *task, zone string) (*keyEnt
 	cs := &cachedSet{set: keyset, zone: zone, sec: secSecure, orig: ttl}
 	r.sets.set(tkey(zone, typeDNSKEY), cs, now.Add(time.Duration(ttl)*time.Second))
 	return keep(&keyEntry{sec: secSecure, keys: keys}, ttl)
+}
+
+// matchDS returns the zone's keys (up to maxKeysPerSet) and those the DS
+// records point to, and how many digests it computed. The work is bounded
+// however many keys and DS records the zone sends with tags that match and
+// digests that do not: keys past maxKeysExamined are
+// not looked at, and at most maxDSDigests digests are computed.
+func matchDS(zone string, keyset *rrset, usable [][]byte) (keys, sep []*dnskey, digests int) {
+	for i, d := range keyset.data {
+		if i >= maxKeysExamined {
+			break
+		}
+		k, ok := parseKey(d)
+		if !ok || k.flags&keyFlagZone == 0 || k.flags&keyFlagRevoke != 0 {
+			continue
+		}
+		if len(keys) < maxKeysPerSet {
+			keys = append(keys, k)
+		}
+		for _, d := range usable {
+			if len(d) < 4 || binary.BigEndian.Uint16(d) != k.tag || d[2] != k.alg || digests >= maxDSDigests {
+				continue
+			}
+			digests++
+			if dsMatches(zone, d, k) && !slices.Contains(sep, k) {
+				sep = append(sep, k)
+			}
+		}
+	}
+	return keys, sep, digests
 }
 
 func negTTL(a *answer, now time.Time) uint32 {

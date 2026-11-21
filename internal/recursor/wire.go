@@ -33,6 +33,17 @@ const (
 
 var errFormat = errors.New("malformed response")
 
+// A response is refused when it holds more records than maxRecords, or
+// when its names, once the compression is undone, come to more than
+// maxExpanded bytes: a 64 KB message of two-byte pointers to long names
+// would otherwise take megabytes to hold, and every later step would go
+// through every copy. Real answers
+// stay far below both.
+const (
+	maxRecords  = 1024
+	maxExpanded = 256 << 10
+)
+
 // rr is one resource record.
 type rr struct {
 	name  string // lowercase wire name
@@ -254,9 +265,10 @@ func parseMessage(b []byte) (*message, error) {
 	msg := &message{id: m.U16(b, 0), flags: m.U16(b, 2)}
 	msg.rcode = int(msg.flags & 0xF)
 	qd, an, ns, ar := int(m.U16(b, 4)), int(m.U16(b, 6)), int(m.U16(b, 8)), int(m.U16(b, 10))
-	if qd != 1 {
+	if qd != 1 || an+ns+ar > maxRecords {
 		return nil, errFormat
 	}
+	expanded := 0
 	name, off, err := readName(b, m.HeaderLen)
 	if err != nil || off+4 > len(b) {
 		return nil, errFormat
@@ -302,6 +314,9 @@ func parseMessage(b []byte) (*message, error) {
 			}
 			if r.data, err = expandRdata(b, r.typ, next+10, rdl); err != nil {
 				return err
+			}
+			if expanded += len(r.name) + len(r.data); expanded > maxExpanded {
+				return errFormat
 			}
 			*dst = append(*dst, r)
 			off = next + 10 + rdl

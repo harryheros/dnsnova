@@ -20,10 +20,17 @@ const (
 	proofInsecure              // opt-out or unusable parameters: cannot be proven either way
 )
 
-// maxNSEC3Iterations: NSEC3 with more iterations is treated as insecure
-// (RFC 9276), so hashing cannot be used to tie
-// up the server.
-const maxNSEC3Iterations = 150
+// NSEC3 with more iterations or a longer salt is treated as insecure (RFC
+// 9276), so hashing cannot be used to tie up the server (CVE-2023-50868).
+// All the NSEC3
+// records used must share one set of parameters (RFC 5155 7.1), so each
+// name is hashed once whatever their number; a proof needs three or four,
+// and more than maxNSEC3PerProof are not looked at.
+const (
+	maxNSEC3Iterations = 50
+	maxNSEC3Salt       = 64
+	maxNSEC3PerProof   = 16
+)
 
 // ---- NSEC ----
 
@@ -99,11 +106,14 @@ func nsecUsable(n *nsec, qname string) bool {
 	return true
 }
 
-func nsecs(sets []*rrset) []*nsec {
+// nsecs returns the NSEC records of zone in sets. One whose next name lies
+// outside the zone is left out: it could only claim names elsewhere do not
+// exist.
+func nsecs(sets []*rrset, zone string) []*nsec {
 	var out []*nsec
 	for _, s := range sets {
 		if s.typ == typeNSEC {
-			if n, ok := parseNSEC(s); ok {
+			if n, ok := parseNSEC(s); ok && isSub(n.owner, zone) && isSub(n.next, zone) {
 				out = append(out, n)
 			}
 		}
@@ -252,39 +262,42 @@ type nsec3Set struct {
 	hashes map[string][]byte
 }
 
-// nsec3sFor collects the usable NSEC3 records for qname. insecure is set
-// when the parameters cannot be used (unknown hash, too many iterations).
-func nsec3sFor(sets []*rrset, qname string) (s *nsec3Set, insecure bool) {
-	s = &nsec3Set{hashes: map[string][]byte{}}
+// nsec3sFor collects the usable NSEC3 records of zone (the signer: an
+// NSEC3 owner is a hash directly below the zone's apex, so a child zone's
+// NSEC3 records cannot speak for the parent) for
+// qname. insecure is set when the parameters cannot be used (unknown
+// hash, too many iterations, too long a salt).
+func nsec3sFor(sets []*rrset, qname, zone string) (s *nsec3Set, insecure bool) {
+	s = &nsec3Set{hashes: map[string][]byte{}, zone: zone}
 	for _, r := range sets {
 		if r.typ != typeNSEC3 {
 			continue
 		}
 		n, ok := parseNSEC3(r)
-		if !ok || !isSub(qname, n.zone) {
+		if !ok || n.zone != zone || !isSub(qname, zone) {
 			continue
 		}
-		if n.alg != 1 || n.iterations > maxNSEC3Iterations {
+		if n.alg != 1 || n.iterations > maxNSEC3Iterations || len(n.salt) > maxNSEC3Salt {
 			insecure = true
 			continue
 		}
-		if s.zone == "" {
-			s.zone = n.zone
+		if len(s.list) > 0 && (n.iterations != s.list[0].iterations || !bytes.Equal(n.salt, s.list[0].salt)) {
+			continue // another set of parameters: not of this chain
 		}
-		if n.zone == s.zone {
+		if len(s.list) < maxNSEC3PerProof {
 			s.list = append(s.list, n)
 		}
 	}
 	return s, insecure && len(s.list) == 0
 }
 
+// hash is name's hash with the set's parameters (all the same), once.
 func (s *nsec3Set) hash(name string, n *nsec3) []byte {
-	k := name + "\x00" + string(n.salt) + string(rune(n.iterations))
-	if h, ok := s.hashes[k]; ok {
+	if h, ok := s.hashes[name]; ok {
 		return h
 	}
 	h := nsec3Hash(name, n.salt, n.iterations)
-	s.hashes[k] = h
+	s.hashes[name] = h
 	return h
 }
 

@@ -197,7 +197,7 @@ func TestWildcardSignature(t *testing.T) {
 	if !wildcardExpanded(s) {
 		t.Fatal("not recognized as expanded")
 	}
-	ns := nsecs(f.proofs("example.com."))
+	ns := nsecs(f.proofs("example.com."), dotted("example.com."))
 	if !proveWildcardNSEC(ns, s.name) {
 		t.Fatal("no proof that the expanded name does not exist")
 	}
@@ -205,7 +205,7 @@ func TestWildcardSignature(t *testing.T) {
 
 func TestNSECProofs(t *testing.T) {
 	f := loadFixture(t)
-	ns := nsecs(f.proofs("example.com."))
+	ns := nsecs(f.proofs("example.com."), dotted("example.com."))
 	q := dotted
 	if !proveNXDomainNSEC(ns, q("nope.example.com.")) {
 		t.Error("NXDOMAIN not proven")
@@ -248,7 +248,7 @@ func TestNSECProofs(t *testing.T) {
 func TestNSEC3Proofs(t *testing.T) {
 	f := loadFixture(t)
 	q := dotted
-	s, insecure := nsec3sFor(f.proofs("example.net."), q("nope.example.net."))
+	s, insecure := nsec3sFor(f.proofs("example.net."), q("nope.example.net."), q("example.net."))
 	if insecure || len(s.list) == 0 {
 		t.Fatal("no NSEC3")
 	}
@@ -272,7 +272,7 @@ func TestNSEC3Proofs(t *testing.T) {
 	}
 
 	// com uses opt-out: a missing name could be an unsigned delegation
-	c, _ := nsec3sFor(f.proofs("com."), q("nope.com."))
+	c, _ := nsec3sFor(f.proofs("com."), q("nope.com."), q("com."))
 	if p := proveNXDomainNSEC3(c, q("nope.com.")); p != proofInsecure {
 		t.Errorf("opt-out NXDOMAIN: %v", p)
 	}
@@ -284,7 +284,7 @@ func TestNSEC3Proofs(t *testing.T) {
 	}
 
 	// too many iterations: not usable
-	if _, insecure := nsec3sFor(f.proofs("manyiter.com."), q("nope.manyiter.com.")); !insecure {
+	if _, insecure := nsec3sFor(f.proofs("manyiter.com."), q("nope.manyiter.com."), q("manyiter.com.")); !insecure {
 		t.Error("200 iterations accepted")
 	}
 }

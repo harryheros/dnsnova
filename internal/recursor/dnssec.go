@@ -33,6 +33,9 @@ const (
 	keyFlagRevoke   = 0x0080
 	keyFlagSEP      = 0x0001
 	maxKeysPerSet   = 16 // more keys are not tried (KeyTrap, CVE-2023-50387)
+	maxKeysExamined = 64 // DNSKEY records looked at for a DS match
+	maxDSUsed       = 8  // DS records used
+	maxDSDigests    = 16 // DS digests computed per key set
 	maxSigsPerRRset = 8
 	maxValidations  = 64 // signature checks per resolution
 	minRSABits      = 1024
@@ -381,6 +384,12 @@ func verifySet(set *rrset, zone string, keys []*dnskey, now time.Time, budget *i
 	for _, raw := range set.sigs {
 		s, ok := parseSig(raw)
 		if !ok || s.covered != set.typ || s.signer != zone || int(s.labels) > labelCount(set.name) {
+			continue
+		}
+		// fewer labels than the signer has would make the wildcard it was
+		// expanded from lie above the zone: not a signature the zone can
+		// give
+		if int(s.labels) < labelCount(s.signer) {
 			continue
 		}
 		if !isSub(set.name, s.signer) {

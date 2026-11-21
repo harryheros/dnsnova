@@ -4,9 +4,64 @@ All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
 **Security**.
 
-## 1.7.1 (2026-11-21)
+## 1.8.0 (2026-11-21)
 
-From an outside review of 1.7.0.
+Hardening. Attacks on resolvers found and fixed in recent years were gone
+through one by one, and each checked against DNSNova's code. Where DNSNova
+was open to one it is fixed; where it was not, a test now holds it there.
+No new features; lookups are as fast as before.
+
+DNSSEC
+
+- An RRSIG whose labels field is smaller than its signer's label count is
+  refused: it would make the wildcard it claims to be expanded from lie
+  above the zone.
+- NSEC3: at most 50 iterations (was 150) and a salt of at most 64 bytes;
+  beyond, the proof is treated as insecure, as RFC 9276 allows. Only NSEC3
+  records of the zone that signed the answer are used (a child zone's
+  cannot speak for its parent), all with one set of parameters, so each
+  name is hashed once however many records a response carries.
+- An NSEC record whose next name lies outside its zone is not used as a
+  proof, nor kept for answering from the cache (the cache already refused
+  them).
+- Matching DS records to DNSKEY records does bounded work, however many
+  keys with matching tags but no matching digest a zone sends: at most 64
+  keys looked at, 8 DS records used, 16 digests computed.
+
+Responses from name servers
+
+- A response with more than 1,024 records, or whose names take more than
+  256 KB once the compression is undone, is refused: a 64 KB message of
+  pointers to long names would otherwise take megabytes to hold.
+- A name server name is taken at no more than six addresses, a zone's
+  servers at no more than 32, each address once: a zone whose many NS
+  records share a long list of addresses cannot make every lookup score
+  hundreds.
+
+Checked and found sound (now with tests where there were none)
+
+- Signature checks per lookup are bounded (64), for answers and for
+  negative answers and their proofs alike, and a key that cannot be used
+  counts against the bound (KeyTrap, CVE-2023-50387).
+- Denial proofs and the wildcard they go with must be signed by the same
+  zone; NSEC3 proofs reject a closest encloser that is a delegation or a
+  DNAME, so an ancestor zone's opt-out cannot make a signed delegation
+  look unsigned.
+- Records outside the zone of the server asked are dropped, NS records
+  are taken only from referrals, and DNAME only from the answer section.
+- Query IDs come from Go's ChaCha8 generator, which cannot be predicted
+  from its output.
+- Names inside record data must end within the record; compression
+  pointers only point backwards, at most 64 times per name.
+- CNAME chains (12), referrals (40), depth (8) and queries per lookup
+  (150) are bounded; a server that keeps failing cannot loop a lookup. One
+  TCP attempt per question, so a server that closes connections cannot
+  cause a storm of them.
+- Queries for classes other than IN are refused. TSIG, TKEY, SIG(0),
+  UPDATE, NOTIFY, zone transfers, DNS64 and RPZ rewriting, where many such
+  attacks lie, are not part of DNSNova.
+
+## 1.7.1 (2026-11-21)
 
 - **Anycast self-check on servers without plain DNS over UDP.** The check
   that decides whether to announce the route asked the server's own UDP
