@@ -1,8 +1,12 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/binary"
+	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"os/exec"
@@ -125,7 +129,7 @@ func (s *Server) anycastRun(argv []string, to string) bool {
 	return true
 }
 
-// anycastHealthy is one check: healthy, and the UDP listener answers.
+// anycastHealthy is one check: healthy, and a DNS listener answers.
 func (s *Server) anycastHealthy(ctx context.Context) bool {
 	s.any.mu.Lock()
 	th := s.any.testHealth
@@ -136,11 +140,29 @@ func (s *Server) anycastHealthy(ctx context.Context) bool {
 	if status, ok := s.health(); !ok || status == "setup" {
 		return false
 	}
-	addr := s.probeAddr()
-	if !addr.IsValid() {
-		return true // no plain DNS listener (encrypted DNS only): health alone
+	if addr := s.probeAddr(); addr.IsValid() {
+		return probeUDP(ctx, addr)
 	}
-	return probeUDP(ctx, addr)
+	// no plain DNS over UDP: DNS over TCP, else DNS over TLS
+	for _, kind := range []string{"tcp", "tls"} {
+		if addr := s.probeStreamAddr(kind == "tls"); addr.IsValid() {
+			return probeStream(ctx, addr, kind == "tls", s.proxyTrusted(addr.Addr()))
+		}
+	}
+	return true // DoH or DoQ only: health alone
+}
+
+// loopbackFor is where to reach a socket bound to ap from the server
+// itself: ap, or loopback when it listens on every address.
+func loopbackFor(ap netip.AddrPort) netip.AddrPort {
+	a := ap.Addr()
+	if a.IsUnspecified() {
+		a = netip.MustParseAddr("127.0.0.1")
+		if ap.Addr().Is6() && !ap.Addr().Is4In6() {
+			a = netip.IPv6Loopback()
+		}
+	}
+	return netip.AddrPortFrom(a.Unmap(), ap.Port())
 }
 
 // probeAddr is where to send the self-check: the first plain DNS socket,
@@ -149,20 +171,45 @@ func (s *Server) probeAddr() netip.AddrPort {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, l := range s.udp {
-		ap, err := netip.ParseAddrPort(l.conn.LocalAddr().String())
-		if err != nil {
-			continue
+		if ap, err := netip.ParseAddrPort(l.conn.LocalAddr().String()); err == nil {
+			return loopbackFor(ap)
 		}
-		a := ap.Addr()
-		if a.IsUnspecified() {
-			a = netip.MustParseAddr("127.0.0.1")
-			if ap.Addr().Is6() && !ap.Addr().Is4In6() {
-				a = netip.IPv6Loopback()
-			}
-		}
-		return netip.AddrPortFrom(a.Unmap(), ap.Port())
 	}
 	return netip.AddrPort{}
+}
+
+// probeStreamAddr is the same for DNS over TCP, or over TLS.
+func (s *Server) probeStreamAddr(dot bool) netip.AddrPort {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ls := s.tcp
+	if dot {
+		ls = s.dot
+	}
+	for _, l := range ls {
+		if ap, err := netip.ParseAddrPort(l.ln.Addr().String()); err == nil {
+			return loopbackFor(ap)
+		}
+	}
+	return netip.AddrPort{}
+}
+
+// probeQuery is the self-check's question: localhost/A, which the server
+// answers itself.
+func probeQuery() (uint16, []byte) {
+	id := uint16(time.Now().UnixNano())
+	q := []byte{byte(id >> 8), byte(id), 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0}
+	return id, append(q, 9, 'l', 'o', 'c', 'a', 'l', 'h', 'o', 's', 't', 0, 0, 1, 0, 1)
+}
+
+// probeAnswered says whether b answers q: a response (QR), with q's ID
+// and question, and NOERROR.
+func probeAnswered(q, b []byte) bool {
+	if len(b) < len(q) || binary.BigEndian.Uint16(b) != binary.BigEndian.Uint16(q) {
+		return false
+	}
+	return b[2]&0x80 != 0 && m.Rcode(b) == m.RcodeNoError &&
+		binary.BigEndian.Uint16(b[4:]) == 1 && bytes.EqualFold(b[m.HeaderLen:len(q)], q[m.HeaderLen:])
 }
 
 // probeUDP asks addr for localhost/A and expects an answer.
@@ -174,15 +221,57 @@ func probeUDP(ctx context.Context, addr netip.AddrPort) bool {
 	}
 	defer c.Close()
 	c.SetDeadline(time.Now().Add(time.Second))
-	id := uint16(time.Now().UnixNano())
-	q := []byte{byte(id >> 8), byte(id), 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0}
-	q = append(q, 9, 'l', 'o', 'c', 'a', 'l', 'h', 'o', 's', 't', 0, 0, 1, 0, 1)
+	_, q := probeQuery()
 	if _, err := c.Write(q); err != nil {
 		return false
 	}
 	b := make([]byte, 512)
 	n, err := c.Read(b)
-	return err == nil && n >= m.HeaderLen && binary.BigEndian.Uint16(b) == id && m.Rcode(b[:n]) == m.RcodeNoError
+	return err == nil && probeAnswered(q, b[:n])
+}
+
+// probeStream asks the same over TCP, or TLS. Only that the listener
+// answers is checked, not whose certificate it shows: it is this server.
+// From a load balancer's address (server.proxy_protocol), a PROXY header
+// goes first, as the listener requires it there.
+func probeStream(ctx context.Context, addr netip.AddrPort, useTLS, proxy bool) bool {
+	d := net.Dialer{Timeout: time.Second}
+	c, err := d.DialContext(ctx, "tcp", addr.String())
+	if err != nil {
+		return false
+	}
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(2 * time.Second))
+	if proxy {
+		fam := "TCP4"
+		if addr.Addr().Is6() {
+			fam = "TCP6"
+		}
+		la := netip.MustParseAddrPort(c.LocalAddr().String())
+		if _, err := fmt.Fprintf(c, "PROXY %s %s %s %d %d\r\n", fam, la.Addr(), addr.Addr(), la.Port(), addr.Port()); err != nil {
+			return false
+		}
+	}
+	if useTLS {
+		tc := tls.Client(c, &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"dot"}, MinVersion: tls.VersionTLS12}) //nolint:gosec // our own listener, over loopback
+		if err := tc.HandshakeContext(ctx); err != nil {
+			return false
+		}
+		c = tc
+	}
+	_, q := probeQuery()
+	if _, err := c.Write(append(binary.BigEndian.AppendUint16(nil, uint16(len(q))), q...)); err != nil {
+		return false
+	}
+	var lb [2]byte
+	if _, err := io.ReadFull(c, lb[:]); err != nil {
+		return false
+	}
+	b := make([]byte, binary.BigEndian.Uint16(lb[:]))
+	if _, err := io.ReadFull(c, b); err != nil {
+		return false
+	}
+	return probeAnswered(q, b)
 }
 
 // anycastState is "announced", "withdrawn", or "" when anycast is off.

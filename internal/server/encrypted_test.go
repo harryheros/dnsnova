@@ -165,6 +165,12 @@ rrl_rate = 0
 		t.Fatalf("new certificate not served: %v", err)
 	}
 	c2.Close()
+
+	// the anycast self-check reaches the DoT listener too (for a server
+	// with encrypted DNS only)
+	if a := s.probeStreamAddr(true); !a.IsValid() || !probeStream(t.Context(), a, true, false) {
+		t.Fatalf("DoT probe failed (%v)", a)
+	}
 }
 
 // freeAddr returns a loopback address whose port is currently free for
