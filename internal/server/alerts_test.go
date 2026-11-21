@@ -96,6 +96,9 @@ func TestEvaluate(t *testing.T) {
 			in.bogus = 150
 			in.failures = []recursor.Failure{{Name: "broken.example.", Type: "A", EDE: "DNSSEC Bogus", Count: 150, Last: now}}
 		}, []string{"dnssec_failures=warning"}},
+		{"clock days behind", func(in *alertInput) {
+			in.recursion, in.clockOff = true, 400*24*time.Hour
+		}, []string{"clock=critical"}},
 		{"certificate in 10 days", func(in *alertInput) {
 			in.certMode, in.cert = "acme", tlsmgr.Status{Ready: true, NotAfter: now.Add(10 * 24 * time.Hour)}
 		}, []string{"cert_expiry=warning"}},

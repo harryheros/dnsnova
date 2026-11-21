@@ -54,6 +54,9 @@ type Settings struct {
 	// every upstream query: one fixed network, the same for all clients,
 	// so the cache holds one view. Changing it clears the cache.
 	ECS []byte
+	// Rebinding refuses public names that point into private networks;
+	// nil: off.
+	Rebinding *Rebinding
 	// Forward sends names under some domains to servers of their own
 	// (local.forward), never to the upstreams. Nil: none.
 	Forward *Forwards
@@ -169,6 +172,9 @@ type Result struct {
 	// BlockedByGroup: blocked by a rule of the client's group, not by the
 	// block lists.
 	BlockedByGroup bool
+	// Rebinding: an answer refused because it pointed into a private
+	// network (DNS rebinding protection)
+	Rebinding bool
 }
 
 // Resolve answers one raw query. udp applies the client's UDP size limit.
@@ -243,12 +249,18 @@ func (r *Resolver) resolve(req []byte, o Opts, mayFetch bool) (Result, bool) {
 	key := q.CacheKey()
 	now := r.now()
 	e := r.cache.get(key)
+	if e != nil {
+		e.touch()
+	}
 	if e != nil && now.Before(e.expire) {
 		if s.Prefetch && e.ttl >= 10 && e.expire.Sub(now) < time.Duration(e.ttl)*time.Second/10 {
 			r.refreshAsync(key, q, e, now)
 		}
 		if blocked, byGroup := f.cnameBlocked(e); blocked {
 			return f.blocked(byGroup), true
+		}
+		if f.rebound(e) {
+			return f.rebinding(), true
 		}
 		res := Result{Resp: r.build(e, req, q, now, false, s), Q: q, Source: stats.SourceCache, Status: "hit"}
 		if e.failure {
@@ -262,6 +274,9 @@ func (r *Resolver) resolve(req []byte, o Opts, mayFetch bool) (Result, bool) {
 		r.refreshAsync(key, q, e, now)
 		if blocked, byGroup := f.cnameBlocked(e); blocked {
 			return f.blocked(byGroup), true
+		}
+		if f.rebound(e) {
+			return f.rebinding(), true
 		}
 		res := Result{Resp: r.build(e, req, q, now, true, s), Q: q, Source: stats.SourceStale, Status: "stale"}
 		r.stats.LatencyCache.Observe(r.now().Sub(start))
@@ -284,6 +299,9 @@ func (r *Resolver) resolve(req []byte, o Opts, mayFetch bool) (Result, bool) {
 	}
 	if blocked, byGroup := f.cnameBlocked(fresh); blocked {
 		return f.blocked(byGroup), true
+	}
+	if f.rebound(fresh) {
+		return f.rebinding(), true
 	}
 	res := Result{Resp: r.build(fresh, req, q, r.now(), false, s), Q: q, Source: stats.SourceUpstream, Status: "miss"}
 	if fresh.failure {

@@ -272,6 +272,13 @@ func localNames(c *config.Config) *resolver.LocalNames {
 	return resolver.NewLocalNames(recs)
 }
 
+func rebindingFrom(c *config.Config) *resolver.Rebinding {
+	if !c.Local.RebindingProtection {
+		return nil
+	}
+	return resolver.NewRebinding(c.Local.AllowPrivate)
+}
+
 func settingsFrom(c *config.Config, st *state) resolver.Settings {
 	return resolver.Settings{
 		Forward:             st.fwd,
@@ -280,6 +287,7 @@ func settingsFrom(c *config.Config, st *state) resolver.Settings {
 		DDR:                 ddrFrom(c),
 		CheckZone:           checkZone(c),
 		Local:               localNames(c),
+		Rebinding:           rebindingFrom(c),
 		CacheSize:           c.Cache.Size,
 		MinTTL:              c.Cache.MinTTL,
 		MaxTTL:              c.Cache.MaxTTL,

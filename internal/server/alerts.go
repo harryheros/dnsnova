@@ -83,8 +83,9 @@ type alertInput struct {
 	cert      tlsmgr.Status
 	reloadErr string
 	lists     []filter.ListStatus
-	configErr string // follower: the primary's configuration does not work here
-	anycast   string // announced, withdrawn or "" (off)
+	configErr string        // follower: the primary's configuration does not work here
+	anycast   string        // announced, withdrawn or "" (off)
+	clockOff  time.Duration // recursor.ClockOff
 }
 
 func pct(f float64) string { return fmt.Sprintf("%.1f%%", f*100) }
@@ -184,6 +185,13 @@ func evaluate(in alertInput) []alert.Condition {
 		}
 		add(alert.Condition{Key: "dnssec_failures", Severity: alert.Warning,
 			Summary: fmt.Sprintf("%d answers refused for failing DNSSEC validation in the last %s", in.bogus, mins), Details: d})
+	}
+
+	// the clock (needs no window: the root's signatures show it)
+	if in.clockOff != 0 {
+		add(alert.Condition{Key: "clock", Severity: alert.Critical,
+			Summary: "This server's clock is " + recursor.ClockText(in.clockOff) + ": DNSSEC answers fail",
+			Details: []string{"the clock reads " + in.now.UTC().Format("2006-01-02 15:04 UTC"), "set the time, for example with NTP (systemd-timesyncd, chrony)"}})
 	}
 
 	// the certificate
@@ -331,6 +339,9 @@ func (s *Server) alertTick(now time.Time) {
 		bogus: max(cur.bogus-old.bogus, 0), recursion: cfg.Recursion.Enabled, certMode: cfg.TLS.Certificate, reloadErr: reloadErr}
 	if in.span < alertEvery { // just started: no window yet, only what needs none
 		in.counts, in.bogus = stats.Counts{}, 0
+	}
+	if cfg.Recursion.Enabled {
+		in.clockOff = s.Rec.ClockOff()
 	}
 	for _, m := range members {
 		addr := m.U.String()

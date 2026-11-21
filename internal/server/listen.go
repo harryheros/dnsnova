@@ -313,6 +313,9 @@ func blockedSource(res resolver.Result) string {
 	if res.BlockedByGroup {
 		return "blocked (group)"
 	}
+	if res.Rebinding {
+		return "blocked (rebinding)"
+	}
 	return stats.SourceName(res.Source)
 }
 

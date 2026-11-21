@@ -358,3 +358,29 @@ func TestClientSubnetNotOnInternet(t *testing.T) {
 		}
 	}
 }
+
+// Rebinding protection is on by default; with an upstream on the local
+// network (a router, an office's own server), the names it answers with
+// private addresses would get none, and the configuration says so.
+func TestRebindingProtectionDefaultsAndWarning(t *testing.T) {
+	base := "[server]\nmode = \"private\"\nlisten = [\"127.0.0.1:53\"]\n[access]\nallow = [\"192.168.0.0/16\"]\n"
+	c, _, warns, err := Load([]byte(base + "[upstream]\nprimary = [\"tls://dns.example#9.9.9.9\"]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Local.RebindingProtection || strings.Contains(strings.Join(warns, " "), "rebinding") {
+		t.Fatalf("default: %v %v", c.Local.RebindingProtection, warns)
+	}
+	for _, up := range []string{"192.168.1.1", "udp://10.0.0.53:53", "tls://dc.corp.example#10.0.0.53"} {
+		_, _, warns, err = Load([]byte(base + "[upstream]\nprimary = [\"" + up + "\"]\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(strings.Join(warns, " "), "local.rebinding_protection") {
+			t.Fatalf("%s: no warning: %v", up, warns)
+		}
+	}
+	if _, _, _, err := Load([]byte(base + "[local]\nallow_private = [\"not a domain\"]\n")); err == nil {
+		t.Fatal("bad allow_private accepted")
+	}
+}

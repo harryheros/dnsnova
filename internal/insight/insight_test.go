@@ -61,15 +61,17 @@ func TestTopPrivateCountsDevices(t *testing.T) {
 	top := NewTop(true, 24, now)
 	top.SetPrivate(true)
 	for range 50 {
-		top.Add("shared.example", netip.MustParseAddr("192.168.1.10"))
-		top.Add("shared.example", netip.MustParseAddr("192.168.1.11"))
+		// four devices: two could share a bit of the sketch (1 in 64)
+		for _, d := range []string{"192.168.1.10", "192.168.1.11", "192.168.1.12", "192.168.1.13"} {
+			top.Add("shared.example", netip.MustParseAddr(d))
+		}
 		top.Add("mine.example", netip.MustParseAddr("192.168.1.10"))
 		// one IPv6 device whose address changes within its /64
 		top.Add("v6only.example", netip.MustParseAddr("2001:db8:1:2::1"))
 		top.Add("v6only.example", netip.MustParseAddr("2001:db8:1:2::abcd"))
 	}
 	l := top.List(time.Hour, now, 10)
-	if len(l) != 1 || l[0].Name != "shared.example" || l[0].Count != 100 {
+	if len(l) != 1 || l[0].Name != "shared.example" || l[0].Count != 200 {
 		t.Fatalf("list = %+v", l)
 	}
 	if n, dev := top.Threshold(); n != MinDevices || !dev {

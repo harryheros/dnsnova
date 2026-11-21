@@ -2,7 +2,7 @@
 
 > A secure DNS server, from one box at home to a public resolver on several continents.
 
-[![Version](https://img.shields.io/badge/version-v1.6.8-blue)](https://github.com/harryheros/dnsnova/releases)
+[![Version](https://img.shields.io/badge/version-v1.7.0-blue)](https://github.com/harryheros/dnsnova/releases)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](./LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux%20amd64%20%7C%20arm64%20%7C%20arm-lightgrey.svg)](#)
 [![CI](https://github.com/harryheros/dnsnova/actions/workflows/ci.yml/badge.svg)](https://github.com/harryheros/dnsnova/actions/workflows/ci.yml)
@@ -44,6 +44,7 @@ The wizard sets the administrator, who the server is for, recursion or upstreams
 - **Opt-in filtering**: the usual addresses answer everything; a second address, name or DoH path blocks ads, trackers, malware and CNAME-cloaked trackers. The default list is [ShieldNova](https://github.com/harryheros/shieldnova) (free to use in DNSNova, commercially too); AdGuard-style, hosts, RPZ and domain lists also work. A broken list update never replaces a working list, *Check a domain* shows which list blocks a name, and one click allows it again.
 - **Client groups**: devices sorted by network, each group with its own filtering and its own blocked or allowed domains (the finance office filtered, the lab never, social networks blocked for guests).
 - **Local names** such as `nas.home`; **domains with their own servers**, such as an office's Active Directory or a router's device names, asked only there; blocked clients; and EDNS Client Subnet for a network you choose (never your clients' addresses).
+- **DNS rebinding protection**: a name from outside that answers with an address of your network gets none, so a web page cannot reach your router, NAS or printer through it; your own names are let through, and one click in the query log allows a public name you gave a device at home.
 
 ### On the internet
 
@@ -64,8 +65,8 @@ The wizard sets the administrator, who the server is for, recursion or upstreams
 - **Alerts and monitoring**: Telegram, Discord, Slack or webhook notifications, a heartbeat for outside monitors, Prometheus metrics and a health check ([docs/alerts.md](./docs/alerts.md)).
 - **Diagnostics**: trace any lookup from the root, server by server; a DNSSEC page of failing domains, each exemptible (RFC 7646); an in-memory query log that stops by itself.
 - **Fast**: on one CPU core, about 200,000 answers per second from the cache, 94,000 over DNS over TLS, and 23,000 for new names forwarded to an upstream; a 225,000-rule blocklist costs about 14% ([method](./docs/benchmark.md)).
-- **Quick to recover**: the cache survives restarts (by default on public servers), with what recursion learnt about which name servers answer fastest, and recent failures are remembered so a broken domain cannot flood upstreams.
-- **Private by default**: no telemetry, and queries and client addresses are not written to disk ([PRIVACY.md](./PRIVACY.md)). Where an office must account for its DNS, it can keep every query for a number of days (searchable and downloadable in the web interface, and stated on the status page) or send them as dnstap to a SIEM or log collector.
+- **Quick to recover**: the cache survives restarts (by default on public servers), with what recursion learnt about which name servers answer fastest, and recent failures are remembered so a broken domain cannot flood upstreams. When the cache is full, answers clients keep asking for stay and ones asked once go first. A machine started with a wrong clock (DNSSEC then fails) is noticed and reported, with by how much.
+- **Private by default**: no telemetry, and queries and client addresses are not written to disk ([PRIVACY.md](./PRIVACY.md)). Queries to encrypted upstreams are padded, so their length does not tell the name; queries that do not ask for recursion are refused, so nobody can read what others looked up from the cache. Where an office must account for its DNS, it can keep every query for a number of days (searchable and downloadable in the web interface, and stated on the status page) or send them as dnstap to a SIEM or log collector.
 - **Status page** (optional): addresses, setup steps per device, and a check that shows visitors whether they use the server.
 
 ### On the server itself

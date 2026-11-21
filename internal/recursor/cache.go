@@ -182,10 +182,14 @@ type nsHost struct {
 // ---- servers ----
 
 type server struct {
-	srtt     time.Duration // smoothed round-trip time; 0 = unknown
-	fails    int           // consecutive timeouts
-	until    time.Time     // do not use before this (after failures)
-	noEDNS   time.Time     // answers only without EDNS until then
+	srtt   time.Duration // smoothed round-trip time; 0 = unknown
+	rttvar time.Duration // how much it varies (RFC 6298)
+	// decayed: srtt was lowered while others were chosen (see decay); the
+	// next answer measures it afresh
+	decayed  bool
+	fails    int       // consecutive timeouts
+	until    time.Time // do not use before this (after failures)
+	noEDNS   time.Time // answers only without EDNS until then
 	lame     map[string]time.Time
 	lastUsed time.Time
 	// DNS Cookies (RFC 7873): the server cookie it gave, how many valid
@@ -275,7 +279,9 @@ func (in *infra) timeout(a netip.Addr) time.Duration {
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	s := in.get(a)
-	if s.srtt == 0 {
+	if s.srtt == 0 || s.decayed {
+		// not measured, or not lately: the hedge, not the timeout, keeps
+		// the wait short
 		return 800 * time.Millisecond
 	}
 	return min(max(3*s.srtt, 150*time.Millisecond), 2*time.Second)
@@ -285,12 +291,59 @@ func (in *infra) ok(a netip.Addr, rtt time.Duration, now time.Time) {
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	s := in.get(a)
-	if s.srtt == 0 || s.fails > 0 {
-		s.srtt = rtt
+	if s.srtt == 0 || s.fails > 0 || s.decayed {
+		s.srtt, s.rttvar, s.decayed = rtt, rtt/2, false
 	} else {
+		d := s.srtt - rtt
+		if d < 0 {
+			d = -d
+		}
+		s.rttvar = (3*s.rttvar + d) / 4
 		s.srtt = (7*s.srtt + rtt) / 8
 	}
 	s.fails, s.until, s.lastUsed = 0, time.Time{}, now
+}
+
+// decay lowers, a little, the round trip of each of others slower than
+// chosen, the server just chosen for a zone. A server once slow (a lost
+// packet, a busy moment) would otherwise never be asked again while a
+// sibling answers, though it may be the fastest; so after a few dozen
+// choices of another (2% each) it is tried once, and its answer sets its
+// round trip anew; so is a server never asked yet. Servers set aside
+// after failures are left alone. As BIND does.
+func (in *infra) decay(others []netip.Addr, chosen netip.Addr) {
+	if len(others) == 0 {
+		return
+	}
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	best := in.get(chosen).srtt
+	if best == 0 {
+		return
+	}
+	for _, a := range others {
+		s := in.get(a)
+		if s.fails > 0 {
+			continue
+		}
+		if s.srtt == 0 {
+			// never asked: it may be the fastest of all, so it is tried
+			// in the same way, from the round trip assumed of it
+			s.srtt, s.lastUsed = unknownRTT, time.Now()
+		} else if s.srtt <= best {
+			continue
+		}
+		s.srtt = s.srtt * 49 / 50 // once below best, it is chosen next
+		s.decayed = true
+	}
+}
+
+// rttStats returns a's smoothed round trip and how much it varies.
+func (in *infra) rttStats(a netip.Addr) (srtt, rttvar time.Duration) {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	s := in.get(a)
+	return s.srtt, s.rttvar
 }
 
 // slow notes that a was still not answering after d, when another
@@ -300,10 +353,16 @@ func (in *infra) slow(a netip.Addr, d time.Duration, now time.Time) {
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	s := in.get(a)
-	// at once, not averaged in: the next question goes to the faster
-	// server, not to this one for another wait
-	if d > s.srtt {
-		s.srtt = d
+	// Weighted a quarter: once may be a lost packet, which says nothing
+	// of how fast it is; a server slow again and again soon gives way
+	// (and an unknown one takes the time at once).
+	switch {
+	case d <= s.srtt:
+	case s.srtt == 0:
+		s.srtt, s.rttvar = d, d/2
+	default:
+		s.rttvar = (3*s.rttvar + d - s.srtt) / 4
+		s.srtt = (3*s.srtt + d) / 4
 	}
 	s.lastUsed = now
 }

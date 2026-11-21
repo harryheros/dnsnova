@@ -459,6 +459,9 @@ func (r *Recursor) fetchKeys(ctx context.Context, t *task, zone string) (*keyEnt
 		return keep(&keyEntry{sec: secBogus, ede: edeDNSKEYMissing, why: "no DNSKEY matches the DS for " + m.NameString(zone)}, bogusTTL)
 	}
 	ttl, _, err := verifySet(keyset, zone, sep, now, &t.sigBudget)
+	if zone == "" {
+		r.noteClock(keyset, sep, now, err)
+	}
 	if err != nil {
 		ede, why := sigEDE(err)
 		return keep(&keyEntry{sec: secBogus, ede: ede, why: why + " for " + m.NameString(zone) + " DNSKEY"}, bogusTTL)

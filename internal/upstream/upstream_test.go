@@ -2,6 +2,7 @@ package upstream
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -187,6 +188,9 @@ func TestDoHAndBootstrap(t *testing.T) {
 		if binary.BigEndian.Uint16(body) != 0 {
 			t.Error("DoH queries must use ID 0")
 		}
+		if len(body)%m.QueryPaddingBlock != 0 {
+			t.Errorf("DoH query of %d bytes: not padded to %d", len(body), m.QueryPaddingBlock)
+		}
 		w.Header().Set("Content-Type", "application/dns-message")
 		w.Write(auth.Answer(body, false))
 	}))
@@ -281,5 +285,59 @@ func TestUDPForgedAnswersGoToTCP(t *testing.T) {
 	}
 	if r := dnstest.Parse(t, resp); r.AN != 1 {
 		t.Fatalf("%d answers", r.AN)
+	}
+}
+
+// Queries to DoT upstreams are padded (RFC 8467): encrypted, their length
+// would still tell the length of the name.
+func TestDoTQueriesPadded(t *testing.T) {
+	auth := dnstest.Serve(t)
+	ts := httptest.NewTLSServer(http.NotFoundHandler()) // for its certificate
+	defer ts.Close()
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: ts.TLS.Certificates})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	sizes := make(chan int, 4)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				for {
+					var lb [2]byte
+					if _, err := io.ReadFull(c, lb[:]); err != nil {
+						return
+					}
+					q := make([]byte, binary.BigEndian.Uint16(lb[:]))
+					if _, err := io.ReadFull(c, q); err != nil {
+						return
+					}
+					sizes <- len(q)
+					resp := auth.Answer(q, false)
+					c.Write(append(binary.BigEndian.AppendUint16(nil, uint16(len(resp))), resp...))
+				}
+			}()
+		}
+	}()
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+	s, err := ParseSpec("tls://example.com:" + port + "#127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, _ := New(s, NewDialer(nil), ts.Client().Transport.(*http.Transport).TLSClientConfig)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	for _, name := range []string{"a", "a-much-longer-name-than-the-first-one"} {
+		if _, err := u.Exchange(ctx, m.BuildUpstreamQuery(&m.Query{Name: m.WireName(name, "test"), Type: 1, Class: 1}, nil)); err != nil {
+			t.Fatal(err)
+		}
+		if n := <-sizes; n != m.QueryPaddingBlock {
+			t.Fatalf("%s: DoT query of %d bytes, want %d", name, n, m.QueryPaddingBlock)
+		}
 	}
 }

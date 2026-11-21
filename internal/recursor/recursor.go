@@ -100,13 +100,15 @@ type Stats struct {
 type Recursor struct {
 	cfg     atomic.Pointer[Config]
 	anchors atomic.Pointer[rrset]
-	sets    *ttlMap[*cachedSet]
-	wilds   *ttlMap[*cachedSet] // validated wildcard RRsets, by wildcard name (RFC 8198)
-	negs    *ttlMap[*negEntry]
-	keys    *ttlMap[*keyEntry]
-	delegs  *ttlMap[*delegation]
-	infra   *infra
-	fl      flights
+	// clockOff: see ClockOff (clock.go)
+	clockOff atomic.Int64
+	sets     *ttlMap[*cachedSet]
+	wilds    *ttlMap[*cachedSet] // validated wildcard RRsets, by wildcard name (RFC 8198)
+	negs     *ttlMap[*negEntry]
+	keys     *ttlMap[*keyEntry]
+	delegs   *ttlMap[*delegation]
+	infra    *infra
+	fl       flights
 	// netMu orders a change of the client subnet against resolutions (see
 	// SetConfig): nothing learnt for the old network is cached after it.
 	netMu sync.RWMutex

@@ -183,6 +183,10 @@ type Recursion struct {
 	Forged            int64 `json:"forged"`      // UDP answers dropped as forged on the path
 	Rewritten         int64 `json:"rewritten"`   // answers no name server sends: the network answers for them
 	Intercepted       bool  `json:"intercepted"` // the network answers DNS in place of the name servers now
+	// ClockOffSeconds: this machine's clock is behind (positive) or ahead
+	// (negative) of the time DNSSEC signatures show, by at least this much;
+	// 0 when it looks right
+	ClockOffSeconds int64 `json:"clock_off_seconds"`
 	// lookups that asked name servers, end to end: typical and 95th
 	// percentile, in milliseconds (0 before the first)
 	LookupP50MS     float64        `json:"lookup_p50_ms"`

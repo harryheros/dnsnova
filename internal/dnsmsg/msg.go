@@ -62,6 +62,9 @@ const (
 
 	// PaddingBlock is the response block size for EDNS padding (RFC 8467).
 	PaddingBlock = 468
+	// QueryPaddingBlock is the block size queries to encrypted upstreams
+	// are padded to (RFC 8467), so their length does not tell the name.
+	QueryPaddingBlock = 128
 
 	FlagQR = 1 << 15
 	FlagAA = 1 << 10

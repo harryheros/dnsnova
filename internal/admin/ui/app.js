@@ -762,12 +762,21 @@ function route() {
   return (location.hash.replace(/^#\/?/, "") || "overview").split("?")[0];
 }
 
+// clockText says how far off the server's clock is: "3 days behind".
+function clockText(sec) {
+  const way = sec > 0 ? "behind" : "ahead", s = Math.abs(sec);
+  if (s >= 2 * 86400) return `${Math.floor(s / 86400)} days ${way}`;
+  if (s >= 2 * 3600) return `${Math.floor(s / 3600)} hours ${way}`;
+  return `${Math.floor(s / 60)} min ${way}`;
+}
+
 // health sums up the server in one line, for the top bar and the overview:
 // resolution from the root servers, or the state of the upstreams.
 function health(st, ups) {
   const rec = st && st.recursion && st.recursion.enabled ? st.recursion : null;
   if (st && st.serves_dns === false) return ["warn", "Not serving DNS"];
   if (rec && rec.intercepted) return ["err", "DNS intercepted by the network"];
+  if (rec && rec.clock_off_seconds) return ["err", "Server clock is wrong"];
   if (rec) return rec.healthy ? ["ok", "System Online"] : ["err", "Name servers unreachable"];
   const states = ups.map((u) => upState(u, ups).cls);
   const failing = states.filter((x) => x === "err").length, slow = states.filter((x) => x === "warn").length;
@@ -1386,6 +1395,7 @@ function recCard(rec) {
   ];
   if (rec.fallback) rows.push(["idle", "Answered by upstreams", fmt.short(rec.fallbacks), "when no name server answered"]);
   if (rec.intercepted) rows.unshift(["err", "Network answers for name servers", fmt.short(rec.rewritten), "port 53 intercepted: use your own DNSNova elsewhere as upstream"]);
+  if (rec.clock_off_seconds) rows.unshift(["err", "Server clock is wrong", clockText(rec.clock_off_seconds), "DNSSEC answers fail until the time is set (NTP)"]);
   if (rec.forged) rows.push(["warn", "Forged answers dropped", fmt.short(rec.forged), "injected on the path; the genuine answers were used"]);
   if (rec.spoofed) rows.push(["warn", "Forged answers stopped", fmt.short(rec.spoofed), "someone sent fake answers; asked again over TCP"]);
   return card("s4", "Resolution", "network", more("#/settings/dns", "Settings"),
@@ -1863,8 +1873,9 @@ function qlTable(entries, withDate, pick) {
       h("td", { class: "mono small" }, pickable(q.client, "client"), q.group ? h("span", { class: "tag", title: "Client group" }, q.group) : null), h("td", { class: "small" }, q.proto, q.filtered ? h("span", { class: "tag", title: "The block lists applied" }, "filtered") : null),
       h("td", { class: "mono small ellipsis", title: q.name }, pickable(q.name, "domain"), q.new_domain ? h("span", { class: "tag warn", title: "The first lookup of this domain here" }, "new") : null), h("td", { class: "small" }, q.type),
       h("td", { class: "small " + (q.rcode === "NOERROR" ? "" : "warn") }, q.rcode),
-      h("td", { class: "small " + (q.source.startsWith("blocked") ? "warn" : "muted"), title: q.source === "blocked (group)" ? "By a rule of the client's group (Settings › DNS & upstreams › Clients)" : null }, q.source,
-        q.source === "blocked" ? h("button", { type: "button", class: "btn link small", title: "Never block " + q.name, onclick: () => allowDomain(q.name).catch((e) => toast(e.message, "err")) }, "Allow") : null),
+      h("td", { class: "small " + (q.source.startsWith("blocked") ? "warn" : "muted"), title: q.source === "blocked (group)" ? "By a rule of the client's group (Settings › DNS & upstreams › Clients)" : q.source === "blocked (rebinding)" ? "A name from outside answered with an address of this network: no address given (Settings › DNS & upstreams › Local names)" : null }, q.source,
+        q.source === "blocked" ? h("button", { type: "button", class: "btn link small", title: "Never block " + q.name, onclick: () => allowDomain(q.name).catch((e) => toast(e.message, "err")) }, "Allow") : null,
+        q.source === "blocked (rebinding)" ? h("button", { type: "button", class: "btn link small", title: `Let ${q.name} point into this network (your own name for a device here)`, onclick: () => allowPrivate(q.name).catch((e) => toast(e.message, "err")) }, "Allow") : null),
       h("td", { class: "r num small" }, (q.ms ? fmt.ms(q.ms) : "<0.1") + " ms"))))));
 }
 
@@ -2169,6 +2180,8 @@ const SETTINGS = {
       { title: "Local names", fields: [
         { key: "local.records", label: "Names answered here", type: "list", help: "One per line: a name and an address, such as \u201cnas.home 192.168.1.5\u201d. \u201c*.dev.home\u201d covers every name under dev.home. For IPv4 and IPv6, use two lines. 0.0.0.0 blocks a name." },
         { key: "local.forward", label: "Domains with their own servers", type: "list", help: "One per line: a domain and its servers, such as \u201ccorp.example 10.0.0.53\u201d or \u201clan 192.168.1.1\u201d. Names under it are asked from those servers only (an office\u2019s Active Directory, a router\u2019s device names), also private reverse zones such as 168.192.in-addr.arpa. Servers are written as upstreams are." },
+        { key: "local.rebinding_protection", label: "Rebinding protection", type: "bool", help: "A name from outside that answers with an address of this network (192.168.x.x, 10.x.x.x, 127.0.0.1…) gets no address, or a web page could reach your router, NAS or printer through it. Names under the domains above, names under lan, home, internal or home.arpa, and one-word names are let through." },
+        { key: "local.allow_private", label: "Public names for devices here", type: "list", help: "One domain per line, such as “nas.example.com”: names under it may point into this network (a public name you gave a device at home). The query log’s Allow adds one.", show: (v) => v["local.rebinding_protection"] },
       ] },
       { title: "Clients", fields: [
         { key: "clients.groups", label: "Groups", type: "groups", help: "Devices sorted by network, each group with its own filtering: the finance office filtered, the lab never, social networks blocked for the guests. The query log shows each query's group." },
@@ -2707,6 +2720,17 @@ async function allowDomain(name) {
   if (cur.includes(name)) { toast(`${name} is already allowed`); return; }
   await api("PATCH", "/config", { hash: cfg.hash, set: { "filter.allow": [...cur, name] } });
   toast(`${name} will no longer be blocked`);
+}
+
+// allowPrivate adds a name to local.allow_private (from the query log): a
+// public name the administrator gave a device on this network.
+async function allowPrivate(name) {
+  name = name.replace(/\.$/, "");
+  const cfg = await api("GET", "/config");
+  const cur = (cfg.settings.find((x) => x.key === "local.allow_private") || {}).value || [];
+  if (cur.includes(name)) { toast(`${name} is already allowed`); return; }
+  await api("PATCH", "/config", { hash: cfg.hash, set: { "local.allow_private": [...cur, name] } });
+  toast(`${name} may now point into this network`);
 }
 
 function clientAddresses(cur) {
