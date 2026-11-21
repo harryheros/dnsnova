@@ -9,6 +9,10 @@ on:
 
 permissions:
   contents: write
+  # signed build provenance (Sigstore), checked with gh attestation verify
+  id-token: write
+  attestations: write
+  artifact-metadata: write
 
 jobs:
   build:
@@ -38,6 +42,14 @@ jobs:
           cp install.sh dist/install.sh
           (cd dist && sha256sum dnsnova-linux-*.tar.gz install.sh > SHA256SUMS)
           cat dist/SHA256SUMS
+      - name: attest
+        # proves each file was built by this workflow from this tag's
+        # commit: a file swapped later, with its checksum, fails the check
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            dist/dnsnova-linux-*.tar.gz
+            dist/install.sh
       - name: upload
         env:
           GH_TOKEN: ${{ github.token }}

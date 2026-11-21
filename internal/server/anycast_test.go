@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	m "github.com/harryheros/dnsnova/internal/dnsmsg"
 )
 
 // anycastServer runs a server whose anycast commands append a word to a
@@ -70,7 +72,8 @@ func TestAnycastRiseFallDrain(t *testing.T) {
 	answered := make(chan bool, 1)
 	go func() {
 		time.Sleep(100 * time.Millisecond) // during the drain
-		_, err := udpAsk(t, udp[0], probeQuery(), time.Second)
+		_, q := probeQuery()
+		_, err := udpAsk(t, udp[0], q, time.Second)
 		answered <- err == nil
 	}()
 	s.Shutdown()
@@ -108,6 +111,42 @@ func TestAnycastProbe(t *testing.T) {
 	}
 }
 
-func probeQuery() []byte {
-	return []byte{0, 7, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 9, 'l', 'o', 'c', 'a', 'l', 'h', 'o', 's', 't', 0, 0, 1, 0, 1}
+// The probe accepts only an answer to its own question: a reply with the
+// same ID that is not a response, has no question or another one fails.
+func TestProbeAnsweredChecksTheReply(t *testing.T) {
+	_, q := probeQuery()
+	good := append([]byte{}, q...)
+	good[2] |= 0x80 // QR
+	if !probeAnswered(q, good) {
+		t.Fatal("a proper answer refused")
+	}
+	notResp := append([]byte{}, q...)
+	noQ := append([]byte{}, good[:m.HeaderLen]...)
+	noQ[5] = 0
+	other := append([]byte{}, good...)
+	other[m.HeaderLen+1] = 'x'
+	badID := append([]byte{}, good...)
+	badID[1]++
+	for name, b := range map[string][]byte{"not a response": notResp, "no question": noQ, "another question": other, "another ID": badID} {
+		if probeAnswered(q, b) {
+			t.Fatalf("%s accepted", name)
+		}
+	}
+}
+
+// Without a UDP listener, the probe asks over TCP; a closed listener fails
+// it.
+func TestAnycastProbeOverTCP(t *testing.T) {
+	s, _, _ := start(t, "")
+	addr := s.probeStreamAddr(false)
+	if !addr.IsValid() {
+		t.Skip("no TCP listener in the test server")
+	}
+	if !probeStream(t.Context(), addr, false, false) {
+		t.Fatal("TCP probe of a running server failed")
+	}
+	s.Shutdown()
+	if probeStream(t.Context(), addr, false, false) {
+		t.Fatal("TCP probe passed with the listener closed")
+	}
 }

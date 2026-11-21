@@ -4,6 +4,27 @@ All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
 **Security**.
 
+## 1.7.1 (2026-11-21)
+
+From an outside review of 1.7.0.
+
+- **Anycast self-check on servers without plain DNS over UDP.** The check
+  that decides whether to announce the route asked the server's own UDP
+  socket; a server with DNS over TCP or encrypted DNS only was judged by
+  its health alone, so a listener that had stopped answering kept the
+  route. Now it asks over TCP, else over DNS over TLS (with a PROXY header
+  first where the listener requires one); only a server with DoH or DoQ
+  alone still goes by its health.
+- **The self-check accepts only an answer to its own question**: a
+  response (QR set), with its ID, one question equal to the one asked, and
+  NOERROR. Before, a packet with the same ID and NOERROR was enough.
+- **Signed build provenance for releases.** Each release file is now
+  attested by the release workflow (Sigstore, through GitHub's artifact
+  attestations): `gh attestation verify dnsnova-linux-amd64.tar.gz -R
+  harryheros/dnsnova` shows it was built by this repository's workflow from
+  the tagged commit. SHA256SUMS only detected damage: a file replaced
+  together with its checksum passed it.
+
 ## 1.7.0 (2026-11-21)
 
 - **DNS rebinding protection** (on by default). A web page can point a
