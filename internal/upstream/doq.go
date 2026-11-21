@@ -102,7 +102,7 @@ func (u *doqUpstream) drop(c *quic.Conn) {
 }
 
 func (u *doqUpstream) Exchange(ctx context.Context, msg []byte) ([]byte, error) {
-	q := dnsmsg.WithID(msg, 0) // RFC 9250 4.2.1
+	q := dnsmsg.Pad(dnsmsg.WithID(msg, 0), dnsmsg.QueryPaddingBlock) // RFC 9250 4.2.1; RFC 8467
 	for attempt := 0; attempt < 2; attempt++ {
 		c, reused, err := u.connect(ctx)
 		if err != nil {

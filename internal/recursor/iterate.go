@@ -386,6 +386,9 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 		}
 		slices.SortStableFunc(addrs, func(a, b netip.Addr) int { return int(scores[a] - scores[b]) })
 		a := addrs[0]
+		if !peek {
+			r.infra.decay(addrs[1:], a)
+		}
 		if peek {
 			// worth a hedge: not set aside (lame, failing), not IPv6 that
 			// may be broken
@@ -691,14 +694,17 @@ func calledOff(ctx context.Context) bool {
 const hedgeWorth = 5 * time.Second
 
 // hedgeAfter is how long a's reply is waited for before the next server is
-// asked too: twice its usual round trip, and at least 50 ms more than it
-// (jitter is no reason); 400 ms for a server not asked before.
+// asked too: its usual round trip plus four times how much that varies
+// (RFC 6298), at most twice the round trip and at least 20 ms more than it
+// (jitter is no reason); 400 ms for a server not asked before. A steady
+// server is hedged soon after a lost packet; an unsteady one no later than
+// twice its round trip.
 func (r *Recursor) hedgeAfter(a netip.Addr) time.Duration {
-	srtt := r.infra.rtt(a)
+	srtt, rttvar := r.infra.rttStats(a)
 	if srtt == 0 {
 		return 400 * time.Millisecond
 	}
-	return max(2*srtt, srtt+50*time.Millisecond)
+	return max(min(2*srtt, srtt+4*rttvar), srtt+20*time.Millisecond)
 }
 
 // unreachable is ErrUnreachable with what happened: which zone's servers

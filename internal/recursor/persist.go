@@ -50,7 +50,7 @@ func (r *Recursor) SaveServers(w io.Writer) (int, error) {
 	in.mu.Lock()
 	list := make([]saved, 0, len(in.m))
 	for a, s := range in.m {
-		fresh := s.srtt > 0 && s.fails == 0 && now.Sub(s.lastUsed) < infraForget
+		fresh := s.srtt > 0 && s.fails == 0 && !s.decayed && now.Sub(s.lastUsed) < infraForget // measured, not estimated
 		quirk := now.Before(s.noEDNS) || now.Before(s.plainUntil) || now.Before(s.noTCPUntil)
 		if !fresh && !quirk {
 			continue

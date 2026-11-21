@@ -128,6 +128,11 @@ type Config struct {
 		// are asked from these servers, never from upstreams or recursion
 		// (an office's Active Directory, a router's own names).
 		Forward []string
+		// RebindingProtection refuses public names that answer with an
+		// address of a private network; AllowPrivate lists domains whose
+		// names may (see resolver/rebinding.go).
+		RebindingProtection bool
+		AllowPrivate        []string
 	}
 	// NOD reports newly observed domains.
 	NOD struct {
@@ -268,6 +273,7 @@ func Defaults() *Config {
 	c.Limits.RRLRate = 20
 	c.Limits.RRLSlip = 2
 	c.Limits.BlockANY = true
+	c.Local.RebindingProtection = true
 	c.Filter.Lists = []string{DefaultFilterList}
 	c.Filter.UpdateInterval = 24 * time.Hour
 	c.Filter.DoHPath = "/filtered"
@@ -487,6 +493,19 @@ func (c *Config) validate(lines map[string]int) (Errors, []string) {
 	}
 	if _, err := ParseForwardZones(c.Local.Forward); err != nil {
 		bad("local.forward", err.Error())
+	}
+	for _, d := range c.Local.AllowPrivate {
+		if !validDomain(d) {
+			bad("local.allow_private", fmt.Sprintf("%q is not a valid domain name", d))
+		}
+	}
+	if c.Local.RebindingProtection && !c.Recursion.Enabled {
+		for _, u := range append(slices.Clone(c.Upstream.Primary), c.Upstream.Fallback...) {
+			if a, ok := upstreamIP(u); ok && a.IsPrivate() {
+				warns = append(warns, fmt.Sprintf("upstream %s is on this network: names it answers with private addresses (an office's own names) get none, because of local.rebinding_protection, unless their domains are in local.forward or local.allow_private", u))
+				break
+			}
+		}
 	}
 	if c.NOD.Learn < 0 || c.NOD.Learn > 30*24*time.Hour {
 		bad("nod.learn", "between 0s and 720h (30 days)")
@@ -827,6 +846,27 @@ func isLoopbackHost(h string) bool {
 	return err == nil && a.IsLoopback()
 }
 
+// upstreamIP is the address an upstream is reached at, when it is written
+// as one ("192.168.1.1", "udp://10.0.0.53:53", "tls://dns.example#10.0.0.53").
+func upstreamIP(spec string) (netip.Addr, bool) {
+	s := spec
+	if i := strings.Index(s, "#"); i >= 0 {
+		s = s[i+1:]
+	} else {
+		if i := strings.Index(s, "://"); i >= 0 {
+			s = s[i+3:]
+		}
+		if i := strings.IndexAny(s, "/"); i >= 0 {
+			s = s[:i]
+		}
+	}
+	if ap, err := netip.ParseAddrPort(s); err == nil {
+		return ap.Addr().Unmap(), true
+	}
+	a, err := netip.ParseAddr(strings.Trim(s, "[]"))
+	return a.Unmap(), err == nil
+}
+
 func validDomain(d string) bool {
 	d = strings.TrimSuffix(d, ".")
 	if len(d) == 0 || len(d) > 253 || !strings.Contains(d, ".") {
@@ -953,23 +993,25 @@ var fields = map[string]field{
 		return nil
 	}, func(c *Config) Value { return Str(c.Cache.Persist) }},
 
-	"access.allow":     prefixes(func(c *Config) *[]netip.Prefix { return &c.Access.Allow }),
-	"access.deny":      prefixes(func(c *Config) *[]netip.Prefix { return &c.Access.Deny }),
-	"local.records":    strList(func(c *Config) *[]string { return &c.Local.Records }),
-	"local.forward":    strList(func(c *Config) *[]string { return &c.Local.Forward }),
-	"clients.groups":   strList(func(c *Config) *[]string { return &c.Clients.Groups }),
-	"nod.enabled":      boolean(func(c *Config) *bool { return &c.NOD.Enabled }),
-	"nod.learn":        duration(func(c *Config) *time.Duration { return &c.NOD.Learn }),
-	"nod.ignore":       strList(func(c *Config) *[]string { return &c.NOD.Ignore }),
-	"nod.alert":        boolean(func(c *Config) *bool { return &c.NOD.Alert }),
-	"nod.full_ip":      boolean(func(c *Config) *bool { return &c.NOD.FullIP }),
-	"dnstap.target":    str(func(c *Config) *string { return &c.Dnstap.Target }),
-	"dnstap.queries":   boolean(func(c *Config) *bool { return &c.Dnstap.Queries }),
-	"dnstap.responses": boolean(func(c *Config) *bool { return &c.Dnstap.Responses }),
-	"dnstap.full_ip":   boolean(func(c *Config) *bool { return &c.Dnstap.FullIP }),
-	"ecs.address":      str(func(c *Config) *string { return &c.ECS.Address }),
-	"ecs.client_path":  str(func(c *Config) *string { return &c.ECS.ClientPath }),
-	"stats.retention":  str(func(c *Config) *string { return &c.Stats.Retention }),
+	"access.allow":               prefixes(func(c *Config) *[]netip.Prefix { return &c.Access.Allow }),
+	"access.deny":                prefixes(func(c *Config) *[]netip.Prefix { return &c.Access.Deny }),
+	"local.records":              strList(func(c *Config) *[]string { return &c.Local.Records }),
+	"local.forward":              strList(func(c *Config) *[]string { return &c.Local.Forward }),
+	"local.rebinding_protection": boolean(func(c *Config) *bool { return &c.Local.RebindingProtection }),
+	"local.allow_private":        strList(func(c *Config) *[]string { return &c.Local.AllowPrivate }),
+	"clients.groups":             strList(func(c *Config) *[]string { return &c.Clients.Groups }),
+	"nod.enabled":                boolean(func(c *Config) *bool { return &c.NOD.Enabled }),
+	"nod.learn":                  duration(func(c *Config) *time.Duration { return &c.NOD.Learn }),
+	"nod.ignore":                 strList(func(c *Config) *[]string { return &c.NOD.Ignore }),
+	"nod.alert":                  boolean(func(c *Config) *bool { return &c.NOD.Alert }),
+	"nod.full_ip":                boolean(func(c *Config) *bool { return &c.NOD.FullIP }),
+	"dnstap.target":              str(func(c *Config) *string { return &c.Dnstap.Target }),
+	"dnstap.queries":             boolean(func(c *Config) *bool { return &c.Dnstap.Queries }),
+	"dnstap.responses":           boolean(func(c *Config) *bool { return &c.Dnstap.Responses }),
+	"dnstap.full_ip":             boolean(func(c *Config) *bool { return &c.Dnstap.FullIP }),
+	"ecs.address":                str(func(c *Config) *string { return &c.ECS.Address }),
+	"ecs.client_path":            str(func(c *Config) *string { return &c.ECS.ClientPath }),
+	"stats.retention":            str(func(c *Config) *string { return &c.Stats.Retention }),
 
 	"limits.client_qps":           number(func(c *Config) *float64 { return &c.Limits.ClientQPS }),
 	"limits.client_burst":         number(func(c *Config) *float64 { return &c.Limits.ClientBurst }),

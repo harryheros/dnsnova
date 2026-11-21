@@ -4,6 +4,74 @@ All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
 **Security**.
 
+## 1.7.0 (2026-11-21)
+
+- **DNS rebinding protection** (on by default). A web page can point a
+  name of its own at an address on the visitor's network and so reach a
+  router, NAS or printer from the browser. A name from outside that answers
+  with an address of a private network (10/8, 172.16/12, 192.168/16,
+  127/8, 169.254/16, 100.64/10, fc00::/7, fe80::/10, ::1) now gets no
+  address (NOERROR, no records, Extended DNS Error "Blocked" saying why),
+  so the client does not go on to ask another resolver.
+  - Let through: names under the domains in `local.forward` (the
+    network's own servers), names under `lan`, `home`, `internal`,
+    `home.arpa` and other private-use domains, names of one label, names
+    in `local.records`, and domains in the new `local.allow_private` (a
+    public name you gave a device at home). 0.0.0.0 and :: are not
+    blocked: blocking services answer with them.
+  - The query log shows such answers as *blocked (rebinding)*, with an
+    *Allow* that adds the name to `local.allow_private`. Turn it off with
+    `local.rebinding_protection = false` (Settings › DNS & upstreams ›
+    Local names).
+  - An upstream on the local network (a router, an office's own server)
+    makes the configuration warn: names it answers with private addresses
+    are blocked unless their domains are listed.
+  - Speed: whether an answer holds such an address is found once, when it
+    is cached; a cache hit reads one flag.
+- **Queries to encrypted upstreams are padded** to a multiple of 128 bytes
+  (RFC 8467). Encrypted, a query's length still told the length of the
+  name; now names of up to about 90 characters all look the same.
+- **A wrong clock is noticed.** A machine without a battery-backed clock
+  can start with a time days off, and then every signed answer fails
+  DNSSEC with nothing but SERVFAIL to show for it. With recursion, when
+  the root's key set fails only for its time but its signature is genuine,
+  DNSNova says the clock is wrong and by at least how much: in the log, on
+  the overview (top bar and Resolution card), as a critical alert, and as
+  `dnsnova_clock_off_seconds`. It clears once the clock is right.
+- **Popular answers stay in a full cache.** When the cache was full, the
+  sampled answer expiring first was evicted, which is often the most
+  asked-for one (a CDN's TTL is short). Now an answer no client has used
+  since eviction last looked at it goes first, and used ones get a second
+  chance (a sampled form of the SIEVE policy). In a
+  simulation of three million queries over a million names, the share
+  answered from the cache rose by 1.9 to 3.5 points, so 2 to 7% fewer
+  lookups go out; a cache hit costs the same.
+- **Faster when a name server loses a packet, and back to the fastest one
+  sooner.**
+  - Round trips are tracked with how much they vary (RFC 6298). A steady
+    server is hedged soon after its usual round trip (round trip plus four
+    times its variation, at least 20 ms more), an unsteady one no later
+    than twice its round trip, as before.
+  - A server out-run by another once no longer counts as that slow at
+    once: a quarter of the difference is taken in, as one lost packet says
+    little; a server slow again and again soon gives way.
+  - A server not chosen, because another answered faster, has its round
+    trip lowered a little (2%) each time; so a server once slow, or never
+    asked, is tried again after some dozens of lookups, its answer sets
+    its round trip anew, and the hedge keeps that try short.
+    Its timeout is the generous one of an unknown server meanwhile.
+  - Measured on a test network, 400 lookups each, 1.6.8 → 1.7.0: steady
+    servers with 2% loss, mean 51 → 46 ms, median 49 → 42 ms, slowest 1%
+    150 → 120 ms; unsteady servers with spikes, slowest 1% 245 → 164 ms;
+    distant servers with 3% loss, median 196 → 172 ms, slowest 1%
+    559 → 425 ms. No more queries are sent per lookup.
+- Already done, now said: queries without RD (recursion desired) are
+  refused, so the cache cannot be read for what others looked up.
+- **Web interface.** On a narrow card, the figures at the foot stay on one
+  line at the right while the words beside them wrap.
+- The private-mode top lists' test no longer fails once in 64 runs (two
+  devices can share a bit of the counting sketch).
+
 ## 1.6.8 (2026-11-20)
 
 - **Name servers remembered across restarts.** With recursion and

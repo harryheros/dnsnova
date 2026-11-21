@@ -55,6 +55,9 @@ func serveDoQ(t *testing.T, auth *dnstest.Auth, cert tls.Certificate) *doqServer
 							c.CloseWithError(0x2, "message id must be 0")
 							return
 						}
+						if len(q)%m.QueryPaddingBlock != 0 {
+							t.Errorf("DoQ query of %d bytes: not padded to %d", len(q), m.QueryPaddingBlock)
+						}
 						if _, err := io.ReadAll(str); err != nil { // the client must send FIN
 							t.Errorf("no FIN after the query: %v", err)
 						}

@@ -316,6 +316,8 @@ input[aria-invalid="true"], textarea[aria-invalid="true"], select[aria-invalid="
 .more { display: inline-flex; align-items: center; gap: 4px; font-size: 13.5px; font-weight: 500; }
 .dfoot { margin-top: auto; display: flex; justify-content: space-between; align-items: center; gap: 12px; padding-top: 10px; border-top: 1px solid var(--hairline); font-size: 12.5px; color: var(--muted); min-height: 32px; }
 .dfoot > * { min-width: 0; }
+/* on a narrow card the words wrap; the figures stay on one line, at the right */
+.dfoot > .num { flex: none; white-space: nowrap; text-align: right; }
 .strong { font-weight: 600; color: var(--text); }
 .slots { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
 .slot { display: grid; grid-template-columns: minmax(0, 1fr) minmax(36px, 26%) 44px; align-items: center; gap: 12px; height: 38px; border-top: 1px solid var(--hairline); font-size: 13.5px; }

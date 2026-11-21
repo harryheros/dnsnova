@@ -23,6 +23,9 @@ type entry struct {
 	// cnamesCut: the chain was longer than recorded; the filtered service
 	// blocks rather than let unchecked names through
 	cnamesCut bool
+	// private: an A or AAAA record in the answer gives an address of a
+	// private network (see rebinding.go)
+	private bool
 	// signed: the answer carries DNSSEC signatures, whose TTLs min_ttl must
 	// not stretch (a validating client would see them outlive their use)
 	signed bool
@@ -40,6 +43,18 @@ type entry struct {
 	cacheable bool
 
 	nextRefresh atomic.Int64 // unix nanos; throttles background refreshes
+
+	// used: a client was answered from it since eviction last looked at
+	// it (see cache.set)
+	used atomic.Bool
+}
+
+// touch notes that a client was answered from e. Read first: most hits
+// find it set already, and leave the memory shared between cores alone.
+func (e *entry) touch() {
+	if !e.used.Load() {
+		e.used.Store(true)
+	}
 }
 
 // FailTTL is how long a resolution failure (SERVFAIL) is remembered, so a
@@ -100,6 +115,9 @@ func analyze(resp []byte, q *m.Query) (*entry, error) {
 		if rr.Type == typeRRSIG {
 			e.signed = true
 		}
+		if !e.private && privateRR(resp, rr) {
+			e.private = true
+		}
 		if !hasAns || t < minAns {
 			minAns, hasAns = t, true
 		}
@@ -157,11 +175,16 @@ func failureEntry(q *m.Query) *entry {
 	return e
 }
 
-// cache is a sharded map. When a shard is full, a few random entries are
-// sampled and the one that expires first is evicted.
+// cache is a sharded map. When a shard is full, a few entries are sampled
+// and one no client has used since it was last looked at is evicted (the
+// one that expires first); those used get a second chance, and lose the
+// mark. So popular answers stay, even with short TTLs (as a CDN's have),
+// and answers asked once go first: a sampled form of CLOCK, close to the
+// SIEVE policy resolvers have moved to.
 type cache struct {
 	shards   [256]cacheShard
 	perShard atomic.Int64
+	pick     func(s *cacheShard) string // the victim; tests replace it
 }
 
 type cacheShard struct {
@@ -170,7 +193,7 @@ type cacheShard struct {
 }
 
 func newCache(size int) *cache {
-	c := &cache{}
+	c := &cache{pick: victim}
 	c.setSize(size)
 	for i := range c.shards {
 		c.shards[i].m = make(map[string]*entry)
@@ -223,24 +246,42 @@ func (c *cache) set(key string, e *entry) {
 	}
 	s := c.shard(key)
 	s.mu.Lock()
-	if _, ok := s.m[key]; !ok {
+	if old, ok := s.m[key]; !ok {
 		for len(s.m) >= per {
-			var victim string
-			var vexp time.Time
-			n := 0
-			for k, v := range s.m {
-				if n == 0 || v.expire.Before(vexp) {
-					victim, vexp = k, v.expire
-				}
-				if n++; n >= 8 {
-					break
-				}
-			}
-			delete(s.m, victim)
+			delete(s.m, c.pick(s))
 		}
+	} else if old.used.Load() {
+		e.used.Store(true) // a refresh keeps the mark
 	}
 	s.m[key] = e
 	s.mu.Unlock()
+}
+
+// evictSample entries are looked at to choose one to evict.
+const evictSample = 8
+
+// victim chooses the entry of a full shard to evict (s is locked).
+func victim(s *cacheShard) string {
+	var unused, any string
+	var uexp, aexp time.Time
+	n := 0
+	for k, v := range s.m {
+		if v.used.Load() {
+			v.used.Store(false) // a second chance, once
+		} else if unused == "" || v.expire.Before(uexp) {
+			unused, uexp = k, v.expire
+		}
+		if any == "" || v.expire.Before(aexp) {
+			any, aexp = k, v.expire
+		}
+		if n++; n >= evictSample {
+			break
+		}
+	}
+	if unused != "" {
+		return unused
+	}
+	return any
 }
 
 // sweep removes entries past expiry plus the stale window.

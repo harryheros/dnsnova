@@ -88,3 +88,54 @@ func TestNoHedgeWithOneServer(t *testing.T) {
 		t.Fatalf("%d hedges", r.Stats.Hedges.Load())
 	}
 }
+
+// A server once slow is tried again after a few dozen choices of its
+// sibling, and its answer sets its round trip anew: one lost packet does
+// not leave the faster server unused.
+func TestSlowServerTriedAgain(t *testing.T) {
+	in := newInfra()
+	now := time.Now()
+	fast, other := exA, ex2A
+	in.ok(fast, 40*time.Millisecond, now)
+	in.ok(other, 55*time.Millisecond, now)
+	in.slow(fast, 135*time.Millisecond, now) // out-run once
+	chosen := 0
+	for i := 0; i < 200; i++ {
+		a, b := fast, other
+		if in.score(other, "example.com.", now) < in.score(fast, "example.com.", now) {
+			a, b = other, fast
+		}
+		in.decay([]netip.Addr{b}, a)
+		if a == fast {
+			chosen = i
+			break
+		}
+	}
+	if chosen == 0 || chosen > 80 {
+		t.Fatalf("the fast server chosen again after %d lookups", chosen)
+	}
+	in.ok(fast, 40*time.Millisecond, now) // its answer: measured anew, not averaged
+	if s, _ := in.rttStats(fast); s != 40*time.Millisecond {
+		t.Fatalf("srtt %v after a fresh answer", s)
+	}
+}
+
+// A steady server is hedged soon after its usual round trip; an unsteady
+// one no later than twice it.
+func TestHedgeAfterFollowsVariance(t *testing.T) {
+	r := newTest(t, world(), true)
+	now := r.now()
+	for range 20 {
+		r.infra.ok(exA, 100*time.Millisecond, now)
+	}
+	if d := r.hedgeAfter(exA); d < 120*time.Millisecond || d > 130*time.Millisecond {
+		t.Fatalf("steady: hedge after %v", d)
+	}
+	for i := range 20 {
+		r.infra.ok(ex2A, time.Duration(50+100*(i%2))*time.Millisecond, now)
+	}
+	srtt, _ := r.infra.rttStats(ex2A)
+	if d := r.hedgeAfter(ex2A); d != 2*srtt {
+		t.Fatalf("unsteady: hedge after %v (srtt %v)", d, srtt)
+	}
+}

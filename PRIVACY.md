@@ -24,7 +24,11 @@ is your responsibility.
   /56), never the client's address; those answers are never cached or
   shared.
 - It does not forward the EDNS options clients send, such as cookies or
-  padding.
+  padding. It pads its own queries to encrypted upstreams (DoT, DoH, DoQ)
+  to a multiple of 128 bytes (RFC 8467), so their length does not tell the
+  length of the name.
+- It does not answer queries that do not ask for recursion (RD clear): such
+  a query would only show what others have looked up, from the cache.
 - It never sends reverse lookups of private addresses (10.0.0.0/8,
   192.168.0.0/16, fd00::/8 and similar) beyond the server, except to the
   servers you list for that zone in `local.forward`.

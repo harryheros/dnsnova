@@ -31,4 +31,6 @@ options edns0 trust-ad
   rejects answers as not yet valid; but setting the time needs DNS. Give the
   time service a server by address so it works without DNS, for example
   `NTP=162.159.200.1` in `/etc/systemd/timesyncd.conf`, then
-  `systemctl restart systemd-timesyncd`.
+  `systemctl restart systemd-timesyncd`. With recursion, DNSNova notices a
+  clock more than about a day off from the root's signatures and says so,
+  with by how much, on the overview and in alerts.

@@ -249,7 +249,9 @@ func (u *dotUpstream) put(c *dotConn) {
 }
 
 func (u *dotUpstream) Exchange(ctx context.Context, msg []byte) ([]byte, error) {
-	q := dnsmsg.WithID(msg, uint16(rand.Uint32()))
+	// padded (RFC 8467): encrypted, a query's length would still tell the
+	// length of the name
+	q := dnsmsg.Pad(dnsmsg.WithID(msg, uint16(rand.Uint32())), dnsmsg.QueryPaddingBlock)
 	for attempt := 0; attempt < 2; attempt++ {
 		dc := u.get()
 		reused := dc != nil
@@ -341,7 +343,7 @@ func h3Dial(s Spec, d *Dialer) func(ctx context.Context, _ string, conf *tls.Con
 }
 
 func (u *dohUpstream) Exchange(ctx context.Context, msg []byte) ([]byte, error) {
-	q := dnsmsg.WithID(msg, 0) // RFC 8484 4.1
+	q := dnsmsg.Pad(dnsmsg.WithID(msg, 0), dnsmsg.QueryPaddingBlock) // RFC 8484 4.1; RFC 8467
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.spec.URL, bytes.NewReader(q))
 	if err != nil {
 		return nil, err

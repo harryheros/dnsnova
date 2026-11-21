@@ -168,6 +168,16 @@ forward = [
   # "lan 192.168.1.1",                     # a router's device names
   # "168.192.in-addr.arpa 192.168.1.1",    # and their reverse lookups
 ]
+# DNS rebinding protection: a name from outside that answers with an
+# address of a private network (192.168.x.x, 10.x.x.x, 127.x.x.x, fd00::...)
+# gets no address, or a web page could reach this network's devices
+# through it. Names under the domains in forward, names under lan, home,
+# internal, home.arpa and the like, and names of one label are let
+# through; so are names under the domains listed here.
+rebinding_protection = true
+allow_private = [
+  # "nas.example.com",   # a public name of your own for a device at home
+]
 
 [clients]
 # Groups of devices, by network, each with its own filtering:
