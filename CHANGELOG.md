@@ -4,6 +4,38 @@ All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
 **Security**.
 
+## 1.8.2 (2026-11-21)
+
+The admin interface, gone through page by page for where things are and
+where links lead. Nothing about DNS changes.
+
+- **Settings › Encrypted DNS is now Addresses & encryption.** It is where
+  the plain DNS addresses are set too, which nobody would look for under
+  "Encrypted DNS"; the address stays `#/settings/encryption`.
+- **Discovery (DDR) moved there**, next to the protocols it tells clients
+  about, from DNS & upstreams › Clients. It shows once an encrypted
+  protocol is on.
+- **A settings page of its own for what is kept and where it is sent:
+  Logs & statistics** (`#/settings/logs`), with how long statistics are
+  kept, query records and the log collector (dnstap), all three moved out
+  of Admin. Admin now holds the admin and metrics addresses, the account
+  and the configuration file.
+- **Links that name a setting open the page at that setting**, as the
+  query log's link to query records does: from DNSSEC (resolving names
+  itself, DNSSEC checking), New domains, the Upstreams page, the
+  overview's certificate card and "DNS is not served yet" notice, the
+  setup guide, the dnstap notice and the query records page. Account &
+  security in the account menu opens at the password.
+- Each page has its own browser tab title (`Query log · DNSNova`), for
+  tabs, history and bookmarks.
+- Admin's section of the admin and metrics addresses was named "Access",
+  like the Access & limits page; it is now "Admin and metrics addresses".
+- Addresses for clients links to the setup guide; the Nodes page links to
+  the cluster documentation instead of naming the file.
+- **The whole menu fits on laptop screens.** Below 1,000 px of height it
+  was cut off and had to be scrolled (Tools was out of sight on most
+  laptops); it now tightens in steps and stays whole down to about 600 px.
+
 ## 1.8.1 (2026-11-21)
 
 - **The query log says what it is for, and where to go instead.** When it

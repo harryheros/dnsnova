@@ -193,7 +193,7 @@ func plainRefusal(r *http.Request, port string, certNames []string) string {
 			return "The admin interface is not served over plain HTTP from other machines. Open https://" + n + ":" + port + "/ or use an SSH tunnel: " + tunnel + "." + lanHint
 		}
 	}
-	return "The admin interface has no certificate yet, so other machines cannot open it: plain HTTP would expose the password. From your computer, open an SSH tunnel: " + tunnel + ". Once a domain is set up (Settings > Encrypted DNS), it also opens over HTTPS on this port." + lanHint
+	return "The admin interface has no certificate yet, so other machines cannot open it: plain HTTP would expose the password. From your computer, open an SSH tunnel: " + tunnel + ". Once a domain is set up (Settings › Addresses & encryption), it also opens over HTTPS on this port." + lanHint
 }
 
 // certCovers reports whether a certificate for names is valid for the host

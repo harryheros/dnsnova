@@ -120,8 +120,8 @@ interface:
 
 Off by default. Some networks must be able to tell later which device
 looked up what: an office's security team, an audit, a law. For them,
-`log.query_days` (Settings › Admin › Query records) keeps every query on
-disk:
+`log.query_days` (Settings › Logs & statistics › Query records) keeps
+every query on disk:
 
 - One file per day (UTC) in `/var/lib/dnsnova/querylog/`, readable only by
   the service, gzipped once the day is over. Plain tab-separated text:

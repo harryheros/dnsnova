@@ -2,9 +2,9 @@
 
 > A secure DNS server, from one box at home to a public resolver on several continents.
 
-[![Version](https://img.shields.io/badge/version-v1.8.0-blue)](https://github.com/harryheros/dnsnova/releases)
+[![Version](https://img.shields.io/github/v/release/harryheros/dnsnova?label=version&color=blue)](https://github.com/harryheros/dnsnova/releases)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](./LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Linux%20amd64%20%7C%20arm64%20%7C%20arm-lightgrey.svg)](#)
+[![Platform](https://img.shields.io/badge/platform-Linux%20amd64%20%7C%20arm64%20%7C%20arm-lightgrey.svg)](#install)
 [![CI](https://github.com/harryheros/dnsnova/actions/workflows/ci.yml/badge.svg)](https://github.com/harryheros/dnsnova/actions/workflows/ci.yml)
 [![Fuzz](https://github.com/harryheros/dnsnova/actions/workflows/fuzz.yml/badge.svg)](https://github.com/harryheros/dnsnova/actions/workflows/fuzz.yml)
 
@@ -52,7 +52,7 @@ The wizard sets the administrator, who the server is for, recursion or upstreams
 - **Public or private**: open to everyone within rate limits, or only to the networks you list; behind load balancers, PROXY protocol v1 and v2 from the ones you list.
 - **Hard to poison**: random ports and IDs, answers checked against the server and question asked, and DNS Cookies. Forged answers, including those injected on the path, are dropped and the genuine one is used; an attack in progress moves the question to TCP. A network that answers port 53 itself is detected, never cached ([details](./docs/restricted-networks.md)).
 - **Hard to abuse**: per-client and per-network limits, response rate limiting against reflection, and DNS Cookies that exempt real clients.
-- **Secure by default**: the web interface stays on the server itself until it has HTTPS; two-step verification; a self-check at startup and after every change reports weaknesses.
+- **Secure by default**: on a public server the web interface stays on the server itself until it has HTTPS; two-step verification; a self-check at startup and after every change reports weaknesses.
 
 ### Many servers
 
@@ -70,13 +70,9 @@ The wizard sets the administrator, who the server is for, recursion or upstreams
 - **Private by default**: no telemetry, and queries and client addresses are not written to disk ([PRIVACY.md](./PRIVACY.md)). Queries to encrypted upstreams are padded, so their length does not tell the name; queries that do not ask for recursion are refused, so nobody can read what others looked up from the cache. Where an office must account for its DNS, it can keep every query for a number of days (searchable and downloadable in the web interface, and stated on the status page) or send them as dnstap to a SIEM or log collector.
 - **Status page** (optional): addresses, setup steps per device, and a check that shows visitors whether they use the server.
 
-### On the server itself
-
-Programs on the server (apt, certificate renewal, mail) can use DNSNova too, through `nameserver 127.0.0.1` in `/etc/resolv.conf`. The details (DNSSEC flag, systemd-resolved, machines without a clock) are in [docs/server-itself.md](./docs/server-itself.md).
-
 ## Encrypted DNS
 
-Give the setup wizard (or Settings › Encrypted DNS) a domain that points to the server, and DNSNova obtains and renews a Let's Encrypt certificate. Open TCP 853, UDP 853 and TCP + UDP 443 (Let's Encrypt validates on 443, or on 80 if nothing listens on 443). Devices then use:
+Give the setup wizard (or Settings › Addresses & encryption) a domain that points to the server, and DNSNova obtains and renews a Let's Encrypt certificate (validated on port 443, or on 80 if nothing listens on 443). With the ports under [Install](#install) open, devices then use:
 
 | Protocol | Address |
 |---|---|
@@ -93,7 +89,7 @@ For encrypted DNS only, choose *Only this server* in the wizard: plain DNS then 
 - [docs/cluster.md](./docs/cluster.md): several servers sharing one configuration, and anycast.
 - [docs/alerts.md](./docs/alerts.md): notifications, what is checked, the webhook format.
 - [docs/restricted-networks.md](./docs/restricted-networks.md): resolving where DNS answers are forged or intercepted on the path.
-- [docs/server-itself.md](./docs/server-itself.md): the server's own programs using DNSNova.
+- [docs/server-itself.md](./docs/server-itself.md): programs on the server itself (apt, certificate renewal, mail) using DNSNova.
 - [docs/api.md](./docs/api.md): the admin API used by the web interface, for scripts.
 - [docs/benchmark.md](./docs/benchmark.md): performance, and how to measure it yourself.
 - [tools/resolver-check.sh](./tools/resolver-check.sh): compares a running server with a reference resolver (popular domains, DNSSEC, minimal names, TCP, response times): `bash resolver-check.sh <server-ip>`.

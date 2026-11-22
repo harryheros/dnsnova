@@ -124,7 +124,7 @@ h2 { margin: 0; font-size: 15px; font-weight: 600; }
 .brand .wordmark { font-size: 26px; }
 
 /* ---------- shell ---------- */
-.shell { min-height: 100vh; display: grid; grid-template-columns: 256px minmax(0, 1fr); align-items: stretch; }
+.shell { min-height: 100vh; display: grid; grid-template-columns: 264px minmax(0, 1fr); align-items: stretch; }
 .side { position: relative; min-width: 0; padding: 26px 16px 18px; display: flex; flex-direction: column; gap: 22px; color: var(--text); overflow: hidden;
   background: radial-gradient(420px 260px at 0% 100%, rgba(47, 123, 255, 0.28), transparent 70%), linear-gradient(180deg, #071330 0%, #050c1f 55%, #040a18 100%);
   border-right: 1px solid rgba(96, 150, 255, 0.14); }
@@ -459,7 +459,9 @@ td.r, th.r { text-align: right; }
 .field.inline .ctl { flex: none; align-items: flex-end; }
 .field .problem { color: var(--err); font-size: 12px; }
 .field.flash { animation: flash 1.6s ease-out; }
+.card.flash { animation: flashcard 1.6s ease-out; }
 @keyframes flash { from { background: var(--soft); } to { background: transparent; } }
+@keyframes flashcard { from { box-shadow: 0 0 0 2px var(--accent); } to { box-shadow: 0 0 0 2px transparent; } }
 .review { border-radius: 16px; padding: 16px 20px; border: 1px solid var(--border); background: var(--solid); display: flex; flex-direction: column; gap: 10px; position: sticky; bottom: 14px; box-shadow: var(--shadow-pop); }
 .review.dirty { border-color: var(--accent); box-shadow: var(--glow), var(--shadow-pop); }
 .review .head { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
@@ -544,11 +546,28 @@ p.err:empty, div.err:empty, .problem:empty { display: none; }
 .railbrand, .railhome { cursor: pointer; }
 .railbrand:focus-visible, .railhome:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
 @media (min-width: 801px) { .side { position: sticky; top: 0; height: 100vh; overflow-y: auto; } }
-@media (max-height: 820px) and (min-width: 801px) {
+/* shorter screens: the whole menu stays in view without scrolling, down to
+   the usual laptop browser window (about 650 px) */
+@media (max-height: 1000px) and (min-width: 801px) {
   .railbrand .mark { width: 76px; height: 76px; }
   .railbrand .wordmark { font-size: 29px; }
   .nav a { min-height: 36px; }
   .side { gap: 16px; padding-top: 18px; }
+}
+@media (max-height: 860px) and (min-width: 801px) {
+  .railbrand { flex-direction: row; justify-content: center; }
+  .railbrand .mark { width: 40px; height: 40px; }
+  .railbrand .wordmark { font-size: 26px; }
+  .railbrand .tagline { display: none; }
+  .nav { gap: 8px; }
+  .navgroup { gap: 1px; }
+  .nav a { min-height: 32px; }
+  .side { gap: 12px; padding-top: 14px; padding-bottom: 12px; }
+}
+@media (max-height: 720px) and (min-width: 801px) {
+  .nav a { min-height: 30px; font-size: 14px; }
+  .navtitle { padding-bottom: 2px; }
+  .sidefoot { display: none; }
 }
 @media (max-width: 800px) {
   .shell { grid-template-columns: minmax(0, 1fr); align-content: start; }

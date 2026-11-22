@@ -834,7 +834,7 @@ summary() {
     echo "  Health:         curl http://$(metrics_addr)/healthz"
     echo "  Serving DNS on: ${LISTEN[*]}  (mode: $MODE)"
     case " ${LISTEN[*]} " in *" 127.0.0.1:53 "*)
-        echo "  This server:    nameserver 127.0.0.1 in /etc/resolv.conf to use it here too (README)" ;;
+        echo "  This server:    nameserver 127.0.0.1 in /etc/resolv.conf to use it here too (docs/server-itself.md)" ;;
     esac
     if [ "$DOH_PROXY" -eq 1 ]; then
         echo "  DoH backend:    http://127.0.0.1:8053/dns-query  (nginx example: /usr/local/share/doc/dnsnova)"

@@ -722,7 +722,7 @@ function wizDone(w) {
         h("ul", { class: "small", style: { margin: 0, paddingLeft: "18px", display: "flex", flexDirection: "column", gap: "6px" } },
           h("li", null, h("strong", null, "Every device at once: "), "in your router's settings, set this address as the DNS server it hands out (often under DHCP or LAN)."),
           h("li", null, h("strong", null, "One device: "), "in its network or Wi-Fi settings, change DNS from automatic to manual and enter this address."),
-          (w.values["tls.domains"] || []).length ? h("li", null, h("strong", null, "Encrypted DNS: "), "once the certificate is issued, Settings › Encrypted DNS lists the addresses for phones and browsers.") : null),
+          (w.values["tls.domains"] || []).length ? h("li", null, h("strong", null, "Encrypted DNS: "), "once the certificate is issued, Settings › Addresses & encryption lists the addresses for phones and browsers.") : null),
       ] : null,
       localOnly ? [
         h("p", { style: { margin: 0 } }, "Plain DNS answers only on this server. Devices use encrypted DNS:"),
@@ -731,7 +731,7 @@ function wizDone(w) {
           h("div", { class: "copyrow" }, h("span", { class: "k" }, "DNS over TLS"), h("code", null, domain), h("button", { type: "button", class: "btn small", onclick: () => copy(domain) }, "Copy")),
           filteredURL ? h("div", { class: "copyrow" }, h("span", { class: "k" }, "With filtering"), h("code", null, filteredURL), h("button", { type: "button", class: "btn small", onclick: () => copy(filteredURL) }, "Copy")) : null,
           h("p", { class: "small muted", style: { margin: 0 } }, "They work once the certificate is issued, usually within a minute. The setup guide in the dashboard has steps for each kind of device."),
-        ] : h("p", { class: "notice warn small", style: { margin: 0 } }, "No domain is set yet, so devices cannot connect. Add one in Settings › Encrypted DNS."),
+        ] : h("p", { class: "notice warn small", style: { margin: 0 } }, "No domain is set yet, so devices cannot connect. Add one in Settings › Addresses & encryption."),
       ] : null,
       stays ? null : h("p", { class: "notice" }, local
         ? ["The web interface now listens only on this server. ", ssh ? ["Open a tunnel first: ", h("code", null, ssh), ", then "] : "", "open ", h("code", null, url), "."]
@@ -753,9 +753,20 @@ function changedValues(before, after) {
 
 const NAV = [
   ["Status", [["Overview", "overview", "home"], ["Upstreams", "upstreams", "upstreams"], ["Query log", "querylog", "querylog"], ["New domains", "newdomains", "sparkle"]]],
-  ["Settings", [["DNS & upstreams", "settings/dns", "dns"], ["Filtering", "settings/filter", "filter"], ["Encrypted DNS", "settings/encryption", "lock"], ["Access & limits", "settings/access", "shield"], ["Alerts", "settings/alerts", "bell"], ["Admin", "settings/admin", "user"]]],
+  ["Settings", [["DNS & upstreams", "settings/dns", "dns"], ["Filtering", "settings/filter", "filter"], ["Addresses & encryption", "settings/encryption", "lock"], ["Access & limits", "settings/access", "shield"], ["Alerts", "settings/alerts", "bell"], ["Logs & statistics", "settings/logs", "file"], ["Admin", "settings/admin", "user"]]],
   ["Tools", [["Setup guide", "tools/guide", "phone"], ["Compare upstreams", "tools/lookup", "compare"], ["Trace a lookup", "tools/trace", "arrow"]]],
 ];
+
+// pageTitle is the browser tab title of a page: its name in the menu.
+function pageTitle(r) {
+  const item = NAV.flatMap(([, items]) => items).find(([, path]) => path === r);
+  return (item ? item[0] : { dnssec: "DNSSEC", nodes: "Nodes" }[r] || "Overview") + " · DNSNova";
+}
+
+// encryptedOn: some encrypted protocol is served (settings values).
+function encryptedOn(v) {
+  return v["dot.listen"].length > 0 || v["doq.listen"].length > 0 || v["doh.https_listen"].length > 0 || !!v["doh.listen"];
+}
 
 function route() {
   return (location.hash.replace(/^#\/?/, "") || "overview").split("?")[0];
@@ -839,6 +850,7 @@ async function showApp() {
     main.classList.remove("narrow"); // only settings and the guide use the narrow layout
     fill(main, top.el);
     const page = PAGES_BY_ROUTE[route()] || PAGES_BY_ROUTE.overview;
+    document.title = pageTitle(route());
     page(main);
     main.focus({ preventScroll: true });
   };
@@ -873,7 +885,7 @@ function topBar() {
   const who = h("div", { class: "who" }, h("strong", null, name), h("span", null, "Administrator"));
   const draw = () => fill(pop, who,
     h("div", { class: "lab" }, "Appearance"), appearance(),
-    h("a", { class: "item", href: "#/settings/admin", role: "menuitem" }, line("user", 16), "Account & security"),
+    h("a", { class: "item", href: "#/settings/admin?focus=account", role: "menuitem" }, line("user", 16), "Account & security"),
     h("a", { class: "item", href: PROJECT + "/blob/main/docs/api.md", target: "_blank", rel: "noopener noreferrer", role: "menuitem" }, line("book", 16), "API documentation"),
     h("button", { type: "button", class: "item", role: "menuitem", onclick: logout }, line("logout", 16), "Sign out"));
   const setOpen = (open) => {
@@ -1360,7 +1372,7 @@ function drawOverview(d, { range, metric, seg, mseg }) {
   const certCard = card("s3", "Certificate", "lock", null,
     h("dl", { class: "kvs" }, certRows.map(([k, v, cls]) => h("div", null, h("dt", null, k), h("dd", { class: (cls || "") + " ellipsis", title: v }, v)))),
     h("footer", { class: "dfoot" }, c.last_error ? h("span", { class: "err ellipsis", title: c.last_error }, c.last_error) : h("span", null, c.mode === "acme" ? "Renewed automatically" : ""),
-      h("a", { href: "#/settings/encryption" }, c.ready ? "Settings" : "Set it up")));
+      h("a", { href: "#/settings/encryption?focus=tls.domains" }, c.ready ? "Settings" : "Set it up")));
   const pv = st.privacy;
   const privRows = [
     ["Query log", pv.query_log ? (pv.query_log_full_ip ? "On, full addresses" : "On") : "Off", pv.query_log ? "warn" : "ok"],
@@ -1374,7 +1386,7 @@ function drawOverview(d, { range, metric, seg, mseg }) {
     h("dl", { class: "kvs" }, privRows.map(([k, v, cls]) => h("div", null, h("dt", null, k), h("dd", { class: cls }, v)))),
     h("footer", { class: "dfoot" }, h("span", null, pv.query_log_days ? "Queries kept on disk" : "In memory only"), h("a", { href: "#/querylog" }, "Query log")));
 
-  const notServing = st.serves_dns === false ? h("p", { class: "notice warn s12" }, "DNS is not served yet: no address is set. Choose addresses in ", h("a", { href: "#/settings/encryption" }, "Encrypted DNS › Protocols"), " and where answers come from in ", h("a", { href: "#/settings/dns" }, "DNS & upstreams"), ".") : null;
+  const notServing = st.serves_dns === false ? h("p", { class: "notice warn s12" }, "DNS is not served yet: no address is set. Set the ", h("a", { href: "#/settings/encryption?focus=server.listen" }, "addresses to answer on"), ", and ", h("a", { href: "#/settings/dns" }, "where answers come from"), ".") : null;
   return [h("div", { class: "dash" }, notServing, k1, k2, k3, k4, chart, flow, top, upCard, evCard,
     topCard("Not Found", "alert", stats.top_nxdomains || [], "Names that do not exist will appear here."),
     rejCard, certCard, privCard)];
@@ -1584,7 +1596,7 @@ function upstreamsPage(main) {
           h("td", { class: "r num", "data-label": "Queries" }, fmt.int(u.queries)),
           h("td", { class: "r num", "data-label": "Errors" }, fmt.int(u.errors) + (u.queries ? ` · ${successRate(u)} ok` : "")),
           h("td", { class: "muted gap", "data-label": "Last error" }, u.last_error ? fmt.ago(u.last_error) : "never"))))))),
-        h("p", { class: "small muted" }, "Latency is smoothed over recent answers; failures do not count in it. Idle: the last query failed over five minutes ago and none has been sent since. Slow means over 500 ms, or three times slower than the other primaries and over 50 ms. Standby: a fallback, used only when the primaries fail. Change the list in ", h("a", { href: "#/settings/dns" }, "DNS & upstreams"), "; ask each one the same question in ", h("a", { href: "#/tools/lookup" }, "Compare upstreams"), "."));
+        h("p", { class: "small muted" }, "Latency is smoothed over recent answers; failures do not count in it. Idle: the last query failed over five minutes ago and none has been sent since. Slow means over 500 ms, or three times slower than the other primaries and over 50 ms. Standby: a fallback, used only when the primaries fail. Change the list in ", h("a", { href: "#/settings/dns?focus=upstream.primary" }, "DNS & upstreams"), "; ask each one the same question in ", h("a", { href: "#/tools/lookup" }, "Compare upstreams"), "."));
     } catch (e) { if (e.status !== 401) fill(body, errorBox(e)); }
   };
   load();
@@ -1688,7 +1700,7 @@ function dnssecPage(main) {
       const d = await api("GET", "/dnssec");
       state.dnssec = d;
       if (!d.recursion) {
-        fill(body, h("section", { class: "card" }, h("p", { style: { margin: 0 } }, "This server forwards to upstreams, which check DNSSEC themselves. Turn on ", h("a", { href: "#/settings/dns" }, "Resolve names itself"), " to check it here.")));
+        fill(body, h("section", { class: "card" }, h("p", { style: { margin: 0 } }, "This server forwards to upstreams, which check DNSSEC themselves. Turn on ", h("a", { href: "#/settings/dns?focus=recursion.enabled" }, "Resolve names itself"), " to check it here.")));
         return;
       }
       const total = d.secure + d.insecure + d.bogus;
@@ -1717,7 +1729,7 @@ function dnssecPage(main) {
           tile("var(--c1)", "layers", "Not signed", share(d.insecure), `${fmt.int(d.insecure)} answers from unsigned domains`),
           tile("var(--c4)", "alert", "Failed", share(d.bogus), `${fmt.int(d.bogus)} answers refused`),
           tile("var(--c2)", "file", "Exempt domains", String(d.negative_trust_anchors.length), "not validated, on purpose")),
-        d.enabled ? null : h("p", { class: "notice warn" }, "DNSSEC checking is off: answers are not checked, so forged ones can get through. Turn it on in ", h("a", { href: "#/settings/dns" }, "DNS & upstreams"), "."),
+        d.enabled ? null : h("p", { class: "notice warn" }, "DNSSEC checking is off: answers are not checked, so forged ones can get through. Turn it on in ", h("a", { href: "#/settings/dns?focus=recursion.dnssec" }, "DNS & upstreams"), "."),
         h("section", { class: "card" },
           h("div", { class: "row", style: { alignItems: "center", justifyContent: "space-between" } }, h("h2", { style: { margin: 0 } }, "Names that failed"),
             d.failures.length ? h("button", { type: "button", class: "btn small", onclick: async () => { await api("DELETE", "/dnssec/failures"); load(); } }, "Clear list") : null),
@@ -1765,7 +1777,7 @@ function nodesPage(main) {
       const c = await api("GET", "/cluster");
       state.cluster = c;
       if (!c.role) {
-        fill(body, h("section", { class: "card" }, h("p", { style: { margin: 0 } }, "This server runs on its own. To share its settings with other DNSNova servers, make it a cluster primary in its configuration file; see docs/cluster.md.")));
+        fill(body, h("section", { class: "card" }, h("p", { style: { margin: 0 } }, "This server runs on its own. To share its settings with other DNSNova servers, make it a cluster primary in its configuration file; see ", h("a", { href: PROJECT + "/blob/main/docs/cluster.md", target: "_blank", rel: "noopener noreferrer" }, "Clusters"), ".")));
         return;
       }
       if (c.role === "follower") {
@@ -1846,8 +1858,8 @@ function lookupPage(main) {
 // ---------- query log ----------
 
 const QL_LENGTHS = [[15, "15 minutes"], [60, "1 hour"], [360, "6 hours"], [1440, "24 hours"]];
-// QUERY_RECORDS_LINK opens Settings › Admin at the query records setting.
-const QUERY_RECORDS_LINK = "#/settings/admin?focus=log.query_days";
+// QUERY_RECORDS_LINK opens Settings › Logs & statistics at the query records setting.
+const QUERY_RECORDS_LINK = "#/settings/logs?focus=log.query_days";
 // QUERY_DAYS are the usual lengths for query records; any other is "Custom".
 const QUERY_DAYS = [[0, "Off"], [7, "7 days"], [30, "30 days"], [90, "90 days"], [365, "365 days"]];
 
@@ -1915,7 +1927,7 @@ function tapNotice(t) {
   return h("p", { class: "notice small " + (t.connected && !t.dropped ? "" : "warn"), style: { margin: 0 } },
     h("strong", null, "dnstap: "), `every query also goes to ${t.target}, ${how}.`,
     t.dropped ? ` ${fmt.int(t.dropped)} dropped while the collector was gone or slow.` : "",
-    " ", h("a", { href: "#/settings/admin" }, "Settings"));
+    " ", h("a", { href: "#/settings/logs?focus=dnstap.target" }, "Settings"));
 }
 
 // archiveView searches the queries kept on disk (log.query_days).
@@ -1934,7 +1946,7 @@ function archiveView(box, ar, files) {
   fill(box,
     h("section", { class: "card" },
       h("div", { class: "pagehead" }, h("h2", null, h("span", { class: "dot warn", style: { marginRight: "8px" } }), `Every query is kept for ${ar.days} ${ar.days === 1 ? "day" : "days"}`),
-        h("a", { class: "btn", href: "#/settings/admin" }, "Settings")),
+        h("a", { class: "btn", href: QUERY_RECORDS_LINK }, "Settings")),
       h("p", { style: { margin: 0 } }, ar.full_ip ? h("strong", { class: "warn" }, "Full client addresses are kept. ") : "Client addresses are shortened (203.0.113.x, 2001:db8:1::/48). ",
         `${fmt.int(ar.files)} ${ar.files === 1 ? "file" : "files"}, ${fmtBytes(ar.bytes)} on disk. The status page tells visitors that queries are kept.`),
       warn),
@@ -2100,13 +2112,13 @@ function newDomainsPage(main) {
         fill(box, h("section", { class: "card" }, h("h2", null, "Not watching for new domains"),
           h("p", { style: { margin: 0 } }, "DNSNova can tell when a domain is looked up here for the first time. Phishing and malware mostly use domains registered days before, which nobody on a network has asked for until then; a first lookup is often the first sign."),
           h("p", { class: "small muted", style: { margin: 0 } }, "It keeps no list of domains, only hashes, and reports what it finds here and to your alert destinations."),
-          h("div", null, h("a", { class: "btn primary", href: "#/settings/filter" }, "Turn it on in Filtering"))));
+          h("div", null, h("a", { class: "btn primary", href: "#/settings/filter?focus=nod.enabled" }, "Turn it on in Filtering"))));
         return;
       }
       const st = r.state;
       const head = h("section", { class: "card" },
         h("div", { class: "pagehead" }, h("h2", null, st.learning ? "Learning the network's domains" : `${fmt.int(st.total)} new ${st.total === 1 ? "domain" : "domains"} since the start`),
-          h("a", { class: "btn", href: "#/settings/filter" }, "Settings")),
+          h("a", { class: "btn", href: "#/settings/filter?focus=nod.enabled" }, "Settings")),
         h("p", { style: { margin: 0 } }, st.learning ? `Nothing is reported until ${fmt.time(st.learn_until, "full")}, while DNSNova learns which domains are usual here.` :
           "Domains looked up here for the first time in 30 to 60 days. Most are harmless (a new site, a new service); look twice at unfamiliar names, especially lookalikes of brands."));
       const table = r.domains.length ? h("div", { class: "tablewrap" }, h("table", null,
@@ -2137,7 +2149,7 @@ function guidePage(main) {
     try {
       const info = await api("GET", "/guide");
       if (!(info.plain || []).length && !info.doh && !info.dot) {
-        fill(body, h("p", { class: "notice" }, "DNS answers only on this server itself, so no other device can use it yet. Add an address devices can reach under Plain DNS in ", h("a", { href: "#/settings/encryption" }, "Encrypted DNS › Protocols"), "."));
+        fill(body, h("p", { class: "notice" }, "DNS answers only on this server itself, so no other device can use it yet. Add an address devices can reach to the ", h("a", { href: "#/settings/encryption?focus=server.listen" }, "plain DNS addresses"), "."));
         return;
       }
       const addrs = [...(info.plain || []).map((ip) => ["DNS server", ip]), info.doh ? ["DNS over HTTPS", info.doh] : null, info.dot ? ["DNS over TLS", info.dot] : null, info.doq ? ["DNS over QUIC", info.doq] : null].filter(Boolean);
@@ -2200,7 +2212,6 @@ const SETTINGS = {
       ] },
       { title: "Clients", fields: [
         { key: "clients.groups", label: "Groups", type: "groups", help: "Devices sorted by network, each group with its own filtering: the finance office filtered, the lab never, social networks blocked for the guests. The query log shows each query's group." },
-        { key: "ddr.enabled", label: "Discovery (DDR)", type: "bool", help: "Devices asking over plain DNS learn the encrypted addresses and switch automatically." },
       ] },
     ],
   },
@@ -2233,7 +2244,7 @@ const SETTINGS = {
     ],
   },
   encryption: {
-    title: "Encrypted DNS",
+    title: "Addresses & encryption",
     certificate: true,
     sections: [
       { title: "Domain & certificate", fields: [
@@ -2258,6 +2269,7 @@ const SETTINGS = {
         { key: "doq.listen", label: "DNS over QUIC", type: "listen", port: 853, help: "Faster on mobile networks; fewer clients support it. UDP 853." },
         { key: "doh.https_listen", label: "DNS over HTTPS", type: "listen", port: 443, help: "Browsers, Windows and iOS profiles. TCP 443." },
         { key: "doh.http3", label: "HTTP/3 for DNS over HTTPS", type: "bool", help: "Faster on mobile networks and patchy Wi-Fi. Uses UDP 443 on the same addresses; where that is blocked, clients use HTTP/2 instead.", show: (v) => v["doh.https_listen"].length > 0 },
+        { key: "ddr.enabled", label: "Discovery (DDR)", type: "bool", help: "Devices asking over plain DNS learn the encrypted addresses and switch automatically.", show: encryptedOn },
         { key: "doh.path", adv: true, label: "DoH path", type: "text", help: "Usually /dns-query." },
         { key: "status.enabled", label: "Public status page", type: "bool", help: "A page at https://domain/: addresses, setup steps per device, what this server keeps, and a check that a device uses it. No statistics." },
         { key: "doh.listen", adv: true, label: "Behind a reverse proxy", type: "text", help: "Plain HTTP for nginx or Caddy, such as 127.0.0.1:8053. Leave empty if unused." },
@@ -2313,8 +2325,8 @@ const SETTINGS = {
       ] },
     ],
   },
-  admin: {
-    title: "Admin",
+  logs: {
+    title: "Logs & statistics",
     sections: [
       { title: "Statistics", action: ["Clear statistics", async () => { await api("POST", "/stats/clear"); toast("Statistics cleared"); }], fields: [
         { key: "stats.retention", label: "Keep statistics for", type: "select", options: [["24h", "24 hours"], ["7d", "7 days"], ["30d", "30 days"]], help: "Kept in memory only, so a restart starts them again. Counts and response times, and the domain lists; never client addresses." },
@@ -2329,12 +2341,18 @@ const SETTINGS = {
         { key: "dnstap.responses", label: "Answers", type: "bool", help: "Send each answer as it went out (CLIENT_RESPONSE), with the time taken.", show: (v) => !!v["dnstap.target"] },
         { key: "dnstap.full_ip", label: "Full client addresses", type: "bool", help: "Normally only the network is sent (203.0.113.0, 2001:db8:1::).", show: (v) => !!v["dnstap.target"] },
       ] },
-      { title: "Access", fields: [
+    ],
+    extra: ["Clear statistics"],
+  },
+  admin: {
+    title: "Admin",
+    sections: [
+      { title: "Admin and metrics addresses", fields: [
         { key: "admin.listen", label: "Admin address", type: "text", help: "127.0.0.1:7000: through an SSH tunnel only (safest). :7000: also from other machines, with a password: from your own network in private mode, over HTTPS only on a public server." },
         { key: "metrics.listen", label: "Metrics address", type: "text", help: "Prometheus metrics and the health check. Keep it on a private address." },
       ] },
     ],
-    extra: ["Password", "Two-step verification", "Configuration history", "Edit the configuration file", "Clear statistics"],
+    extra: ["Password", "Two-step verification", "Configuration history", "Edit the configuration file"],
   },
 };
 
@@ -2345,6 +2363,7 @@ const PAGES_BY_ROUTE = {
   "settings/filter": (m) => settingsPage(m, "filter"),
   "settings/access": (m) => settingsPage(m, "access"),
   "settings/alerts": (m) => settingsPage(m, "alerts"),
+  "settings/logs": (m) => settingsPage(m, "logs"),
   "settings/admin": (m) => settingsPage(m, "admin"),
 };
 
@@ -2482,6 +2501,12 @@ async function settingsPage(main, id) {
     el.scrollIntoView({ block: "center" });
     el.classList.add("flash");
     el.querySelector("input,select,textarea,button")?.focus({ preventScroll: true });
+  } else if (state.focusKey) {
+    const card = [...main.querySelectorAll("[data-focus]")].find((e) => e.dataset.focus === state.focusKey);
+    if (card) {
+      card.scrollIntoView({ block: "center" });
+      card.classList.add("flash");
+    }
   }
   state.focusKey = null;
 }
@@ -2784,7 +2809,8 @@ function clientAddresses(cur) {
   if (d && cur["doh.https_listen"].length) rows.push(["DNS over HTTPS", `https://${d}${cur["doh.path"]}`]);
   if (d && cur["status.enabled"] && (cur["doh.https_listen"].length || cur["doh.listen"])) rows.push(["Status page", `https://${d}/`]);
   return h("section", { class: "card", "aria-label": "Addresses for clients" }, h("h2", null, "Addresses for clients"),
-    rows.length ? rows.map(([k, v]) => h("div", { class: "copyrow" }, h("span", { class: "k" }, k), h("code", null, v), h("button", { type: "button", class: "btn small", onclick: () => copy(v) }, "Copy")))
+    rows.length ? [rows.map(([k, v]) => h("div", { class: "copyrow" }, h("span", { class: "k" }, k), h("code", null, v), h("button", { type: "button", class: "btn small", onclick: () => copy(v) }, "Copy"))),
+      h("p", { class: "small muted", style: { margin: 0 } }, "Steps for each kind of device: ", h("a", { href: "#/tools/guide" }, "Setup guide"), ".")]
       : h("p", { class: "empty small", style: { margin: 0 } }, "Set a domain and turn on a protocol to get addresses for your devices."));
 }
 
@@ -2905,7 +2931,7 @@ function accountCards() {
   const nw = h("input", { type: "password", autocomplete: "new-password" });
   const nw2 = h("input", { type: "password", autocomplete: "new-password" });
   const perr = h("p", { class: "err small", role: "alert" });
-  const pw = h("section", { class: "card", "aria-label": "Password" }, h("h2", null, "Password"),
+  const pw = h("section", { class: "card", "aria-label": "Password", "data-focus": "account" }, h("h2", null, "Password"),
     h("form", {
       class: "signin", style: { maxWidth: "440px" }, onsubmit: async (ev) => {
         ev.preventDefault();

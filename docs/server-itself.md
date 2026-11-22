@@ -2,8 +2,8 @@
 
 Programs on the server (apt, certificate renewal, mail) can use DNSNova too.
 The web setup and the installer listen on 127.0.0.1:53 for this: check that
-`127.0.0.1:53` is among the plain DNS addresses (Settings › Encrypted
-DNS › Protocols), then set `/etc/resolv.conf` to:
+`127.0.0.1:53` is among the plain DNS addresses (Settings ›
+Addresses & encryption › Protocols), then set `/etc/resolv.conf` to:
 
 ```
 nameserver 127.0.0.1

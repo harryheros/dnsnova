@@ -49,7 +49,8 @@ func routes(path string) string {
 // and still answering for drain.
 func TestAnycastRiseFallDrain(t *testing.T) {
 	s, log, healthy := anycastServer(t, "")
-	eventually(t, "announced", func() bool { return routes(log) == "withdraw announce" })
+	// the command has written its line before the state is set: wait for both
+	eventually(t, "announced", func() bool { return routes(log) == "withdraw announce" && s.anycastState() == anycastAnnounced })
 	if s.anycastState() != anycastAnnounced || s.nodeReport().Anycast != anycastAnnounced {
 		t.Fatalf("state %q", s.anycastState())
 	}
