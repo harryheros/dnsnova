@@ -4,6 +4,19 @@ All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
 **Security**.
 
+## 1.8.1 (2026-11-21)
+
+- **The query log says what it is for, and where to go instead.** When it
+  is off, the page now says it is a live log for troubleshooting that stops
+  by itself and is never written to disk, and that keeping queries for days
+  or months is what query records are for, with a link that opens
+  Settings › Admin at that setting.
+- **Keeping query records: pick 7, 30, 90 or 365 days**, or Off, instead of
+  typing a number. Custom takes any other number (up to 3,650 days, as
+  before), and shows one set earlier that is not on the list.
+- A link to a setting can now open the settings page at that setting
+  (`#/settings/<page>?focus=<key>`), as the settings search already did.
+
 ## 1.8.0 (2026-11-21)
 
 Hardening. Attacks on resolvers found and fixed in recent years were gone

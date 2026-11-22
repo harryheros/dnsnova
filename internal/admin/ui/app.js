@@ -1846,6 +1846,22 @@ function lookupPage(main) {
 // ---------- query log ----------
 
 const QL_LENGTHS = [[15, "15 minutes"], [60, "1 hour"], [360, "6 hours"], [1440, "24 hours"]];
+// QUERY_RECORDS_LINK opens Settings › Admin at the query records setting.
+const QUERY_RECORDS_LINK = "#/settings/admin?focus=log.query_days";
+// QUERY_DAYS are the usual lengths for query records; any other is "Custom".
+const QUERY_DAYS = [[0, "Off"], [7, "7 days"], [30, "30 days"], [90, "90 days"], [365, "365 days"]];
+
+// focusParam is the setting named by "?focus=" in a page address: a link
+// from another page opens the settings page at that setting.
+function focusParam(hash) {
+  return new URLSearchParams(hash.split("?")[1] || "").get("focus");
+}
+
+// daysChoice is the option shown for a number of days: one of choices, or
+// "custom" for any other number.
+function daysChoice(v, choices) {
+  return choices.some(([d]) => d === v) ? String(v) : "custom";
+}
 
 // qlTSV is query records as tab-separated text with a header line, in the
 // same columns as the files of Query records: for a spreadsheet, or to
@@ -2021,8 +2037,8 @@ function liveLogView(main) {
     const err = h("p", { class: "err small", role: "alert" });
     fill(head,
       h("h2", null, "The query log is off"),
-      h("p", { style: { margin: 0 } }, "Turn it on to see each query as it arrives, for troubleshooting. It runs for the time you choose and then stops by itself. Nothing is written to disk, and a restart clears it."),
-      h("p", { class: "small muted", style: { margin: 0 } }, "To keep every query for days instead, as offices may need to, set ", h("a", { href: "#/settings/admin" }, "Admin › Query records"), "."),
+      h("p", { style: { margin: 0 } }, "Turn it on to watch queries as they arrive, for troubleshooting. It stops by itself after the time you choose. Nothing is written to disk, and a restart clears it."),
+      h("p", { class: "small muted", style: { margin: 0 } }, "To keep queries for days or months, turn on query records. ", h("a", { href: QUERY_RECORDS_LINK }, "Set up query records →")),
       st.count ? h("p", { class: "small muted", style: { margin: 0 } }, `The ${fmt.int(st.count)} queries below are from the last run; they are deleted an hour after it stopped.`) : null,
       h("div", { class: "row", style: { alignItems: "center" } }, h("label", { class: "small" }, "Run for "), len,
         h("label", { class: "check", style: { flex: "1 1 260px" } }, full, h("span", null, "Keep full client addresses (normally the last part is hidden)"))),
@@ -2304,7 +2320,7 @@ const SETTINGS = {
         { key: "stats.retention", label: "Keep statistics for", type: "select", options: [["24h", "24 hours"], ["7d", "7 days"], ["30d", "30 days"]], help: "Kept in memory only, so a restart starts them again. Counts and response times, and the domain lists; never client addresses." },
       ] },
       { title: "Query records", fields: [
-        { key: "log.query_days", label: "Keep queries for", type: "number", help: "Days. Every query is written to disk (data_dir/querylog, one file per day, compressed after the day), for offices that must be able to tell later which device looked up what. 0 turns it off and deletes the files. The status page shows that it is on." },
+        { key: "log.query_days", label: "Keep queries for", type: "days", choices: QUERY_DAYS, help: "Every query is written to disk (data_dir/querylog, one file per day, compressed after the day), for offices that must be able to tell later which device looked up what. Off deletes the files. The status page shows that it is on." },
         { key: "log.query_full_ip", label: "Keep full client addresses", type: "bool", help: "Normally the last part is hidden (203.0.113.x). Full addresses tell which device asked.", show: (v) => v["log.query_days"] > 0 },
       ] },
       { title: "Log collector (dnstap)", fields: [
@@ -2334,6 +2350,11 @@ const PAGES_BY_ROUTE = {
 
 async function settingsPage(main, id) {
   const page = SETTINGS[id];
+  const focus = focusParam(location.hash);
+  if (focus) {
+    state.focusKey = focus;
+    history.replaceState(null, "", "#/" + route()); // once: not again after Apply reloads the page
+  }
   main.classList.add("narrow");
   main.append(pageHead(page.title, "Settings"));
   if (state.cluster && state.cluster.role === "follower") {
@@ -2526,6 +2547,29 @@ function fieldRow(f, form, onchange) {
       reset = () => ctl.load(form.val[f.key]);
       break;
     }
+    case "days": {
+      // the usual lengths, or "Custom…" with a number of days of one's own
+      const sel = h("select", { id }, f.choices.map(([d, t]) => h("option", { value: String(d) }, t)), h("option", { value: "custom" }, "Custom…"));
+      const num = h("input", { type: "number", min: "0", step: "1", inputmode: "numeric", "aria-label": f.label + " (days)", style: { maxWidth: "110px" } });
+      const own = h("div", { style: { display: "flex", alignItems: "center", gap: "6px" } }, num, h("span", { class: "small muted" }, "days"));
+      let custom = daysChoice(v, f.choices) === "custom";
+      const draw = () => {
+        const d = form.val[f.key];
+        sel.value = custom ? "custom" : String(d);
+        own.hidden = !custom;
+        if (custom && document.activeElement !== num) num.value = d || "";
+      };
+      sel.addEventListener("change", () => {
+        custom = sel.value === "custom";
+        if (custom) { draw(); num.focus(); } else set(Number(sel.value));
+      });
+      num.addEventListener("input", () => { if (/^\d+$/.test(num.value)) set(Number(num.value)); });
+      sync = draw;
+      reset = () => { custom = daysChoice(form.val[f.key], f.choices) === "custom"; draw(); };
+      draw();
+      ctl = h("div", { style: { display: "flex", flexDirection: "column", gap: "6px", width: "100%" } }, sel, own);
+      break;
+    }
     case "number": {
       ctl = h("input", { type: "number", id, value: v, step: "any", inputmode: "decimal" });
       ctl.addEventListener("input", () => { if (ctl.value !== "" && !isNaN(Number(ctl.value))) set(Number(ctl.value)); });
@@ -2544,7 +2588,7 @@ function fieldRow(f, form, onchange) {
   const el = h("div", { class: "field" + (inline ? " inline" : "") + (wide ? " wide" : ""), "data-key": f.key },
     h("div", { class: "text" }, labelEl, h("div", { class: "help", id: id + "-h" }, f.help)),
     h("div", { class: "ctl" }, ctl, prob));
-  const target = ctl.matches?.("input,select,textarea,button") ? ctl : ctl.querySelector("button");
+  const target = ctl.matches?.("input,select,textarea,button") ? ctl : ctl.querySelector("button") || ctl.querySelector("select");
   target.setAttribute("aria-describedby", id + "-h " + id + "-err");
   return {
     el, sync, reset,

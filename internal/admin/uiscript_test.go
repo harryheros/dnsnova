@@ -93,3 +93,35 @@ console.log([9.94, 999.4, 999.6, 9949, 9951, 999499, 999999, 9949999, 9950001].m
 		t.Fatalf("got\n%s\nwant\n%s", got, want)
 	}
 }
+
+// The query log, when off, links straight to the query records setting:
+// "?focus=" in the address opens Settings › Admin at that setting. The link
+// must name a setting that is there.
+func TestUIQueryRecordsLinkOpensTheSetting(t *testing.T) {
+	got := runJS(t, []string{"focusParam", "QUERY_RECORDS_LINK"}, `
+console.log(QUERY_RECORDS_LINK.split("?")[0], focusParam(QUERY_RECORDS_LINK));
+console.log(focusParam("#/settings/admin"), focusParam("#/settings/admin?focus=a.b&x=1"));
+`)
+	if want := "#/settings/admin log.query_days\nnull a.b"; got != want {
+		t.Fatalf("got\n%s\nwant\n%s", got, want)
+	}
+	src, err := os.ReadFile("ui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`(?s)admin: \{.*?title: "Query records", fields: \[\s*\{ key: "log\.query_days", `).Match(src) {
+		t.Fatal("log.query_days is not the first setting of Settings › Admin › Query records")
+	}
+}
+
+// How long query records are kept is picked from 7, 30, 90 and 365 days
+// (or off); any other number of days shows as "Custom", with the number.
+func TestUIQueryDaysChoices(t *testing.T) {
+	got := runJS(t, []string{"daysChoice", "QUERY_DAYS"}, `
+console.log(QUERY_DAYS.map(([d]) => d).join(" "));
+console.log([0, 7, 30, 90, 365, 14, 3650].map((d) => daysChoice(d, QUERY_DAYS)).join(" "));
+`)
+	if want := "0 7 30 90 365\n0 7 30 90 365 custom custom"; got != want {
+		t.Fatalf("got\n%s\nwant\n%s", got, want)
+	}
+}
