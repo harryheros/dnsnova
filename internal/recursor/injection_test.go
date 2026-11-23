@@ -31,6 +31,7 @@ type injector struct {
 	aa        bool          // forged answers carry AA (some injectors do)
 	copies    int           // forged answers per question (up to three have been measured)
 	delay     time.Duration // the genuine answer arrives this much later
+	lose      bool          // the genuine answer to a targeted name is lost on the way
 	intercept bool          // answer everything itself, over UDP and TCP
 	// servers whose genuine answers have neither EDNS nor AA (some load
 	// balancers): nothing is injected for them, they are only unusual
@@ -161,6 +162,9 @@ func (l *pathLab) serveUDP(pc *net.UDPConn, as netip.AddrPort) {
 				for i := range max(l.c.copies, 1) {
 					l.forged.Add(1)
 					pc.WriteToUDPAddrPort(l.c.forged(qm, i), from)
+				}
+				if l.c.lose {
+					return
 				}
 				time.Sleep(l.c.delay)
 			}
@@ -371,6 +375,54 @@ func TestPort53Hijacked(t *testing.T) {
 		if d := time.Since(start); d > 3*time.Second {
 			t.Fatalf("case %d: 25 lookups took %v; once known, interception should fail at once", soa, d)
 		}
+	}
+}
+
+// TestInjectionWithLostAnswerIsNotInterception: an injector forges answers
+// for example.com and resets their TCP connections, and the genuine UDP
+// answers are lost on the way. That name cannot be resolved, but the
+// network has not taken over port 53: other names resolve, and nothing
+// reports interception (no warning, no "DNS intercepted", healthy).
+func TestInjectionWithLostAnswerIsNotInterception(t *testing.T) {
+	n := world()
+	r := newTest(t, n, true)
+	lab := newPathLab(t, &injector{names: []string{dotted("example.com.")}, copies: 1, lose: true}, worldAddrs(n), n.send)
+	lab.route(r)
+	for _, qt := range []uint16{m.TypeHTTPS, typeTXT, m.TypeAAAA} {
+		if msg, err := askCtx(r, "www.example.com.", qt, false); err == nil && msg.rcode == m.RcodeNoError && len(msg.answer) > 0 {
+			t.Fatalf("type %d: answered %v, though every genuine answer was lost", qt, msg.answer)
+		}
+		if r.Intercepted() || r.Stats.Rewritten.Load() != 0 {
+			t.Fatalf("type %d: taken for interception (rewritten %d, forged sent %d, TCP resets %d)", qt, r.Stats.Rewritten.Load(), lab.forged.Load(), lab.resets.Load())
+		}
+	}
+	if lab.forged.Load() == 0 || lab.resets.Load() == 0 {
+		t.Fatalf("the injector never fired (forged %d, resets %d): the lab tests nothing", lab.forged.Load(), lab.resets.Load())
+	}
+	if got := addrs(ask(t, r, "www.bank.com.", m.TypeA)); len(got) != 1 || got[0] != "203.0.113.1" {
+		t.Fatalf("bank: %v", got)
+	}
+	if r.Intercepted() || !r.Healthy() {
+		t.Fatalf("intercepted %v, healthy %v", r.Intercepted(), r.Healthy())
+	}
+}
+
+// TestTwoNamesFailingAloneMeanInterception: below the root, a forged answer
+// with no TCP answer behind it means interception only when a second name
+// fails the same way and no server has answered in between: a network that
+// answers every question, not an injector that targets some names.
+func TestTwoNamesFailingAloneMeanInterception(t *testing.T) {
+	n := world()
+	r := newTest(t, n, true)
+	lab := newPathLab(t, &injector{names: []string{dotted("example.com."), dotted("bank.com.")}, copies: 1, lose: true}, worldAddrs(n), n.send)
+	lab.route(r)
+	askCtx(r, "www.example.com.", m.TypeHTTPS, false)
+	if r.Intercepted() {
+		t.Fatal("one name failing already taken for interception")
+	}
+	askCtx(r, "www.bank.com.", m.TypeHTTPS, false) // com's servers are known now: nothing answers in between
+	if !r.Intercepted() || r.Stats.Rewritten.Load() == 0 {
+		t.Fatalf("two names failing alone: intercepted %v, rewritten %d", r.Intercepted(), r.Stats.Rewritten.Load())
 	}
 }
 

@@ -79,7 +79,12 @@ by the network's own resolver, often over TCP too. No name server is
 reachable, so no resolver can resolve privately there.
 
 **What DNSNova does:** it recognises the interception (a root server never
-answers without authority, or with an address) instead of trusting it:
+answers without authority, or with an address) instead of trusting it.
+Below the root, a forged answer whose genuine answer was lost and whose
+TCP connection was reset is what an injector does for the names it
+targets, not interception: that lookup asks another server, and
+interception is concluded only when a second name fails the same way
+before any server has answered again. Then:
 
 - nothing intercepted is used or cached, so it cannot become an NXDOMAIN
   for a whole top-level domain;

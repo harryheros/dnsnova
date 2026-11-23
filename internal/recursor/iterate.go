@@ -1069,11 +1069,18 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, d *delegation, name st
 		}
 		if err != nil {
 			if why, ok := sawImpossible.Load().(string); ok && tcp && ctx.Err() == nil {
-				// UDP answered by someone else, and TCP blocked: the network
-				// has taken over port 53 just the same
-				r.noteRewritten(a, why, now)
 				r.failRun.Add(1)
-				return nil, &rewritten{why: why}
+				if r.takenOver(d.zone, name, now) {
+					// UDP answered by someone else, and TCP blocked: the
+					// network has taken over port 53 just the same
+					r.noteRewritten(a, why, now)
+					return nil, &rewritten{why: why}
+				}
+				// an injector on the path, which forges answers for this
+				// name and resets its TCP connections; the genuine answer
+				// was lost this time. Another server is asked, and nothing
+				// is held against this one.
+				return nil, fmt.Errorf("forged answer (%s) and no answer over TCP: %w", why, err)
 			}
 			if calledOff(ctx) {
 				// another server answered first: says nothing about this one
@@ -1276,6 +1283,28 @@ func (r *Recursor) noteRewritten(a netip.Addr, why string, now time.Time) {
 	r.rewriteWarned.Store(now.UnixNano())
 	r.log.Warn("recursion: port 53 is intercepted by the network, so names cannot be resolved privately here; "+
 		"use your own DNSNova elsewhere as an encrypted upstream (docs/restricted-networks.md)", "server", a.String(), "seen", why)
+}
+
+// unansweredName is a name that drew a forged answer and no TCP answer.
+type unansweredName struct {
+	name string
+	at   int64 // unix nanos
+}
+
+// takenOver says whether a forged UDP answer with no TCP answer behind it,
+// for name from a server of zone, shows that the network has taken over
+// port 53 rather than an injector being on the path whose genuine answer
+// was lost. Injectors forge answers for the names they target (and reset
+// their TCP connections), never for what the root servers are asked (the
+// root, a top-level domain); a network that takes over port 53 answers
+// every question. So: at once at the root; below it, when a second name
+// fails the same way and no server has answered in between.
+func (r *Recursor) takenOver(zone, name string, now time.Time) bool {
+	if zone == "" && labelCount(name) <= 1 {
+		return true
+	}
+	prev := r.unanswered.Swap(&unansweredName{name: name, at: now.UnixNano()})
+	return prev != nil && prev.name != name && prev.at >= r.lastOK.Load() && now.Sub(time.Unix(0, prev.at)) < 5*time.Minute
 }
 
 // Intercepted reports whether answers from name servers have been

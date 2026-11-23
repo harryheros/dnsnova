@@ -135,7 +135,10 @@ type Recursor struct {
 	// last warning about it in the log
 	rewrittenAt   atomic.Int64
 	rewriteWarned atomic.Int64
-	failRun       atomic.Int64 // queries without an answer since then
+	// the last name that drew a forged answer and no TCP answer below the
+	// root (takenOver)
+	unanswered atomic.Pointer[unansweredName]
+	failRun    atomic.Int64 // queries without an answer since then
 	// send is replaced by tests.
 	send func(ctx context.Context, addr netip.AddrPort, q []byte, tcp bool) ([]byte, error)
 }

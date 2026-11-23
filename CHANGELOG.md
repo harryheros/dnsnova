@@ -4,6 +4,20 @@ All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
 **Security**.
 
+## 1.8.3 (2026-11-22)
+
+- **Injected answers are no longer taken for the network taking over port
+  53.** An injector on the path forges answers for the names it targets
+  and resets their TCP connections. When the genuine answer to such a name
+  was lost on the way, often for an HTTPS or TXT question, which the
+  injector answers with an address, that one failed exchange was taken for
+  interception: the log warned that names could not be resolved privately,
+  the lookup gave up without asking the other servers, and health checks
+  failed until the next answer. Now that lookup asks another server, and
+  below the root interception is concluded only when a second name fails
+  the same way before any server has answered again. At the root, where
+  injectors do not forge, it is still recognised at once.
+
 ## 1.8.2 (2026-11-21)
 
 The admin interface, gone through page by page for where things are and
