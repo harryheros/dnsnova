@@ -4,6 +4,18 @@ All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
 **Security**.
 
+## 1.8.4 (2026-11-23)
+
+- **A quieter top of the overview.** The DNSNova title was more than twice
+  the size of the logo beside it in the menu and larger than every figure
+  on the page; it is now 40 px instead of 56, the tagline 16 px instead of
+  22, and the settings search box 300 × 34 instead of 380 × 40 (40 high on
+  touch screens). On a laptop the server's name, mode and version now fit
+  beside the title, so the figures start a row higher. Phones are
+  unchanged.
+- **The state light glows** on the dark theme (green, amber or red), where
+  its pale ring looked dim; the light theme keeps the ring.
+
 ## 1.8.3 (2026-11-22)
 
 - **Injected answers are no longer taken for the network taking over port
