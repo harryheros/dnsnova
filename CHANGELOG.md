@@ -1,4 +1,4 @@
-# Changelog
+# DNSNova Changelog
 
 All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
@@ -16,7 +16,7 @@ All notable changes are listed here. Versions follow
 - **The state light glows** on the dark theme (green, amber or red), where
   its pale ring looked dim; the light theme keeps the ring.
 
-## 1.8.3 (2026-11-22)
+## 1.8.3 (2026-11-23)
 
 - **Injected answers are no longer taken for the network taking over port
   53.** An injector on the path forges answers for the names it targets
@@ -30,7 +30,7 @@ All notable changes are listed here. Versions follow
   the same way before any server has answered again. At the root, where
   injectors do not forge, it is still recognised at once.
 
-## 1.8.2 (2026-11-21)
+## 1.8.2 (2026-11-22)
 
 The admin interface, gone through page by page for where things are and
 where links lead. Nothing about DNS changes.
@@ -62,7 +62,7 @@ where links lead. Nothing about DNS changes.
   was cut off and had to be scrolled (Tools was out of sight on most
   laptops); it now tightens in steps and stays whole down to about 600 px.
 
-## 1.8.1 (2026-11-21)
+## 1.8.1 (2026-11-22)
 
 - **The query log says what it is for, and where to go instead.** When it
   is off, the page now says it is a live log for troubleshooting that stops
@@ -487,7 +487,7 @@ picked and when the fallbacks are asked are unchanged.
 - The overview's Resolution card says its counters run since start; the
   rest of the page follows the chosen range.
 
-## 1.6.1 (2026-11-15)
+## 1.6.1 (2026-11-16)
 
 Wording and documentation only; the resolver behaves exactly as in 1.6.0.
 
@@ -567,7 +567,7 @@ here is off by default, and the status page says what is on.
   CH TXT query for `id.server` or `hostname.bind`. A single server says
   nothing.
 
-## 1.4.1 (2026-11-13)
+## 1.4.1 (2026-11-14)
 
 - **UDP socket buffers**: the system caps them (on Linux,
   net.core.rmem_max, often about 200 KB), silently, below the 4 MB dnsnova
@@ -586,7 +586,7 @@ here is off by default, and the status page says what is on.
   top bar) it showed as a wide blue ring. The mark's own glow is tighter
   too.
 
-## 1.4.0 (2026-11-13)
+## 1.4.0 (2026-11-14)
 
 Recursion without upstreams on networks that tamper with DNS
 ([docs/restricted-networks.md](./docs/restricted-networks.md)):
@@ -650,7 +650,7 @@ Also:
   configuration, correct it before upgrading. Found by the fuzz tests.
 - The fuzz tests run once a week instead of every night.
 
-## 1.3.5 (2026-11-11)
+## 1.3.5 (2026-11-12)
 
 Two more causes of SERVFAIL found the same way as in 1.3.4:
 
@@ -662,7 +662,7 @@ Two more causes of SERVFAIL found the same way as in 1.3.4:
   some networks is poor, a zone could fail although its name servers
   answered over IPv4.
 
-## 1.3.4 (2026-11-11)
+## 1.3.4 (2026-11-12)
 
 Found by comparing, for some 5,000 domains, what this resolver answers
 with what a large public resolver answers:
@@ -682,7 +682,7 @@ with what a large public resolver answers:
   server answered". It shows in the log of `ecs.client_path`, in Trace a
   lookup and in the DNSSEC page's failures.
 
-## 1.3.3 (2026-11-11)
+## 1.3.3 (2026-11-12)
 
 - Resolving from the root, with DNSSEC on: some names under zones that are
   not signed failed with SERVFAIL ("no authoritative server answered").
@@ -695,7 +695,7 @@ with what a large public resolver answers:
   - a parent server that sends a DS question down is passed over, and the
     parent's other servers are asked, instead of giving up.
 
-## 1.3.2 (2026-11-11)
+## 1.3.2 (2026-11-12)
 
 - Trace a lookup can show how a name resolves for another network: give a
   client network (or an address, which stands for its /24 or /56) under
@@ -706,7 +706,7 @@ with what a large public resolver answers:
   reason (timed out, too many queries, no server reachable), the name and
   the network, so a name that fails there can be traced.
 
-## 1.3.1 (2026-11-11)
+## 1.3.1 (2026-11-12)
 
 - `ecs.client_path`: a lookup may take up to 9 seconds instead of 6. Each
   name of such a lookup is asked afresh, and from a server with a lossy
@@ -715,7 +715,7 @@ with what a large public resolver answers:
   into trying the others. Measured on such a path, a few percent of
   domains failed for this alone.
 
-## 1.3.0 (2026-11-11)
+## 1.3.0 (2026-11-12)
 
 DNSNova grows from a home and office resolver into one for public and
 company-wide service: several nodes with one configuration and anycast,
@@ -914,7 +914,7 @@ in DNSNova free of charge, commercial deployments included.
 - Public status page: with recursion on, the server is shown as working
   when the resolver works, even without upstreams, as /healthz already did.
 
-## 1.2.0 (2026-11-10)
+## 1.2.0 (2026-11-11)
 
 - New look for the web interface ("Deep Ocean", see docs/design.md): dark
   by default, a brand rail with the new trident and a chrome wordmark set
@@ -947,7 +947,7 @@ in DNSNova free of charge, commercial deployments included.
   more over QUIC, so forged packets cannot use up a real client's share.
 - The ECS setting's help is shorter.
 
-## 1.1.0 (2026-11-09)
+## 1.1.0 (2026-11-10)
 
 - **Security**: forged answers are noticed. When a question sent over UDP
   draws a run of wrong answers from the address of the server asked (an
@@ -962,7 +962,7 @@ in DNSNova free of charge, commercial deployments included.
   with the list's ETag or date (HTTP 304 when unchanged), and a download
   identical to the copy in use is not processed again.
 
-## 1.0.5 (2026-11-09)
+## 1.0.5 (2026-11-10)
 
 - A change of `ecs.address` now waits for lookups still asking for the old
   network, then clears the cache. An answer for the old network that
@@ -972,7 +972,7 @@ in DNSNova free of charge, commercial deployments included.
   NAT64 addresses.
 - `GET /status` reports `privacy.client_subnet`.
 
-## 1.0.4 (2026-11-09)
+## 1.0.4 (2026-11-10)
 
 - New: `ecs.address` (Settings › DNS & upstreams › Resolution, "Answer as
   if from"). The address or network given is sent with every query as its
@@ -1052,7 +1052,7 @@ in DNSNova free of charge, commercial deployments included.
 - The installer shows a progress bar while it downloads, when run in a
   terminal.
 
-## 1.0.0 (2026-11-08)
+## 1.0.0 (2026-11-09)
 
 First stable release.
 

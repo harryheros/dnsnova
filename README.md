@@ -1,12 +1,18 @@
+<div align="center">
+
 # DNSNova
 
-> A secure DNS server, from one box at home to a public resolver on several continents.
+**A secure DNS server, from one box at home to a public resolver on several continents.**
 
 [![Version](https://img.shields.io/github/v/release/harryheros/dnsnova?label=version&color=blue)](https://github.com/harryheros/dnsnova/releases)
-[![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](./LICENSE)
+[![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](#license)
 [![Platform](https://img.shields.io/badge/platform-Linux%20amd64%20%7C%20arm64%20%7C%20arm-lightgrey.svg)](#install)
 [![CI](https://github.com/harryheros/dnsnova/actions/workflows/ci.yml/badge.svg)](https://github.com/harryheros/dnsnova/actions/workflows/ci.yml)
 [![Fuzz](https://github.com/harryheros/dnsnova/actions/workflows/fuzz.yml/badge.svg)](https://github.com/harryheros/dnsnova/actions/workflows/fuzz.yml)
+
+[Install](#install) · [What it does](#what-it-does) · [Encrypted DNS](#encrypted-dns) · [Documentation](#documentation) · [Changelog](./CHANGELOG.md) · [License](#license)
+
+</div>
 
 DNSNova resolves names itself, from the root servers with DNSSEC, or forwards them to upstreams you choose. It answers over plain DNS, DNS over TLS, DNS over QUIC and DNS over HTTPS. One program, no dependencies, managed from the browser, no query logs unless you choose to keep them.
 
@@ -99,6 +105,6 @@ Build from source (Go 1.27.4 or later): `CGO_ENABLED=0 go build -o dnsnova ./cmd
 
 ## License
 
-[GNU Affero General Public License v3.0](./LICENSE): free for any use, including commercial. If you modify DNSNova and offer it as a network service, you must make your modified source available to its users. For other terms, see the commercial license in [COMMERCIAL.md](./COMMERCIAL.md). Contributions are welcome under the [contributor license agreement](./CONTRIBUTING.md). Third-party components: [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
+[GNU Affero General Public License v3.0](./LICENSE): free for any use, including commercial. If you modify DNSNova and offer it as a network service, you must make your modified source available to its users. For other terms, see the commercial license in [COMMERCIAL.md](./COMMERCIAL.md), or ask at [novaod.com/licensing](https://novaod.com/licensing). Contributions are welcome under the [contributor license agreement](./CONTRIBUTING.md). Third-party components: [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
 
 Part of the [Nova infrastructure toolkit](https://github.com/harryheros).
