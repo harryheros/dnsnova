@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 	"unicode"
@@ -92,18 +93,44 @@ func TestReadmeHeaderAndFooter(t *testing.T) {
 	}
 }
 
-// Tables only for short, grid-like data: a long cell leaves wide blank
-// areas in the other columns, so longer text goes in lists.
-func TestReadmeTableCellsAreShort(t *testing.T) {
+// A table reads well when its cells are short and alike in length: one long
+// cell widens its column and leaves blank space in every other row. So no
+// cell over 60 characters, and in a column whose longest cell is over 30,
+// the typical (median) cell is at least 40% of it.
+func TestReadmeTablesAreEven(t *testing.T) {
 	sep := regexp.MustCompile(`^\|[-|: ]+\|$`)
-	for _, line := range withoutCode(readFile(t, "../README.md")) {
-		if !strings.HasPrefix(line, "|") || sep.MatchString(line) {
+	var tables [][][]string
+	var current [][]string
+	for _, line := range append(withoutCode(readFile(t, "../README.md")), "") {
+		if !strings.HasPrefix(line, "|") {
+			if current != nil {
+				tables = append(tables, current)
+				current = nil
+			}
 			continue
 		}
-		for _, cell := range strings.Split(strings.Trim(line, "|"), " | ") {
-			visible := strings.NewReplacer("`", "", "*", "").Replace(mdLinkRE.ReplaceAllString(cell, "$1"))
-			if n := len([]rune(strings.TrimSpace(visible))); n > 40 {
-				t.Errorf("table cell of %d characters: %q", n, cell)
+		if sep.MatchString(line) {
+			continue
+		}
+		var row []string
+		for _, cell := range strings.Split(strings.Trim(strings.TrimSpace(line), "|"), " | ") {
+			v := strings.NewReplacer("`", "", "*", "", `\|`, "|").Replace(mdLinkRE.ReplaceAllString(cell, "$1"))
+			row = append(row, strings.TrimSpace(v))
+		}
+		current = append(current, row)
+	}
+	for _, table := range tables {
+		for col := range table[0] {
+			var lengths []int
+			for _, row := range table[1:] {
+				if len(row) == len(table[0]) {
+					lengths = append(lengths, len([]rune(row[col])))
+				}
+			}
+			sort.Ints(lengths)
+			longest, median := lengths[len(lengths)-1], lengths[len(lengths)/2]
+			if longest > 60 || (longest > 30 && float64(median) < 0.4*float64(longest)) {
+				t.Errorf("table %v, column %d: cell lengths %v are uneven", table[0], col, lengths)
 			}
 		}
 	}
