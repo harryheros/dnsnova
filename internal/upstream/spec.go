@@ -45,6 +45,10 @@ func (s Spec) HostIsIP() bool {
 // Addr returns host:port.
 func (s Spec) Addr() string { return net.JoinHostPort(s.Host, strconv.Itoa(s.Port)) }
 
+// defaultPorts lists the schemes ParseSpec accepts, with their default
+// ports. Every scheme here must have a transport in New.
+var defaultPorts = map[string]int{"udp": 53, "tcp": 53, "tls": 853, "https": 443, "h3": 443, "quic": 853}
+
 // ParseSpec parses an upstream address.
 func ParseSpec(raw string) (Spec, error) {
 	s := Spec{Raw: raw}
@@ -62,8 +66,7 @@ func ParseSpec(raw string) (Spec, error) {
 		s.Pin = pin.Unmap()
 		rest = rest[:i]
 	}
-	defPort := map[string]int{"udp": 53, "tcp": 53, "tls": 853, "https": 443, "h3": 443, "quic": 853}
-	port, ok := defPort[s.Scheme]
+	port, ok := defaultPorts[s.Scheme]
 	if !ok {
 		return s, fmt.Errorf("%q: unsupported scheme %q (use udp, tcp, tls, https, h3 or quic)", raw, s.Scheme)
 	}
