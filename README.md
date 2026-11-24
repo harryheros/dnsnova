@@ -2,7 +2,7 @@
 
 > A secure DNS server, from one box at home to a public resolver on several continents.
 
-[![Version](https://img.shields.io/github/v/release/harryheros/dnsnova?label=version&color=blue)](https://github.com/harryheros/dnsnova/releases)
+[![Version](https://img.shields.io/badge/version-v1.8.4-blue.svg)](https://github.com/harryheros/dnsnova/releases)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](#license)
 [![Platform](https://img.shields.io/badge/platform-Linux%20amd64%20%7C%20arm64%20%7C%20arm-lightgrey.svg)](#install)
 [![CI](https://github.com/harryheros/dnsnova/actions/workflows/ci.yml/badge.svg)](https://github.com/harryheros/dnsnova/actions/workflows/ci.yml)

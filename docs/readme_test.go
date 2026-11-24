@@ -80,9 +80,18 @@ func TestReadmeHeaderAndFooter(t *testing.T) {
 	if !strings.HasPrefix(readme, "# DNSNova\n\n> ") || strings.Contains(readme, "<div") {
 		t.Error("README must open with a left-aligned DNSNova header")
 	}
-	if !strings.Contains(readme, "img.shields.io/github/v/release/harryheros/dnsnova") ||
-		strings.Contains(readme, "img.shields.io/badge/version-") {
-		t.Error("the version badge must follow the latest release, not be written by hand")
+	// A static version badge, updated with each release: badges that make
+	// shields.io query GitHub on every view showed as broken images on
+	// GitHub, while static badges and GitHub's own workflow badges render.
+	newest := regexp.MustCompile(`(?m)^## v?(\d+\.\d+\.\d+) \(`).FindStringSubmatch(readFile(t, "../CHANGELOG.md"))
+	if newest == nil {
+		t.Fatal("no release heading in CHANGELOG.md")
+	}
+	if !strings.Contains(readme, "img.shields.io/badge/version-v"+newest[1]+"-blue") {
+		t.Errorf("the version badge must show v%s, the newest CHANGELOG entry", newest[1])
+	}
+	if strings.Contains(readme, "img.shields.io/github/") {
+		t.Error("no shields.io badge that queries GitHub")
 	}
 	if !strings.Contains(readme, "https://novaod.com/licensing") {
 		t.Error("the License section must say where to ask for a commercial license")
