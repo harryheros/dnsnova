@@ -1,8 +1,6 @@
-<div align="center">
-
 # DNSNova
 
-**A secure DNS server, from one box at home to a public resolver on several continents.**
+> A secure DNS server, from one box at home to a public resolver on several continents.
 
 [![Version](https://img.shields.io/github/v/release/harryheros/dnsnova?label=version&color=blue)](https://github.com/harryheros/dnsnova/releases)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](#license)
@@ -11,8 +9,6 @@
 [![Fuzz](https://github.com/harryheros/dnsnova/actions/workflows/fuzz.yml/badge.svg)](https://github.com/harryheros/dnsnova/actions/workflows/fuzz.yml)
 
 [Install](#install) · [What it does](#what-it-does) · [Encrypted DNS](#encrypted-dns) · [Documentation](#documentation) · [Changelog](./CHANGELOG.md) · [License](#license)
-
-</div>
 
 DNSNova resolves names itself, from the root servers with DNSSEC, or forwards them to upstreams you choose. It answers over plain DNS, DNS over TLS, DNS over QUIC and DNS over HTTPS. One program, no dependencies, managed from the browser, no query logs unless you choose to keep them.
 

@@ -74,8 +74,10 @@ func anchors(text string) map[string]bool {
 
 func TestReadmeHeaderAndFooter(t *testing.T) {
 	readme := readFile(t, "../README.md")
-	if !strings.HasPrefix(readme, "<div align=\"center\">\n\n# DNSNova\n") {
-		t.Error("README must open with the centered DNSNova header")
+	// Title, a one-line blockquote, then badges: aligned left, as the owner
+	// prefers (a centered header was tried and dropped).
+	if !strings.HasPrefix(readme, "# DNSNova\n\n> ") || strings.Contains(readme, "<div") {
+		t.Error("README must open with a left-aligned DNSNova header")
 	}
 	if !strings.Contains(readme, "img.shields.io/github/v/release/harryheros/dnsnova") ||
 		strings.Contains(readme, "img.shields.io/badge/version-") {
@@ -87,6 +89,23 @@ func TestReadmeHeaderAndFooter(t *testing.T) {
 	lines := strings.Split(strings.TrimRight(readme, "\n"), "\n")
 	if last := lines[len(lines)-1]; last != toolkitLine {
 		t.Errorf("README must end with the toolkit line, ends with %q", last)
+	}
+}
+
+// Tables only for short, grid-like data: a long cell leaves wide blank
+// areas in the other columns, so longer text goes in lists.
+func TestReadmeTableCellsAreShort(t *testing.T) {
+	sep := regexp.MustCompile(`^\|[-|: ]+\|$`)
+	for _, line := range withoutCode(readFile(t, "../README.md")) {
+		if !strings.HasPrefix(line, "|") || sep.MatchString(line) {
+			continue
+		}
+		for _, cell := range strings.Split(strings.Trim(line, "|"), " | ") {
+			visible := strings.NewReplacer("`", "", "*", "").Replace(mdLinkRE.ReplaceAllString(cell, "$1"))
+			if n := len([]rune(strings.TrimSpace(visible))); n > 40 {
+				t.Errorf("table cell of %d characters: %q", n, cell)
+			}
+		}
 	}
 }
 
