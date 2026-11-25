@@ -82,6 +82,7 @@ const LINE = {
   arrow: [["path", { d: "M5 12h14M13 6l6 6-6 6" }]],
   logout: [["path", { d: "M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" }]],
   book: [["path", { d: "M4 19.5V5a2 2 0 0 1 2-2h14v16H6.5A2.5 2.5 0 0 0 4 21.5zM4 19.5A2.5 2.5 0 0 1 6.5 17H20" }]],
+  pin: [["path", { d: "M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0" }], ["circle", { cx: 12, cy: 10, r: 3 }]],
 };
 
 // The DNSNova mark (docs/design.md, Brand): the metal-and-light drawing,
@@ -744,6 +745,7 @@ const lines = (t) => t.split(/[\n,]/).map((x) => x.trim()).filter(Boolean);
 function changedValues(before, after) {
   const out = {};
   for (const [k, v] of Object.entries(after)) {
+    if (k.startsWith("@")) continue; // the page's own state, such as "@where"
     if (JSON.stringify(v) !== JSON.stringify(before[k])) out[k] = v;
   }
   return out;
@@ -752,7 +754,9 @@ function changedValues(before, after) {
 // ---------- the app shell ----------
 
 const NAV = [
-  ["Status", [["Overview", "overview", "home"], ["Upstreams", "upstreams", "upstreams"], ["Query log", "querylog", "querylog"], ["New domains", "newdomains", "sparkle"]]],
+  // every page is in the menu, also of a feature that is off: its page says
+  // what it does and how to turn it on
+  ["Status", [["Overview", "overview", "home"], ["Upstreams", "upstreams", "upstreams"], ["Query log", "querylog", "querylog"], ["DNSSEC", "dnssec", "shieldcheck"], ["New domains", "newdomains", "sparkle"], ["Private locality", "locality", "pin"], ["Nodes", "nodes", "network"]]],
   ["Settings", [["DNS & upstreams", "settings/dns", "dns"], ["Filtering", "settings/filter", "filter"], ["Addresses & encryption", "settings/encryption", "lock"], ["Access & limits", "settings/access", "shield"], ["Alerts", "settings/alerts", "bell"], ["Logs & statistics", "settings/logs", "file"], ["Admin", "settings/admin", "user"]]],
   ["Tools", [["Setup guide", "tools/guide", "phone"], ["Compare upstreams", "tools/lookup", "compare"], ["Trace a lookup", "tools/trace", "arrow"]]],
 ];
@@ -760,7 +764,7 @@ const NAV = [
 // pageTitle is the browser tab title of a page: its name in the menu.
 function pageTitle(r) {
   const item = NAV.flatMap(([, items]) => items).find(([, path]) => path === r);
-  return (item ? item[0] : { dnssec: "DNSSEC", nodes: "Nodes", locality: "Private locality" }[r] || "Overview") + " · DNSNova";
+  return (item ? item[0] : "Overview") + " · DNSNova";
 }
 
 // encryptedOn: some encrypted protocol is served (settings values).
@@ -829,20 +833,10 @@ async function showApp() {
   menu.addEventListener("click", () => setMenu(!side.classList.contains("open")));
   const top = topBar();
   mount(h("div", { class: "shell" }, side, main));
-  // Nodes appears only on a node of a cluster (docs/design.md, Toward clusters)
-  const navItems = (title, items) => {
-    if (title !== "Status") return items;
-    const out = [...items];
-    if (state.dnssec && state.dnssec.recursion) out.push(["DNSSEC", "dnssec", "shieldcheck"]); // only when resolving from the root
-    if (state.locality && state.locality.enabled) out.push(["Private locality", "locality", "dns"]); // only when it is on
-    if (state.cluster && state.cluster.role) out.push(["Nodes", "nodes", "network"]);
-    return out;
-  };
   const drawNav = () => fill(nav, ...NAV.map(([title, items]) => h("div", { class: "navgroup" },
     h("div", { class: "navtitle" }, title),
-    navItems(title, items).map(([label, r, ic]) => h("a", { href: "#/" + r, "aria-current": route() === r ? "page" : null }, line(ic, 19), h("span", null, label))))));
+    items.map(([label, r, ic]) => h("a", { href: "#/" + r, "aria-current": route() === r ? "page" : null }, line(ic, 19), h("span", null, label))))));
   try { state.cluster = await api("GET", "/cluster"); } catch (e) { state.cluster = null; }
-  try { state.dnssec = await api("GET", "/dnssec"); } catch (e) { state.dnssec = null; }
   try { state.locality = await api("GET", "/locality"); } catch (e) { state.locality = null; }
   const go = () => {
     setMenu(false);
@@ -1325,7 +1319,9 @@ function drawOverview(d, { range, metric, seg, mseg }) {
         meter(x.count / most), h("span", { class: "num" }, fmt.short(x.count)), h("span", { class: "share" }, total ? fmt.pct(x.count / total) : "")), "toprows"))
     : card("s4", "Top Domains", "trophy", null, h("p", { class: "empty small muted" }, "No domains to show yet. ", privacyNote));
 
-  const upCard = rec ? recCard(rec) : card("s4", "Upstream Servers", "shield", more("#/upstreams"),
+  const upCard = rec ? recCard(rec) : !ups.length ? card("s4", "Upstream Servers", "shield", more("#/upstreams"),
+    h("p", { class: "empty small muted" }, "No upstreams set, so names cannot be looked up yet. ", h("a", { href: "#/settings/dns?focus=recursion.enabled" }, "Resolve names itself"), " (no other DNS service sees the queries) or ", h("a", { href: "#/settings/dns?focus=upstream.primary" }, "add upstreams"), "."))
+    : card("s4", "Upstream Servers", "shield", more("#/upstreams"),
     slots(ups, SLOTS, (u) => {
       const us = upState(u, ups);
       return h("li", { class: "slot", title: `${u.address} · ${us.label}` }, h("span", { class: "dot lit " + us.cls }),
@@ -1389,9 +1385,41 @@ function drawOverview(d, { range, metric, seg, mseg }) {
     h("footer", { class: "dfoot" }, h("span", null, pv.query_log_days ? "Queries kept on disk" : "In memory only"), h("a", { href: "#/querylog" }, "Query log")));
 
   const notServing = st.serves_dns === false ? h("p", { class: "notice warn s12" }, "DNS is not served yet: no address is set. Set the ", h("a", { href: "#/settings/encryption?focus=server.listen" }, "addresses to answer on"), ", and ", h("a", { href: "#/settings/dns" }, "where answers come from"), ".") : null;
-  return [h("div", { class: "dash" }, notServing, k1, k2, k3, k4, chart, flow, top, upCard, evCard,
+  return [h("div", { class: "dash" }, notServing, k1, k2, k3, k4, chart, flow, featuresCard(st, open), top, upCard, evCard,
     topCard("Not Found", "alert", stats.top_nxdomains || [], "Names that do not exist will appear here."),
     rejCard, certCard, privCard)];
+}
+
+// featuresCard shows what this server can do, on or off, each a link to its
+// page or setting: what sets DNSNova apart is seen, not looked for.
+function featuresCard(st, open) {
+  const f = st.features || {};
+  const plural = (n, one) => `${n} ${one}${n === 1 ? "" : "s"}`;
+  const enc = ["dot", "doq", "doh", "doh3"].filter((k) => open.includes(k)).map((k) => ({ dot: "DoT", doq: "DoQ", doh: "DoH", doh3: "HTTP/3" })[k]);
+  const cache = [f.prefetch && "prefetch", f.persist && "kept across restarts", f.serve_stale && "serves stale"].filter(Boolean);
+  const items = [
+    ["network", "Resolves names itself", f.recursion, f.recursion ? "from the root servers" : "asks upstreams instead", "#/settings/dns?focus=recursion.enabled"],
+    ["shieldcheck", "DNSSEC", f.dnssec, f.dnssec ? "every signed answer checked" : f.recursion ? "not checked" : "with resolving itself", "#/dnssec"],
+    ["pin", "Private locality", f.locality, f.locality ? plural(f.locality_exits, "exit") + " \u00b7 answers fit each client" : f.ecs ? "off \u00b7 client subnet " + f.ecs : "off", "#/locality"],
+    ["lock", "Encrypted DNS", enc.length > 0, enc.length ? enc.join(" \u00b7 ") : "off", "#/settings/encryption"],
+    ["filter", "Filtering", f.filter, f.filter ? "ads, trackers, malicious sites" : "off", "#/settings/filter"],
+    ["user", "Client groups", f.groups > 0, f.groups ? plural(f.groups, "group") + ", each its own filtering" : "none", "#/settings/dns?focus=clients.groups"],
+    ["sparkle", "New domains", f.nod, f.nod ? "first lookups reported" : "off", "#/newdomains"],
+    ["shield", "Rebinding protection", f.rebinding, f.rebinding ? "devices here kept out of reach" : "off", "#/settings/dns?focus=local.rebinding_protection"],
+    ["shieldcheck", "DNS Cookies", f.cookies || f.name_cookies, [f.name_cookies && "with name servers", f.cookies && "with clients"].filter(Boolean).join(" \u00b7 ") || "off", "#/settings/access?focus=server.cookies"],
+    ["layers", "Smart cache", cache.length > 0, cache.length ? cache.join(" \u00b7 ") : "plain", "#/settings/dns?focus=cache.prefetch"],
+    ["home", "Local names", f.local_records + f.local_forward > 0, f.local_records + f.local_forward ? [f.local_records && plural(f.local_records, "name"), f.local_forward && plural(f.local_forward, "domain") + " forwarded"].filter(Boolean).join(" \u00b7 ") : "none", "#/settings/dns?focus=local.records"],
+    ["bell", "Alerts", f.alerts, f.alerts ? "on" : "off", "#/settings/alerts"],
+    ["network", "Cluster", !!f.cluster, f.cluster ? f.cluster + (f.anycast ? " \u00b7 anycast" : "") : "one server", "#/nodes"],
+    ["info", "Public status page", f.status_page, f.status_page ? "setup steps for devices" : "off", "#/settings/encryption?focus=status.enabled"],
+    ["file", "Query records", f.query_days > 0, f.query_days ? `${f.query_days} days on disk` : "off: nothing on disk", "#/settings/logs?focus=log.query_days"],
+    ["file", "Log collector", f.dnstap, f.dnstap ? "dnstap" : "off", "#/settings/logs?focus=dnstap.target"],
+  ];
+  const n = items.filter((x) => x[2]).length;
+  return card("s12", "Features", "sliders", h("span", { class: "small muted" }, `${n} of ${items.length} on`),
+    h("ul", { class: "feats" }, items.map(([ic, name, on, note, href]) => h("li", null,
+      h("a", { href, class: on ? "on" : "" }, line(ic, 18), h("span", { class: "ftext" }, h("strong", null, name), h("span", { class: "small muted" }, note)),
+        h("span", { class: "dot lit " + (on ? "ok" : "idle"), title: on ? "on" : "off" }))))));
 }
 
 // with recursion, the upstream card shows resolution instead
@@ -1494,7 +1522,9 @@ function flowCard(st, stats, ups, total, open, rec, nowRate) {
   outs.forEach((o) => counts[o.cls]++);
   const rowsL = [["ok", "Healthy", counts.ok], ["warn", "Slow", counts.warn], ["err", "Failing", counts.err]];
   if (counts.idle) rowsL.splice(1, 0, ["idle", rec ? "Fallback" : "Standby", counts.idle]);
-  return card("s4 flowcard", "Traffic Flow", "network", h("span", { class: "nodechip", title: "DNSNova runs as one node today" }, h("span", { class: "dot lit ok" }), "1 node"),
+  const cl = state.cluster || {}, nodes = cl.nodes || [];
+  const chip = cl.role === "primary" ? `${nodes.filter((x) => x.online).length} of ${nodes.length} nodes` : cl.role === "follower" ? "follower" : "1 node";
+  return card("s4 flowcard", "Traffic Flow", "network", h("a", { class: "nodechip", href: "#/nodes", title: cl.role ? "Nodes of this cluster" : "This server runs on its own" }, h("span", { class: "dot lit ok" }), chip),
     h("div", { class: "flow" }, svg),
     h("div", { class: "legend3" }, rowsL.map(([cls, t, n]) => h("div", null, h("span", { class: "dot lit " + cls }), t, h("span", { class: "num" }, n)))));
 }
@@ -1581,16 +1611,23 @@ function upstreamsPage(main) {
   main.append(pageHead("Upstreams", "Status"), body);
   const load = async () => {
     try {
-      const { upstreams } = await api("GET", "/upstreams");
+      const [{ upstreams }, st] = await Promise.all([api("GET", "/upstreams"), api("GET", "/status")]);
+      state.status = st;
       noteLatency(upstreams);
+      const rec = st.recursion && st.recursion.enabled ? st.recursion : null;
+      if (!upstreams.length) {
+        fill(body, noUpstreams(rec, st.features || {}));
+        return;
+      }
       const q = sum(upstreams.map((u) => u.queries)), errs = sum(upstreams.map((u) => u.errors));
       const healthyN = upstreams.filter((u) => u.healthy).length;
       // with recursion every upstream is a fallback: average those instead
       const primaries = upstreams.some((u) => u.role === "primary");
       const lats = upstreams.filter((u) => u.healthy && (u.role === "primary" || !primaries) && u.latency_ms).map((u) => u.latency_ms);
       const tile = (color, ic, label, value, unit, note) => kpiCard(color, ic, label, value, unit, null, note, null, true);
-      fill(body, h("div", { class: "dash" },
-        tile("var(--c3)", "shieldcheck", "Healthy", `${healthyN}/${upstreams.length}`, null, healthyN === upstreams.length ? "every upstream answers" : "some upstreams fail"),
+      fill(body, rec ? h("p", { class: "notice small" }, "This server resolves names itself. These upstreams are fallbacks, asked only when a domain\u2019s own name servers cannot be reached", rec.fallback ? "." : ": that is off, so they are not asked at all.") : null,
+        h("div", { class: "dash" },
+        tile("var(--c3)", "shieldcheck", "Healthy", `${healthyN}/${upstreams.length}`, null, healthyN === upstreams.length ? (upstreams.length === 1 ? "it answers" : "every upstream answers") : "some upstreams fail"),
         tile("var(--c1)", "bolt", primaries ? "Primary latency" : "Fallback latency", lats.length ? fmt.ms(sum(lats) / lats.length) : "–", lats.length ? "ms" : null, "average, smoothed"),
         tile("var(--c2)", "layers", "Success rate", q ? fmt.pct(1 - errs / q) : "–", null, `${fmt.int(errs)} errors`),
         tile("var(--c1)", "bars", "Queries sent", fmt.short(q), null, "since start")),
@@ -1609,6 +1646,27 @@ function upstreamsPage(main) {
   };
   load();
   state.timer = setInterval(() => { if (document.visibilityState === "visible") load(); }, 15000);
+}
+
+// noUpstreams: the Upstreams page with none set, which says where answers
+// come from instead and what to do.
+function noUpstreams(rec, f) {
+  const go = (href, text, primary) => h("a", { class: "btn" + (primary ? " primary" : ""), href }, text);
+  if (rec) {
+    return h("section", { class: "card" }, h("h2", null, "No upstreams needed"),
+      h("p", { style: { margin: 0 } }, "This server resolves every name itself, from the root servers and each domain\u2019s own name servers, so no other DNS service sees the queries."),
+      h("p", { class: "small muted", style: { margin: 0 } }, f.fallback
+        ? "Upstreams are optional here. \u201cFall back to upstreams\u201d is on, but none is set: a name whose name servers cannot be reached fails rather than being asked elsewhere. Where the network intercepts DNS, use your own DNSNova elsewhere as the upstream."
+        : "Upstreams are optional here. To have a name whose name servers cannot be reached asked elsewhere rather than failing, turn on \u201cFall back to upstreams\u201d and add some."),
+      h("div", { class: "row", style: { gap: "10px", flexWrap: "wrap" } },
+        f.fallback ? go("#/settings/dns?focus=upstream.primary", "Add fallback upstreams") : go("#/settings/dns?focus=recursion.fallback", "Fall back to upstreams\u2026"),
+        go("#/dnssec", "DNSSEC"), go("#/tools/trace", "Trace a lookup")));
+  }
+  return h("section", { class: "card" }, h("h2", null, "No upstreams yet"),
+    h("p", { style: { margin: 0 } }, "Answers come from upstreams, other DNS services this server asks, or from this server itself, resolving each name from the root servers. Until one is chosen, names cannot be looked up."),
+    h("div", { class: "row", style: { gap: "10px", flexWrap: "wrap" } },
+      go("#/settings/dns?focus=recursion.enabled", "Resolve names itself", true), go("#/settings/dns?focus=upstream.primary", "Add upstreams")),
+    h("p", { class: "small muted", style: { margin: 0 } }, "Resolving itself is the most private: no other DNS service sees the queries, and answers are checked with DNSSEC. Upstreams such as your provider\u2019s or a public service are simpler where the network allows only them."));
 }
 
 // ---------- trace and DNSSEC ----------
@@ -1728,13 +1786,14 @@ function localityPage(main) {
   main.append(pageHead("Private locality", "Status"), body);
   const load = async () => {
     try {
-      const l = await api("GET", "/locality");
+      const [l, st] = await Promise.all([api("GET", "/locality"), api("GET", "/status")]);
       state.locality = l;
+      state.status = st;
       if (!l.enabled) {
-        fill(body, h("section", { class: "card" }, h("p", { style: { margin: 0 } }, "Private locality is off. With it, clients far from this server get the answers name servers give where they are, asked through exits, and nothing about them is sent. It is set in the configuration file ([locality]); see docs/private-locality.md.")));
+        fill(body, ...localityOff(st.features || {}));
         return;
       }
-      const st = l.status || {};
+      const ls = l.status || {};
       const up = l.exits.filter((e) => e.up).length;
       const total = l.report.reduce((a, x) => a + x.queries, 0);
       const tile = (color, ic, label, value, note) => kpiCard(color, ic, label, value, null, null, note, null, true);
@@ -1742,7 +1801,7 @@ function localityPage(main) {
         h("div", { class: "dash" },
           tile(up === l.exits.length ? "var(--c3)" : "var(--c2)", "network", "Exits answering", `${up}/${l.exits.length}`, up === l.exits.length ? "every exit is in use" : "clients of the others get this server's answers"),
           tile("var(--c1)", "layers", "Zones that vary", fmt.int(l.zones.length), "answers depend on where they are asked from"),
-          tile("var(--c1)", "bars", "Asked from every exit", fmt.short(st.forks), st.forks_limited ? `${fmt.short(st.forks_limited)} over the limit, asked from here` : "names whose answers vary, since start"),
+          tile("var(--c1)", "bars", "Asked from every exit", fmt.short(ls.forks), ls.forks_limited ? `${fmt.short(ls.forks_limited)} over the limit, asked from here` : "names whose answers vary, since start"),
           tile("var(--c2)", "shieldcheck", "Given this server's answer", fmt.short(l.exits.reduce((a, e) => a + e.fallbacks, 0)), "their exit was late or not answering")),
         h("section", { class: "card" }, h("h2", null, "Exits"),
           h("div", { class: "tablewrap" }, h("table", { class: "stack" },
@@ -1776,6 +1835,39 @@ function localityPage(main) {
   state.timer = setInterval(() => { if (document.visibilityState === "visible") load(); }, 15000);
 }
 
+// localityOff: the Private locality page while it is off: what it does,
+// next to the other two ways, and the next step from where this server is.
+function localityOff(f) {
+  const docs = PROJECT + "/blob/main/docs/private-locality.md";
+  const n = f.locality_exits || 0;
+  const exits = `${n} exit${n === 1 ? " is" : "s are"} set in the configuration file`;
+  const next = n && f.recursion
+    ? [h("p", { style: { margin: 0 } }, exits, ": it only needs turning on."), h("div", { class: "row" }, h("a", { class: "btn primary", href: "#/settings/dns?focus=locality.enabled" }, "Turn it on"))]
+    : n
+      ? [h("p", { style: { margin: 0 } }, exits, ". It needs \u201cResolve names itself\u201d: answers are asked from the domains\u2019 own name servers, from here and through the exits."), h("div", { class: "row" }, h("a", { class: "btn primary", href: "#/settings/dns?focus=recursion.enabled" }, "Resolve names itself"))]
+      : [h("p", { style: { margin: 0 } }, "Set up one or more exits, small hosts near your clients that only pass questions on, and list them under [locality] in the configuration file. Then turn it on in DNS & upstreams.", f.recursion ? "" : " It also needs \u201cResolve names itself\u201d."),
+        h("div", { class: "row" }, h("a", { class: "btn primary", href: docs, target: "_blank", rel: "noopener noreferrer" }, "How to set up exits"), h("a", { class: "btn", href: "#/settings/admin?focus=file" }, "Edit the configuration file"))];
+  const rows = [
+    ["Answers fit", "where this server is", "one network you choose", "where each client is"],
+    ["Sent about clients", "nothing", "one network, the same for all", "nothing"],
+    ["Clients far away", "get copies near this server", "get copies near that network", "get copies near them"],
+    ["Needs", "nothing", "an address", "exits and resolving itself"],
+  ];
+  return [
+    h("section", { class: "card" }, h("h2", null, "Private locality is off"),
+      h("p", { style: { margin: 0 } }, "Large sites (video, downloads, app stores) send each visitor to their nearest copy, judged by where the question comes from. Asked from here, clients far from this server are sent to copies near the server, not near them."),
+      h("p", { style: { margin: 0 } }, "Private locality also asks such questions from exits near the clients and gives each client the answer for where it is. Unlike client subnet, nothing about clients is sent: no address, no network. The root, top-level domains and DNSSEC keys are always asked from here."),
+      f.ecs ? h("p", { class: "notice small", style: { margin: 0 } }, "Client subnet is on (", h("span", { class: "mono" }, f.ecs), "): one or the other, chosen in ", h("a", { href: "#/settings/dns?focus=locality.enabled" }, "DNS & upstreams"), ".") : null,
+      ...next),
+    h("section", { class: "card" }, h("h2", null, "Three ways to place answers"),
+      h("div", { class: "tablewrap" }, h("table", { class: "stack" },
+        h("thead", null, h("tr", null, ["", "This server (usual)", "Client subnet", "Private locality"].map((t) => h("th", { scope: "col" }, t)))),
+        h("tbody", null, rows.map(([k, a, b, c]) => h("tr", null, h("td", { class: "head" }, h("strong", null, k)),
+          h("td", { "data-label": "This server" }, a), h("td", { "data-label": "Client subnet" }, b), h("td", { "data-label": "Private locality" }, c)))))),
+      h("p", { class: "small muted", style: { margin: 0 } }, "Chosen in ", h("a", { href: "#/settings/dns?focus=locality.enabled" }, "DNS & upstreams \u203a Answers made for"), ". ", h("a", { href: docs, target: "_blank", rel: "noopener noreferrer" }, "How private locality works"), ".")),
+  ];
+}
+
 function dnssecPage(main) {
   const body = h("div", { style: { display: "flex", flexDirection: "column", gap: "18px" } }, h("p", { class: "muted" }, "Loading…"));
   main.append(pageHead("DNSSEC", "Status"), body);
@@ -1784,7 +1876,10 @@ function dnssecPage(main) {
       const d = await api("GET", "/dnssec");
       state.dnssec = d;
       if (!d.recursion) {
-        fill(body, h("section", { class: "card" }, h("p", { style: { margin: 0 } }, "This server forwards to upstreams, which check DNSSEC themselves. Turn on ", h("a", { href: "#/settings/dns?focus=recursion.enabled" }, "Resolve names itself"), " to check it here.")));
+        fill(body, h("section", { class: "card" }, h("h2", null, "DNSSEC is left to the upstreams"),
+          h("p", { style: { margin: 0 } }, "This server forwards queries to upstreams, which check DNSSEC themselves, if they do. Resolving names itself, DNSNova checks every signed answer here: a forged or tampered answer is refused, and this page lists each name that failed and why, with a trace of the lookup."),
+          h("p", { class: "small muted", style: { margin: 0 } }, "Domains with broken DNSSEC can be exempted from here, one click each, until their owners fix them."),
+          h("div", null, h("a", { class: "btn primary", href: "#/settings/dns?focus=recursion.enabled" }, "Resolve names itself"))));
         return;
       }
       const total = d.secure + d.insecure + d.bogus;
@@ -1861,7 +1956,11 @@ function nodesPage(main) {
       const c = await api("GET", "/cluster");
       state.cluster = c;
       if (!c.role) {
-        fill(body, h("section", { class: "card" }, h("p", { style: { margin: 0 } }, "This server runs on its own. To share its settings with other DNSNova servers, make it a cluster primary in its configuration file; see ", h("a", { href: PROJECT + "/blob/main/docs/cluster.md", target: "_blank", rel: "noopener noreferrer" }, "Clusters"), ".")));
+        const docs = PROJECT + "/blob/main/docs/cluster.md";
+        fill(body, h("section", { class: "card" }, h("h2", null, "This server runs on its own"),
+          h("p", { style: { margin: 0 } }, "Several DNSNova servers can work as one: settings changed on the primary reach every node within seconds, and this page shows each node\u2019s health, settings, version and certificate. Alerts can come from every node, and with anycast a node that stops resolving withdraws its address by itself."),
+          h("p", { class: "small muted", style: { margin: 0 } }, "A node becomes the primary or a follower in its own configuration file ([cluster]); each keeps its own addresses there."),
+          h("div", { class: "row" }, h("a", { class: "btn primary", href: docs, target: "_blank", rel: "noopener noreferrer" }, "How to set up a cluster"), h("a", { class: "btn", href: "#/settings/admin?focus=file" }, "Edit the configuration file"))));
         return;
       }
       if (c.role === "follower") {
@@ -2256,6 +2355,16 @@ function guidePage(main) {
 // upstream settings matter without recursion, or as its fallback
 const upShown = (v) => !v["recursion.enabled"] || v["recursion.fallback"];
 
+// whereMode: whose place answers are made for. "off": this server's;
+// "network": one network for every client (ecs.address); "private": each
+// client's own (private locality). "@where" keeps "network" chosen while
+// its address is still empty.
+function whereMode(v) {
+  if (v["locality.enabled"]) return "private";
+  if (v["ecs.address"] || v["@where"] === "network") return "network";
+  return "off";
+}
+
 const SETTINGS = {
   dns: {
     title: "DNS & upstreams",
@@ -2266,10 +2375,14 @@ const SETTINGS = {
         { key: "recursion.qname_minimisation", label: "Minimal names", type: "bool", help: "Each server is told only the part of the name it needs: the root sees \u201ccom\u201d, not the whole name.", show: (v) => v["recursion.enabled"] },
         { key: "recursion.fallback", label: "Fall back to upstreams", type: "bool", help: "When no name server of a domain can be reached, ask the upstreams below. Never after a failed DNSSEC check.", show: (v) => v["recursion.enabled"] },
         { key: "recursion.ipv6", label: "Use IPv6", type: "bool", help: "Also reach name servers over IPv6, when this server has it.", show: (v) => v["recursion.enabled"] },
-        { key: "recursion.cookies", adv: true, label: "DNS Cookies with name servers", type: "bool", help: "Send each name server a cookie and check the one it returns (RFC 7873). A UDP answer with the wrong cookie, or none from a server that always sends one, is dropped as forged.", show: (v) => v["recursion.enabled"] },
+        { key: "recursion.cookies", label: "DNS Cookies with name servers", type: "bool", help: "Send each name server a cookie and check the one it returns (RFC 7873). A UDP answer with the wrong cookie, or none from a server that always sends one, is dropped as forged.", show: (v) => v["recursion.enabled"] },
         { key: "recursion.negative_trust_anchors", adv: true, label: "Domains not validated", type: "list", help: "Negative trust anchors (RFC 7646): domains with broken DNSSEC, answered without validation. Remove each once fixed. The DNSSEC page lists failures.", show: (v) => v["recursion.enabled"] && v["recursion.dnssec"] },
         { key: "recursion.allow_networks", label: "Private networks to query", type: "list", help: "Networks with your own name servers, such as 10.0.0.0/8. A public server otherwise never sends queries into private networks.", show: (v) => v["recursion.enabled"] },
-        { key: "ecs.address", label: "Answer as if from (client subnet)", type: "text", placeholder: "off", help: "A public IP address or network. Name servers answer as they would for it (EDNS Client Subnet); your clients\u2019 addresses are never sent. Empty: off. Not with private locality ([locality] in the configuration file), which answers each client for where it is instead." },
+        { key: "locality.enabled", label: "Answers made for", changeLabel: "Private locality", type: "where", help: "Large sites (video, downloads, app stores) send each visitor to their nearest copy, judged by where the question comes from: normally this server. Choose where answers should fit." },
+        { key: "ecs.address", label: "Network to answer for", type: "text", placeholder: "a public network or address", help: "A public address or network where your clients are. Name servers answer as they would for it (EDNS Client Subnet); your clients\u2019 own addresses are never sent. An address stands for its /24 (IPv6: /56). Upstreams must support it. Changing it clears the cache.", show: (v) => whereMode(v) === "network" },
+        { key: "ecs.client_path", adv: true, label: "Measurement path (client subnet)", type: "text", placeholder: "off", help: "For measurement tools: a secret DNS over HTTPS path that sends each query\u2019s own client subnet to name servers, such as /ecs- and 24 random letters and digits. Its answers bypass the cache. Keep it secret: anyone with it can ask on behalf of any network. Empty: off.", show: (v) => v["recursion.enabled"] },
+        { key: "recursion.root_hints", adv: true, label: "Own root servers", type: "list", help: "Only for an isolated network with a root zone of its own: their IP addresses, one per line, instead of the internet\u2019s root servers. Leave empty.", show: (v) => v["recursion.enabled"] },
+        { key: "recursion.trust_anchors", adv: true, label: "Own root keys", type: "list", help: "Only with own root servers: their DNSSEC keys as DS records (\u201ctag algorithm digest-type digest\u201d), instead of the built-in root keys. Leave empty.", show: (v) => v["recursion.enabled"] && v["recursion.dnssec"] },
       ] },
       { title: "Upstreams", fields: [
         { key: "upstream.primary", label: "Primary upstreams", type: "list", help: "Asked in parallel; the fastest answer wins. https://…/dns-query, h3://…/dns-query (HTTP/3), tls://host, quic://host, udp://IP or an IP address. With recursion, a fallback only.", show: upShown },
@@ -2281,9 +2394,9 @@ const SETTINGS = {
       ] },
       { title: "Cache", action: ["Clear cache", async () => { await api("POST", "/cache/clear"); toast("Cache cleared"); }], fields: [
         { key: "cache.size", label: "Size", type: "number", help: "Most answers kept." },
-        { key: "cache.prefetch", adv: true, label: "Prefetch", type: "bool", help: "Refresh popular answers shortly before they expire." },
-        { key: "cache.persist", adv: true, label: "Keep across restarts", type: "select", options: [["auto", "Automatic: yes for a public server, no for a home or office network"], ["on", "Yes"], ["off", "No"]], help: "Save the cache every 10 minutes and on shutdown, and load it at start, so answers stay fast after a restart. The file lists names looked up, never by whom; with few users, as at home, that is close to their browsing history. Deleted when off." },
-        { key: "cache.serve_stale", adv: true, label: "Serve stale", type: "text", help: "Keep answering from expired entries this long when upstreams fail (0s = off)." },
+        { key: "cache.prefetch", label: "Prefetch", type: "bool", help: "Refresh popular answers shortly before they expire, so they are always answered from memory." },
+        { key: "cache.persist", label: "Keep across restarts", type: "select", options: [["auto", "Automatic: yes on a public server"], ["on", "Yes"], ["off", "No"]], help: "Save the cache every 10 minutes and on shutdown, and load it at start, so answers stay fast after a restart. The file lists names looked up, never by whom; with few users, as at home, that is close to their browsing history. Deleted when off. Automatic: yes in public mode, no in private mode (home or office)." },
+        { key: "cache.serve_stale", label: "Answer from expired entries", type: "text", help: "When upstreams or name servers fail, keep answering from expired entries for this long, such as 1d, so sites stay reachable through an outage (RFC 8767). 0s: off." },
         { key: "cache.min_ttl", adv: true, label: "Minimum TTL", type: "text", help: "Answers are kept at least this long." },
         { key: "cache.max_ttl", adv: true, label: "Maximum TTL", type: "text", help: "Answers are kept at most this long." },
         { key: "cache.max_negative_ttl", adv: true, label: "Maximum negative TTL", type: "text", help: "Longest time to remember that a name does not exist." },
@@ -2343,7 +2456,9 @@ const SETTINGS = {
         { key: "tls.certificate", label: "Certificate", type: "select", options: [["acme", "Let's Encrypt (automatic, free)"], ["files", "My own certificate files"], ["off", "None (no encrypted DNS)"]], help: "Where the certificate for the domain comes from. One certificate serves DNS over HTTPS, TLS and QUIC." },
         { key: "tls.email", label: "Email", type: "text", help: "Let's Encrypt writes here before a certificate expires (optional).", show: (v) => v["tls.certificate"] === "acme" },
         { key: "tls.challenge", label: "Domain check", type: "select", options: [["", "Automatic (recommended)"], ["tls-alpn-01", "Through port 443"], ["http-01", "Through port 80"]], help: "How Let's Encrypt confirms the domain at each issue and renewal. Automatic: port 443 when DNS over HTTPS uses it, otherwise port 80. The port must be open to the internet.", show: (v) => v["tls.certificate"] === "acme" },
-        { key: "tls.ip_addresses", adv: true, label: "Include IP addresses", type: "bool", help: "Lets clients switch to encrypted DNS automatically. Such certificates are renewed every few days.", show: (v) => v["tls.certificate"] === "acme" },
+        { key: "tls.ip_addresses", label: "Include IP addresses", type: "bool", help: "Lets clients switch to encrypted DNS automatically. Such certificates are renewed every few days.", show: (v) => v["tls.certificate"] === "acme" },
+        { key: "tls.http_challenge_listen", adv: true, label: "Port 80 check address", type: "text", help: "Where Let\u2019s Encrypt\u2019s check through port 80 is answered, such as :80.", show: (v) => v["tls.certificate"] === "acme" && v["tls.challenge"] !== "tls-alpn-01" },
+        { key: "tls.acme_directory", adv: true, label: "Certificate authority", type: "text", help: "The ACME directory URL. Let\u2019s Encrypt unless your organization runs its own ACME authority.", show: (v) => v["tls.certificate"] === "acme" },
         { key: "tls.cert_file", label: "Certificate file", type: "text", help: "PEM file with the full chain; reloaded when it changes.", show: (v) => v["tls.certificate"] === "files" },
         { key: "tls.key_file", label: "Key file", type: "text", help: "Its private key. DNSNova must be able to read it.", show: (v) => v["tls.certificate"] === "files" },
       ] },
@@ -2357,6 +2472,7 @@ const SETTINGS = {
         { key: "doh.path", adv: true, label: "DoH path", type: "text", help: "Usually /dns-query." },
         { key: "status.enabled", label: "Public status page", type: "bool", help: "A page at https://domain/: addresses, setup steps per device, what this server keeps, and a check that a device uses it. No statistics." },
         { key: "doh.listen", adv: true, label: "Behind a reverse proxy", type: "text", help: "Plain HTTP for nginx or Caddy, such as 127.0.0.1:8053. Leave empty if unused." },
+        { key: "doh.trusted_proxies", adv: true, label: "Trusted reverse proxies", type: "list", help: "Their X-Real-IP header gives the client\u2019s address; from anyone else it is ignored. Networks, one per line.", show: (v) => !!v["doh.listen"] },
       ] },
     ],
     extra: ["Addresses for clients"],
@@ -2369,19 +2485,27 @@ const SETTINGS = {
         { key: "access.allow", label: "Allowed networks", type: "list", help: "Addresses or networks, one per line.", show: (v) => v["server.mode"] === "private" },
         { key: "access.deny", label: "Blocked clients", type: "list", help: "Addresses or networks that never get an answer, in either mode, such as 203.0.113.7 or 198.51.100.0/24. One per line." },
       ] },
+      { title: "Protection", fields: [
+        { key: "limits.rrl_rate", label: "Response rate limiting", type: "number", help: "Identical answers a second to one network over UDP; stops this server being used to flood others (reflection attacks). 0: off." },
+        { key: "limits.rrl_slip", adv: true, label: "Rate limiting: truncate every", type: "number", help: "Of the answers over the limit, every this many is sent truncated, so real clients retry over TCP and still get through (0: drop all).", show: (v) => v["limits.rrl_rate"] > 0 },
+        { key: "server.cookies", label: "DNS Cookies", type: "bool", help: "Clients that return a valid cookie prove their address and are exempt from response rate limiting (RFC 7873). Nodes sharing one address need the same secrets/cookie-secret file." },
+        { key: "limits.block_any", label: "Refuse ANY queries", type: "bool", help: "They are mostly used for amplification attacks; ordinary software does not need them." },
+      ] },
       { title: "Limits", fields: [
         { key: "limits.client_qps", label: "Per client", type: "number", help: "Queries a second from one address (0 = no limit). Phones on mobile networks often share one address." },
-        { key: "limits.client_burst", adv: true, label: "Client burst", type: "number", help: "Short bursts allowed above that." },
-        { key: "limits.prefix_qps", adv: true, label: "Per network", type: "number", help: "Queries a second from one IPv4 /24 or IPv6 /48 (0 = no limit)." },
-        { key: "limits.global_qps", adv: true, label: "Whole server", type: "number", help: "Queries a second in total (0 = no limit)." },
-        { key: "limits.rrl_rate", adv: true, label: "Response rate limiting", type: "number", help: "Identical answers a second to one network; stops reflection attacks (0 = off)." },
+        { key: "limits.prefix_qps", label: "Per network", type: "number", help: "Queries a second from one IPv4 /24 or IPv6 /48 (0 = no limit)." },
+        { key: "limits.global_qps", label: "Whole server", type: "number", help: "Queries a second in total (0 = no limit)." },
+        { key: "limits.client_burst", adv: true, label: "Client burst", type: "number", help: "Short bursts allowed above the per-client rate." },
+        { key: "limits.prefix_burst", adv: true, label: "Network burst", type: "number", help: "Short bursts allowed above the per-network rate." },
         { key: "server.proxy_protocol", adv: true, label: "Load balancers (PROXY protocol)", type: "list", help: "Load balancers that send the PROXY protocol header, one per line (e.g. 10.0.0.5/32), so clients' real addresses are seen. Required from them. Not for DoQ or HTTP/3." },
-        { key: "server.cookies", adv: true, label: "DNS Cookies", type: "bool", help: "Clients that return a valid cookie are exempt from response rate limiting (RFC 7873). Nodes sharing one address need the same secrets/cookie-secret file." },
-        { key: "limits.block_any", adv: true, label: "Refuse ANY queries", type: "bool", help: "They are mostly used for amplification." },
         { key: "limits.tcp_connections", adv: true, label: "TCP connections", type: "number", help: "Open TCP, DoT and DoH connections at most; each phone using DoT keeps one open. About 25 KB of memory each." },
         { key: "limits.client_connections", adv: true, label: "Connections per address", type: "number", help: "Open connections from one address (IPv4, or IPv6 /56) at most, over every protocol, so one address cannot take them all. 0: no limit." },
         { key: "limits.quic_connections", adv: true, label: "QUIC connections", type: "number", help: "Open DoQ and HTTP/3 connections at most. About 70 KB of memory each." },
-        { key: "limits.upstream_concurrency", adv: true, label: "Upstream queries at once", type: "number", help: "Queries waiting for upstreams at most." },
+        { key: "limits.tcp_pipeline", adv: true, label: "Queries per connection", type: "number", help: "Queries answered at once on one TCP, DoT, DoQ or HTTP/3 connection." },
+        { key: "limits.tcp_idle_timeout", adv: true, label: "Idle connections close after", type: "text", help: "Such as 10s; for QUIC connections too." },
+        { key: "limits.udp_max_size", adv: true, label: "Largest UDP answer", type: "number", help: "Bytes (512 to 4096). Larger answers go over TCP; 1232 avoids fragments, which networks often drop." },
+        { key: "limits.upstream_concurrency", adv: true, label: "Upstream queries at once", type: "number", help: "Queries waiting for upstreams or name servers at most." },
+        { key: "limits.zone_concurrency", adv: true, label: "Queries at once per domain", type: "number", help: "Queries waiting for one domain\u2019s name servers at most, so one slow or attacked domain cannot hold up the rest." },
       ] },
     ],
   },
@@ -2435,6 +2559,12 @@ const SETTINGS = {
         { key: "admin.listen", label: "Admin address", type: "text", help: "127.0.0.1:7000: through an SSH tunnel only (safest). :7000: also from other machines, with a password: from your own network in private mode, over HTTPS only on a public server." },
         { key: "metrics.listen", label: "Metrics address", type: "text", help: "Prometheus metrics and the health check. Keep it on a private address." },
       ] },
+      { title: "Set in the configuration file", note: "These decide where data is kept, which commands run and where questions leave from, so they are changed only in the configuration file (below, or on the server). Each node keeps its own.", fields: [
+        { key: "server.data_dir", label: "Data directory", type: "info", mono: true, help: "The cache file, query records, new-domain hashes and secrets are kept here. Takes effect after a restart." },
+        { key: "cluster.role", label: "Cluster", type: "info", fmt: (v, all) => v ? (v === "primary" ? "Primary" : "Follower") + (all["cluster.name"] ? " \u00b7 " + all["cluster.name"] : "") : "On its own", link: ["Nodes", "#/nodes"], help: "Several DNSNova servers sharing one set of settings ([cluster])." },
+        { key: "anycast.enabled", label: "Anycast", type: "info", fmt: (v) => v ? "On" : "Off", link: ["Nodes", "#/nodes"], help: "Announce this node\u2019s address by routing, and withdraw it while the node is unhealthy ([anycast]). It runs the commands set in the file." },
+        { key: "locality.exits", label: "Private locality exits", type: "info", fmt: (v) => v.length ? v.map((x) => x.split(/\s+/)[0]).join(", ") : "None", link: ["Private locality", "#/locality"], help: "Where questions for clients far away leave from ([locality]). Turned on and off in DNS & upstreams." },
+      ] },
     ],
     extra: ["Password", "Two-step verification", "Configuration history", "Edit the configuration file"],
   },
@@ -2480,19 +2610,25 @@ async function settingsPage(main, id) {
   if (page.filterStatus) parts.push(await filterCard(), whyCard());
   const alertParts = page.alerts ? await alertCards() : null;
   if (alertParts) parts.push(alertParts.status, alertParts.history, alertParts.destinations);
-  const sectionCards = [];
+  const sectionCards = [], advFolds = [];
   for (const sec of page.sections) {
     const card = h("section", { class: "card pad0", "aria-label": sec.title },
       h("div", { class: "pagehead", style: { margin: "12px 0 4px" } }, h("h2", null, sec.title),
-        sec.action ? h("button", { type: "button", class: "btn small", onclick: async () => { try { await sec.action[1](); } catch (e) { toast(e.message, "err"); } } }, sec.action[0]) : null));
-    // rarely changed settings fold away under "Advanced"
-    const adv = h("details", { class: "adv" }, h("summary", null, "Advanced"));
+        sec.action ? h("button", { type: "button", class: "btn small", onclick: async () => { try { await sec.action[1](); } catch (e) { toast(e.message, "err"); } } }, sec.action[0]) : null),
+      sec.note ? h("p", { class: "small muted", style: { margin: "0 0 4px" } }, sec.note) : null);
+    // rarely changed settings fold away under "Advanced", whose line names
+    // them with their values, so nothing is hidden behind it
+    const advNames = h("span", { class: "advnames" });
+    const adv = h("details", { class: "adv" }, h("summary", null, h("span", { class: "advlabel" }, "Advanced"), advNames));
     for (const f of sec.fields) {
       const row = fieldRow(f, form, () => { refresh(); });
       form.rows[f.key] = { f, row };
       (f.adv ? adv : card).append(row.el);
     }
-    if (sec.fields.some((f) => f.adv)) card.append(adv);
+    if (sec.fields.some((f) => f.adv)) {
+      card.append(adv);
+      advFolds.push([adv, advNames, sec.fields.filter((f) => f.adv)]);
+    }
     sectionCards.push([card, sec]);
     parts.push(card);
   }
@@ -2510,6 +2646,11 @@ async function settingsPage(main, id) {
     }
     // a section whose fields are all hidden is hidden too
     for (const [card, sec] of sectionCards) card.hidden = sec.fields.every((f) => f.show && !f.show(form.val));
+    for (const [adv, names, fields] of advFolds) {
+      const shown = fields.filter((f) => !f.show || f.show(form.val));
+      adv.hidden = !shown.length;
+      names.textContent = advSummary(shown, form.val);
+    }
     drawReview();
   };
   const changed = () => changedValues(form.cur, form.val);
@@ -2576,7 +2717,7 @@ async function settingsPage(main, id) {
       if (probs[k]) row.el.closest("details")?.setAttribute("open", ""); // show a problem in Advanced
     }
   };
-  const labelOf = (k) => form.rows[k]?.f.label || k;
+  const labelOf = (k) => form.rows[k]?.f.changeLabel || form.rows[k]?.f.label || k;
   refresh();
   if (state.focusKey && form.rows[state.focusKey]) {
     const el = form.rows[state.focusKey].row.el;
@@ -2588,11 +2729,36 @@ async function settingsPage(main, id) {
   } else if (state.focusKey) {
     const card = [...main.querySelectorAll("[data-focus]")].find((e) => e.dataset.focus === state.focusKey);
     if (card) {
+      card.querySelector("details:not([open])")?.setAttribute("open", ""); // what was asked for, shown
       card.scrollIntoView({ block: "center" });
       card.classList.add("flash");
     }
   }
   state.focusKey = null;
+}
+
+// advSummary names the settings folded under "Advanced", with their values
+// when set: "Minimum TTL 0s · Maximum TTL 24h · Own root servers · 1 more".
+function advSummary(fields, val, n = 3) {
+  const parts = fields.slice(0, n).map((f) => { const v = shortValue(f, val[f.key]); return v ? `${f.label} ${v}` : f.label; });
+  if (fields.length > n) parts.push(`${fields.length - n} more`);
+  return parts.join(" \u00b7 ");
+}
+
+// shortValue: a setting's value in a few characters.
+function shortValue(f, v) {
+  if (f.type === "bool") return v ? "on" : "off";
+  if (Array.isArray(v)) return v.length === 0 ? "" : v.length === 1 ? clip(String(v[0]), 22) : `(${v.length})`;
+  if (v === "" || v === null || v === undefined) return "";
+  if (f.type === "select") {
+    const o = (f.options || []).find(([x]) => x === v);
+    return o ? clip(o[1], 22) : String(v);
+  }
+  return clip(String(v), 22);
+}
+
+function clip(t, n) {
+  return t.length > n ? t.slice(0, n - 1) + "\u2026" : t;
 }
 
 function fieldRow(f, form, onchange) {
@@ -2679,6 +2845,52 @@ function fieldRow(f, form, onchange) {
       ctl = h("div", { style: { display: "flex", flexDirection: "column", gap: "6px", width: "100%" } }, sel, own);
       break;
     }
+    case "where": {
+      // three ways to place answers, as one choice: off, one network
+      // (ecs.address), or private locality (locality.enabled, whose exits
+      // are in the configuration file)
+      const exits = form.cur["locality.exits"] || [];
+      const radios = {};
+      const privNote = h("span", { class: "small" });
+      const choice = (m, title, desc, extra) => {
+        const r = h("input", { type: "radio", name: id, value: m });
+        r.addEventListener("change", () => pick(m));
+        radios[m] = r;
+        return h("label", { class: "wopt" }, r, h("span", { class: "ctext" }, h("strong", null, title), h("span", { class: "small muted" }, desc), extra || null));
+      };
+      const pick = (m) => {
+        form.val["@where"] = m;
+        form.val["locality.enabled"] = m === "private";
+        form.val["ecs.address"] = m === "network" ? form.val["ecs.address"] || form.cur["ecs.address"] || "" : "";
+        onchange();
+        if (m === "network") setTimeout(() => document.getElementById("f-ecs-address")?.focus(), 0);
+      };
+      ctl = h("div", { class: "wopts", role: "radiogroup", id, "aria-label": f.label },
+        choice("off", "Where this server is", "The usual way. Nothing about clients is sent; best when they are near this server."),
+        choice("network", "One network for everyone (client subnet)", "Name servers answer as for a network you choose, such as where most clients are. Their own addresses are never sent."),
+        choice("private", "Where each client is (private locality)", "Clients far from here get the answers given where they are, asked through exits near them. Nothing about clients is sent: no address, no network.", privNote));
+      sync = () => {
+        const mode = whereMode(form.val);
+        for (const [m, r] of Object.entries(radios)) r.checked = m === mode;
+        const noRec = !form.val["recursion.enabled"];
+        radios.private.disabled = mode !== "private" && (noRec || !exits.length);
+        const names = exits.map((x) => x.split(/\s+/)[0]).join(", ");
+        const howto = h("a", { href: PROJECT + "/blob/main/docs/private-locality.md", target: "_blank", rel: "noopener noreferrer" }, "how to set them up");
+        if (!exits.length) fill(privNote, "Needs exits: small hosts elsewhere that only pass questions on, set in the configuration file (", howto, ").", noRec ? " And \u201cResolve names itself\u201d, above." : "");
+        else if (noRec) fill(privNote, `${exits.length} exit${exits.length === 1 ? "" : "s"} set (${names}). Needs \u201cResolve names itself\u201d, above.`);
+        else fill(privNote, `${exits.length} exit${exits.length === 1 ? "" : "s"}: ${names}. `, h("a", { href: "#/locality" }, mode === "private" ? "See how they are used" : "About private locality"), ".");
+      };
+      reset = sync;
+      break;
+    }
+    case "info": {
+      // set in the configuration file only: shown, not changed here
+      const all = form.val;
+      ctl = h("div", { class: "info" }, h("span", { class: f.mono ? "mono" : null, id }, f.fmt ? f.fmt(v, all) : Array.isArray(v) ? v.join(", ") || "none" : String(v) || "\u2013"),
+        f.link ? h("a", { class: "btn small", href: f.link[1] }, f.link[0]) : null);
+      reset = () => {};
+      break;
+    }
     case "number": {
       ctl = h("input", { type: "number", id, value: v, step: "any", inputmode: "decimal" });
       ctl.addEventListener("input", () => { if (ctl.value !== "" && !isNaN(Number(ctl.value))) set(Number(ctl.value)); });
@@ -2692,12 +2904,13 @@ function fieldRow(f, form, onchange) {
     }
   }
   const inline = f.type === "bool" || f.type === "listen";
-  const wide = f.type === "groups";
-  const labelEl = f.type === "bool" || f.type === "listen" ? h("span", { class: "label", id: id + "-l" }, f.label) : h("label", { for: id }, f.label);
+  const wide = f.type === "groups" || f.type === "where";
+  const labelEl = ["bool", "listen", "where", "info"].includes(f.type) ? h("span", { class: "label", id: id + "-l" }, f.label) : h("label", { for: id }, f.label);
   const el = h("div", { class: "field" + (inline ? " inline" : "") + (wide ? " wide" : ""), "data-key": f.key },
     h("div", { class: "text" }, labelEl, h("div", { class: "help", id: id + "-h" }, f.help)),
     h("div", { class: "ctl" }, ctl, prob));
-  const target = ctl.matches?.("input,select,textarea,button") ? ctl : ctl.querySelector("button") || ctl.querySelector("select");
+  // the control described by the help and the problem ("where": the group)
+  const target = ctl.matches?.("input,select,textarea,button,[role=radiogroup]") ? ctl : ctl.querySelector("button") || ctl.querySelector("select") || ctl;
   target.setAttribute("aria-describedby", id + "-h " + id + "-err");
   return {
     el, sync, reset,
@@ -3164,7 +3377,7 @@ function fileCard(hash) {
     h("summary", null, "Show the file"),
     h("div", { style: { display: "flex", flexDirection: "column", gap: "10px", marginTop: "10px" } }, ta,
       h("div", { class: "row" }, h("button", { type: "button", class: "btn", onclick: () => send(true) }, "Check"), h("button", { type: "button", class: "btn primary", onclick: () => send(false) }, "Save")), out));
-  return h("section", { class: "card", "aria-label": "Edit the configuration file" }, h("h2", null, "Edit the configuration file"),
+  return h("section", { class: "card", "aria-label": "Edit the configuration file", "data-focus": "file" }, h("h2", null, "Edit the configuration file"),
     h("p", { class: "muted small", style: { margin: 0 } }, "The whole file, comments included. Every setting is explained in dnsnova.example.toml."), det);
 }
 

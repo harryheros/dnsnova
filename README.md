@@ -2,7 +2,7 @@
 
 > A secure DNS server, from one box at home to a public resolver on several continents.
 
-[![Version](https://img.shields.io/badge/version-v1.9.0-blue.svg)](https://github.com/harryheros/dnsnova/releases)
+[![Version](https://img.shields.io/badge/version-v1.10.0-blue.svg)](https://github.com/harryheros/dnsnova/releases)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](#license)
 [![Platform](https://img.shields.io/badge/platform-Linux%20amd64%20%7C%20arm64%20%7C%20arm-lightgrey.svg)](#install)
 [![CI](https://github.com/harryheros/dnsnova/actions/workflows/ci.yml/badge.svg)](https://github.com/harryheros/dnsnova/actions/workflows/ci.yml)
@@ -64,7 +64,7 @@ The wizard sets the administrator, who the server is for, recursion or upstreams
 
 ### Running it
 
-- **Web interface**: queries per second, response times, cache hit rate and traffic history, query flow by protocol, upstream health, top domains, and every setting, previewed before it is applied and kept in a history.
+- **Web interface**: queries per second, response times, cache hit rate and traffic history, query flow by protocol, upstream health, top domains, what is on at a glance, and every setting, previewed before it is applied and kept in a history. Every feature has its page, also while it is off, saying what it does and how to turn it on.
 - **New domains**: tells, on the page and through alerts, when a domain is looked up here for the first time, often the first sign of phishing; one click blocks it. It keeps only hashes, no list of domains.
 - **Alerts and monitoring**: Telegram, Discord, Slack or webhook notifications, a heartbeat for outside monitors, Prometheus metrics and a health check ([docs/alerts.md](./docs/alerts.md)).
 - **Diagnostics**: trace any lookup from the root, server by server; a DNSSEC page of failing domains, each exemptible (RFC 7646); an in-memory query log that stops by itself.

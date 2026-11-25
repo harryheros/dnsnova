@@ -149,9 +149,12 @@ color. No glow on icons. Icons never replace a label.
   3. DNS Traffic (`s8`): queries per second or response time, range 1h /
      24h / 7d (/ 30d), y and x axes, a readout under the pointer, a lit
      point at "now". Beside it Traffic Flow (`s4`).
-  4. Top Domains, Upstream Servers (or Resolution with recursion), Recent
+  4. Features (`s12`): what the server does, on or off, each with a word
+     on its state and a link to its page or setting, so what sets DNSNova
+     apart is seen rather than looked for.
+  5. Top Domains, Upstream Servers (or Resolution with recursion), Recent
      Activity (`s4` each, five rows).
-  5. Details (`s3` each): Not Found, Rejected, Certificate, Privacy.
+  6. Details (`s3` each): Not Found, Rejected, Certificate, Privacy.
   Below 1360 px figures go two per row and the chart and flow stack; below
   1000 px everything is one column; below 560 px figures are one per row.
 - Every list has a fixed number of rows; missing rows are faint
@@ -177,12 +180,23 @@ color. No glow on icons. Icons never replace a label.
 - **Activity**: a state dot, message, repeat count, time ago.
 - **Settings**: label and help on the left, control on the right; changes
   are collected in the floating review panel before anything is applied.
+  What most people need is in view; rarely changed settings fold under
+  *Advanced*, whose line names them with their values, so nothing is
+  hidden behind it. A choice among ways is a list of explained options
+  (*Answers made for*: this server, one network, or each client). What
+  only the file can change is shown read-only, with where to change it.
+- **Pages of features that are off** say what the feature does and the
+  next step from where the server is (turn it on, or what it needs first),
+  instead of being left out of the menu.
+- **Empty states** say why there is nothing and what to do: no upstreams
+  with recursion is "No upstreams needed", not an empty table.
 - **Toasts**: bottom right, a state dot, errors stay longer.
 
 ## Clusters
 
 The interface is shaped for several nodes so that each step is additive.
-What is not done yet is not shown in the interface until it works.
+What is not done yet is not shown in the interface until it works; what
+works but is off is shown, with how to turn it on.
 
 | Area | One server | With several nodes |
 | --- | --- | --- |
@@ -196,12 +210,13 @@ What is not done yet is not shown in the interface until it works.
 
 Diagnostics: **Trace a lookup** (Tools) shows a resolution step by step,
 nested lookups indented, DNSSEC verdicts as state words with their dot;
-the **DNSSEC** page (Status, only with recursion) lists failures with the
-action that fixes each (trace, or stop validating the domain).
+the **DNSSEC** page (Status) lists failures with the action that fixes
+each (trace, or stop validating the domain); without recursion it says
+that upstreams check DNSSEC, and how to check it here.
 
 Done (1.3):
 
-- the **Nodes** page (shown only on a node of a cluster) with each node's
+- the **Nodes** page (on a server alone, what a cluster offers) with each node's
   state, region, settings version, anycast state, version and certificate;
 - **configuration sync** through the usual preview / apply / history flow,
   per-node overrides shown as such, and the settings pages of a follower

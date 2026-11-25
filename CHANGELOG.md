@@ -4,6 +4,51 @@ All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
 **Security**.
 
+## 1.10.0 (2026-11-25)
+
+**Every feature in view.** What DNSNova can do is now seen in the web
+interface rather than looked for, and turned on where it is shown.
+
+- **Private locality is turned on and off in the interface**: *Settings ›
+  DNS & upstreams › Answers made for* chooses, with each way explained,
+  where answers should fit: where this server is (as before), one network
+  for everyone (client subnet, `ecs.address`, whose address field appears
+  only then), or where each client is (private locality). The last needs
+  exits in the configuration file and resolving names itself; until then
+  it says what is missing, with a link to set up exits. `locality.enabled`
+  is the one `[locality]` setting the admin API can change; the exits and
+  their limits stay in the file.
+- **Features on the overview**: a card lists sixteen features (resolving
+  names itself, DNSSEC, private locality, encrypted DNS, filtering, client
+  groups, new domains, rebinding protection, DNS Cookies, the cache, local
+  names, alerts, cluster, status page, query records, log collector), each
+  on or off with a word on its state, and opens its page or setting.
+  `GET /status` adds `features` for it.
+- **Every page is in the menu**: DNSSEC, Private locality and Nodes are
+  listed also while off; each then says what it does and the next step
+  from where the server is (turn it on, or what it needs first). The menu
+  still fits without scrolling down to a 650 px high window.
+- **Less behind Advanced**: prefetch, keeping the cache across restarts
+  and answering from expired entries (renamed from *Serve stale*) are in
+  view, as are DNS Cookies with name servers, certificates with IP
+  addresses, and a new *Protection* section (response rate limiting, DNS
+  Cookies, refusing ANY). What stays folded is named on the *Advanced*
+  line itself with its values, and the fold is hidden when none of it
+  applies.
+- **Every setting has a place**: twelve settings that were only in the
+  file are now on their pages: per-network burst, queries per connection,
+  idle connection timeout, largest UDP answer, queries at once per domain,
+  rate-limiting truncation, the port 80 check address and the certificate
+  authority, trusted reverse proxies, the client subnet measurement path,
+  and own root servers and keys for an isolated network. *Admin* shows
+  what only the file changes (data directory, cluster, anycast, private
+  locality exits), with links to their pages. A test keeps it so.
+- **Upstreams with none set**: with recursion, the page said "0/0 every
+  upstream answers" over an empty table (a blank card on phones); it now
+  says no upstreams are needed, and how to add fallbacks.
+- The Traffic Flow card counts a cluster's nodes and opens Nodes; links to
+  the configuration file open it.
+
 ## 1.9.0 (2026-11-25)
 
 **Private locality**, off by default: clients far from the server get the

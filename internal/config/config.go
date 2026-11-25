@@ -1623,6 +1623,11 @@ var NodeLocalTables = []string{"cluster", "anycast", "locality"}
 // leave from, so a stolen admin password must not reach any of them.
 var FileOnlyTables = NodeLocalTables
 
+// FileOnlyExceptions can be changed through the admin API although their
+// table cannot: turning private locality on or off only chooses whether the
+// exits set in the file are used.
+var FileOnlyExceptions = []string{"locality.enabled"}
+
 func (c *Config) validateCluster(lines map[string]int, errs Errors, warns []string) (Errors, []string) {
 	bad := func(key, msg string) { errs = append(errs, &Error{Line: lines[key], Key: key, Msg: msg}) }
 	switch c.Cluster.Role {

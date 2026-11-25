@@ -936,6 +936,43 @@ func TestLockoutTableBounded(t *testing.T) {
 // [cluster] and [anycast] are changed only in the file on the server: one
 // decides where the node takes its settings from, the other runs commands.
 // Other changes to a file that has them still work.
+// GET /status says what is on, for the overview's Features card: every
+// key docs/api.md lists, and a change shows at once.
+func TestStatusFeatures(t *testing.T) {
+	e := newEnv(t)
+	e.setup()
+	features := func() map[string]any {
+		return e.do(e.c, "GET", "/api/v1/status", nil).body["features"].(map[string]any)
+	}
+	f := features()
+	want := strings.Fields("recursion dnssec fallback upstreams filter groups rebinding cookies name_cookies nod alerts status_page query_days dnstap prefetch persist serve_stale ecs locality locality_exits cluster anycast local_forward local_records")
+	if len(f) != len(want) {
+		t.Fatalf("features: %v", f)
+	}
+	for _, k := range want {
+		if _, ok := f[k]; !ok {
+			t.Fatalf("features: no %s in %v", k, f)
+		}
+	}
+	doc, err := os.ReadFile("../../docs/api.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range want {
+		if !strings.Contains(string(doc), `"`+k+`"`) {
+			t.Errorf("docs/api.md does not list features.%s", k)
+		}
+	}
+	prefetch := f["prefetch"].(bool)
+	hash := e.do(e.c, "GET", "/api/v1/config", nil).body["hash"].(string)
+	if r := e.do(e.c, "PATCH", "/api/v1/config", map[string]any{"hash": hash, "set": map[string]any{"cache.prefetch": !prefetch}}); r.code != 200 {
+		t.Fatalf("PATCH: %d %s", r.code, r.raw)
+	}
+	if got := features()["prefetch"]; got != !prefetch {
+		t.Fatalf("prefetch after the change: %v", got)
+	}
+}
+
 func TestFileOnlySettings(t *testing.T) {
 	e := newEnv(t)
 	e.setup()
@@ -950,6 +987,20 @@ func TestFileOnlySettings(t *testing.T) {
 		if r.code != http.StatusForbidden || !strings.Contains(r.raw, "configuration file on the server") {
 			t.Fatalf("%v: %d %s", set, r.code, r.raw)
 		}
+	}
+	// [locality]: the exits only in the file; turning it on or off here
+	for _, set := range []map[string]any{
+		{"locality.exits": []string{"exit-a 10.66.1.2 XA"}},
+		{"locality.measure_path": "/exit-k3v9q2m8x7w4r1t6y5u0p2z8"},
+		{"locality.country_sources": []string{"https://example.com/x"}},
+	} {
+		r := e.do(e.c, "PATCH", "/api/v1/config", map[string]any{"hash": hash(), "set": set})
+		if r.code != http.StatusForbidden {
+			t.Fatalf("%v: %d %s", set, r.code, r.raw)
+		}
+	}
+	if r := e.do(e.c, "PATCH", "/api/v1/config", map[string]any{"hash": hash(), "set": map[string]any{"locality.enabled": true}}); r.code == http.StatusForbidden {
+		t.Fatalf("locality.enabled refused as file-only: %s", r.raw)
 	}
 	file := e.do(e.c, "GET", "/api/v1/config/file", nil).body["content"].(string)
 	withCluster := file + "\n[cluster]\nrole = \"primary\"\nlisten = \"127.0.0.1:7001\"\n"

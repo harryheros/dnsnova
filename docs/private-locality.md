@@ -163,8 +163,12 @@ shows the exits, the zones found to vary and the siting report.
 ## Settings
 
 All in `[locality]`. Like `[cluster]`, the table is the node's own (its
-exits are its own tunnels): it is never taken from a primary, and it can be
-changed only in the file on the server, not through the admin interface.
+exits are its own tunnels): it is never taken from a primary, and the
+exits and their limits are changed only in the file on the server. Once
+exits are set, it is turned on and off in the admin interface too:
+*Settings › DNS & upstreams › Answers made for*, which chooses among this
+server's answers, one network (`ecs.address`) and private locality. The
+*Private locality* page says, while it is off, what it still needs.
 
 | Setting | Default | What it does |
 |---|---|---|

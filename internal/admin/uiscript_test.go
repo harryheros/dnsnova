@@ -4,8 +4,11 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/harryheros/dnsnova/internal/config"
 )
 
 // runJS runs script after the named top-level functions and constants of
@@ -212,5 +215,120 @@ func TestUISettingsPlacement(t *testing.T) {
 	}
 	if strings.Contains(s, `"Encrypted DNS ›`) || strings.Contains(s, `Settings › Encrypted DNS`) {
 		t.Error("a reference to the old page name is left")
+	}
+}
+
+// Every setting the admin interface can change is on a settings page, and
+// every setting a page names exists; what is left out is only what the file
+// alone can change (a node's cluster and anycast, the exits' details) and
+// one no longer used. A feature added later shows up here until it has a
+// place in the interface.
+func TestUIEverySettingHasAPlace(t *testing.T) {
+	src, err := os.ReadFile("ui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(src)
+	seg := s[strings.Index(s, "const SETTINGS = {"):strings.Index(s, "const PAGES_BY_ROUTE")]
+	ui := map[string]bool{}
+	for _, m := range regexp.MustCompile(`key: "([a-z0-9_]+\.[a-z0-9_.]+)"`).FindAllStringSubmatch(seg, -1) {
+		ui[m[1]] = true
+	}
+	known := map[string]bool{}
+	for _, k := range config.Keys() {
+		known[k] = true
+	}
+	for k := range ui {
+		if !known[k] {
+			t.Errorf("the settings pages name %s, which is not a setting", k)
+		}
+	}
+	fileOnly := func(k string) bool {
+		table, _ := config.SplitKey(k)
+		return slices.Contains(config.FileOnlyTables, table) && !slices.Contains(config.FileOnlyExceptions, k)
+	}
+	for _, k := range config.Keys() {
+		if !ui[k] && !fileOnly(k) && k != "log.queries" {
+			t.Errorf("%s is on no settings page", k)
+		}
+	}
+}
+
+// The menu lists every page, also of a feature that is off (its page says
+// how to turn it on): DNSSEC without recursion, Nodes on a server alone,
+// Private locality while it is off.
+func TestUIEveryPageInTheMenu(t *testing.T) {
+	src, err := os.ReadFile("ui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(src)
+	routes := s[strings.Index(s, "const PAGES_BY_ROUTE = {"):]
+	routes = routes[:strings.Index(routes, "\n};")]
+	nav := s[strings.Index(s, "const NAV = ["):]
+	nav = nav[:strings.Index(nav, "\n];")]
+	for _, m := range regexp.MustCompile(`(?:^|[{,]\s*)"?([a-z/]+)"?:`).FindAllStringSubmatch(routes, -1) {
+		r := m[1]
+		if r == "overview" {
+			continue
+		}
+		if !strings.Contains(nav, `"`+r+`"`) {
+			t.Errorf("page %s is not in the menu", r)
+		}
+	}
+	for _, r := range []string{"dnssec", "locality", "nodes"} {
+		if !strings.Contains(nav, `"`+r+`"`) {
+			t.Errorf("%s is not always in the menu", r)
+		}
+	}
+}
+
+// What makes the cache fast and dependable (prefetch, keeping it across
+// restarts, answering from expired entries) is in view, not under Advanced;
+// so are DNS Cookies and the choice of where answers are made for.
+func TestUIFeaturesNotFolded(t *testing.T) {
+	src, err := os.ReadFile("ui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"cache.prefetch", "cache.persist", "cache.serve_stale", "recursion.cookies", "server.cookies", "limits.rrl_rate", "locality.enabled", "tls.ip_addresses"} {
+		m := regexp.MustCompile(`\{ key: "` + regexp.QuoteMeta(k) + `",[^\n]*`).Find(src)
+		if m == nil {
+			t.Errorf("%s: not on a settings page", k)
+		} else if strings.Contains(string(m), "adv: true") {
+			t.Errorf("%s is folded under Advanced", k)
+		}
+	}
+}
+
+// Answers are made for this server's place, one network (ecs.address) or
+// each client's (private locality); "network" stays chosen while its
+// address is still empty.
+func TestUIWhereMode(t *testing.T) {
+	got := runJS(t, []string{"whereMode"}, `
+const v = (l, e, w) => ({ "locality.enabled": l, "ecs.address": e, "@where": w });
+console.log([v(false, ""), v(false, "198.18.0.0/24"), v(true, ""), v(false, "", "network"), v(false, "", "off"), v(true, "", "network")].map(whereMode).join(" "));
+`)
+	if want := "off network private network off private"; got != want {
+		t.Fatalf("got %s, want %s", got, want)
+	}
+}
+
+// The Advanced line names what is folded, with values only where set.
+func TestUIAdvancedSummary(t *testing.T) {
+	got := runJS(t, []string{"clip", "shortValue", "advSummary"}, `
+const f = [
+  { key: "a", label: "Minimum TTL", type: "text" },
+  { key: "b", label: "Own root servers", type: "list" },
+  { key: "c", label: "Prefetch", type: "bool" },
+  { key: "d", label: "Bootstrap servers", type: "list" },
+];
+console.log(advSummary(f, { a: "0s", b: [], c: true, d: ["9.9.9.9", "1.1.1.1"] }));
+console.log(advSummary(f.slice(0, 2), { a: "", b: ["198.41.0.4"] }));
+console.log(shortValue({ type: "text" }, "https://acme-v02.api.letsencrypt.org/directory"));
+`)
+	want := "Minimum TTL 0s · Own root servers · Prefetch on · 1 more\nMinimum TTL · Own root servers 198.41.0.4\nhttps://acme-v02.api.…"
+	if got != want {
+		t.Fatalf("got\n%s\nwant\n%s", got, want)
 	}
 }

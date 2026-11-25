@@ -210,7 +210,9 @@ address = ""
 # clients is sent: names whose answers depend on where they are asked from
 # are asked from here and through every exit at once, whoever needs them.
 # Needs recursion; not with ecs.address. This node's own: never taken from
-# a primary, changed only in this file. See docs/private-locality.md.
+# a primary. Only enabled can also be changed in the admin interface (DNS &
+# upstreams > Answers made for); the rest only here. See
+# docs/private-locality.md.
 enabled = false
 # "name source-address[,source-address] clients...": the source addresses
 # lead into the exit's tunnel (the system routes them there); the clients

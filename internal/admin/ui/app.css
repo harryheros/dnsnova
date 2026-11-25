@@ -425,6 +425,19 @@ input[aria-invalid="true"], textarea[aria-invalid="true"], select[aria-invalid="
 .legend3 > div { display: flex; align-items: center; gap: 8px; }
 .legend3 .num { color: var(--muted); font-size: 12.5px; }
 .nodechip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); }
+a.nodechip { text-decoration: none; }
+a.nodechip:hover { border-color: var(--border-strong); color: var(--text); }
+/* the overview's Features: what this server does, each a way to its page */
+.feats { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+.feats a { display: flex; align-items: center; gap: 12px; padding: 11px 13px; border: 1px solid var(--border); border-radius: 12px; color: var(--text); text-decoration: none; height: 100%; transition: border-color 150ms ease, background-color 150ms ease; }
+.feats a:hover { border-color: var(--border-strong); background: var(--raised); }
+.feats a > .ic { color: var(--muted); flex: none; }
+.feats a.on > .ic { color: var(--accent); }
+.feats .ftext { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.feats .ftext strong { font-size: 13.5px; font-weight: 600; }
+.feats .ftext .small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.feats a > .dot { flex: none; }
+@media (max-width: 560px) { .feats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .feats a { padding: 10px; gap: 8px; } .feats a > .ic { display: none; } .feats .ftext .small { white-space: normal; } }
 
 table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 th { text-align: left; font-weight: 600; font-size: 11.5px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); padding: 8px 10px 8px 0; }
@@ -550,27 +563,39 @@ p.err:empty, div.err:empty, .problem:empty { display: none; }
 .railbrand:focus-visible, .railhome:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
 @media (min-width: 801px) { .side { position: sticky; top: 0; height: 100vh; overflow-y: auto; } }
 /* shorter screens: the whole menu stays in view without scrolling, down to
-   the usual laptop browser window (about 650 px) */
-@media (max-height: 1000px) and (min-width: 801px) {
-  .railbrand .mark { width: 76px; height: 76px; }
-  .railbrand .wordmark { font-size: 29px; }
-  .nav a { min-height: 36px; }
+   the usual laptop browser window (about 650 px), with every page in it */
+@media (max-height: 1200px) and (min-width: 801px) {
+  .railbrand .mark { width: 64px; height: 64px; }
+  .railbrand .wordmark { font-size: 28px; }
+  .nav { gap: 12px; }
+  .navgroup { gap: 2px; }
+  .nav a { min-height: 34px; }
   .side { gap: 16px; padding-top: 18px; }
 }
-@media (max-height: 860px) and (min-width: 801px) {
+@media (max-height: 1000px) and (min-width: 801px) {
   .railbrand { flex-direction: row; justify-content: center; }
   .railbrand .mark { width: 40px; height: 40px; }
   .railbrand .wordmark { font-size: 26px; }
   .railbrand .tagline { display: none; }
-  .nav { gap: 8px; }
+  .nav { gap: 10px; }
   .navgroup { gap: 1px; }
   .nav a { min-height: 32px; }
   .side { gap: 12px; padding-top: 14px; padding-bottom: 12px; }
 }
-@media (max-height: 720px) and (min-width: 801px) {
+@media (max-height: 860px) and (min-width: 801px) {
+  .nav { gap: 8px; }
   .nav a { min-height: 30px; font-size: 14px; }
   .navtitle { padding-bottom: 2px; }
   .sidefoot { display: none; }
+}
+@media (max-height: 720px) and (min-width: 801px) {
+  .railbrand .mark { width: 32px; height: 32px; }
+  .railbrand .wordmark { font-size: 22px; }
+  .nav { gap: 6px; }
+  .nav a { min-height: 27px; font-size: 13.5px; }
+  .nav a .ic { width: 17px; height: 17px; }
+  .navtitle { font-size: 10px; padding-bottom: 1px; }
+  .side { gap: 10px; padding-top: 10px; padding-bottom: 8px; }
 }
 @media (max-width: 800px) {
   .shell { grid-template-columns: minmax(0, 1fr); align-content: start; }
@@ -657,6 +682,21 @@ details.adv > summary { cursor: pointer; padding: 12px 0; font-size: 13px; font-
 details.adv > summary::-webkit-details-marker { display: none; }
 details.adv > summary::before { content: "▸ "; }
 details.adv[open] > summary::before { content: "▾ "; }
+details.adv > summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+details.adv > summary .advnames { color: var(--muted); font-weight: 400; font-size: 12.5px; }
+details.adv[open] > summary .advnames { display: none; }
+/* a choice among a few ways, each explained (Answers made for) */
+.wopts { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+.wopt { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; cursor: pointer; transition: border-color 150ms ease, background-color 150ms ease; }
+.wopt:hover { border-color: var(--border-strong); }
+.wopt:has(input:checked) { border-color: var(--accent); background: var(--soft); }
+.wopt:has(input:disabled) { cursor: default; }
+.wopt:has(input:disabled) .ctext > strong { color: var(--muted); }
+.wopt input[type=radio] { margin: 3px 0 0; flex: none; width: 16px; height: 16px; accent-color: var(--accent); }
+.wopt .ctext { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.wopt .ctext > .small:last-child:not(.muted) { margin-top: 2px; }
+.field .info { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; min-height: 34px; }
+.field .info .mono { overflow-wrap: anywhere; }
 .dcard .empty { margin: 4px 0 2px; line-height: 1.5; }
 
 @media (max-width: 640px) {

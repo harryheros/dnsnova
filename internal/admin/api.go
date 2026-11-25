@@ -291,8 +291,40 @@ func (a *Admin) status(w http.ResponseWriter, r *http.Request, c *call) {
 			"zero_rtt":             false,
 			"private_ptr_answered": true,
 		},
+		"features": features(cfg),
 		"warnings": nonNil(snap.Warnings),
 	})
+}
+
+// features says which of the server's features are on, for the overview's
+// list of them (each links to where it is turned on).
+func features(c *config.Config) map[string]any {
+	return map[string]any{
+		"recursion":      c.Recursion.Enabled,
+		"dnssec":         c.Recursion.Enabled && c.Recursion.DNSSEC,
+		"fallback":       c.Recursion.Enabled && c.Recursion.Fallback,
+		"upstreams":      len(c.Upstream.Primary) + len(c.Upstream.Fallback),
+		"filter":         c.Filter.Enabled,
+		"groups":         len(c.Clients.Groups),
+		"rebinding":      c.Local.RebindingProtection,
+		"cookies":        c.Server.Cookies,
+		"name_cookies":   c.Recursion.Enabled && c.Recursion.Cookies,
+		"nod":            c.NOD.Enabled,
+		"alerts":         c.Alerts.Enabled,
+		"status_page":    c.Status.Enabled,
+		"query_days":     c.Log.QueryDays,
+		"dnstap":         c.Dnstap.Target != "",
+		"prefetch":       c.Cache.Prefetch,
+		"persist":        c.PersistCache(),
+		"serve_stale":    c.Cache.ServeStale > 0,
+		"ecs":            ecsShown(c),
+		"locality":       c.Locality.Enabled && c.Recursion.Enabled,
+		"locality_exits": len(c.Locality.Exits),
+		"cluster":        c.Cluster.Role,
+		"anycast":        c.Anycast.Enabled,
+		"local_forward":  len(c.Local.Forward),
+		"local_records":  len(c.Local.Records),
+	}
 }
 
 func nonNil[T any](s []T) []T {
@@ -778,7 +810,7 @@ func (a *Admin) patchConfig(w http.ResponseWriter, r *http.Request, c *call) {
 // write validates, saves and applies src.
 func (a *Admin) write(w http.ResponseWriter, c *call, snap *config.Snapshot, src []byte, what string) {
 	if key := fileOnlyChange(snap.Doc.Src, src); key != "" {
-		writeJSON(w, http.StatusForbidden, map[string]any{"error": key + " can only be changed in the configuration file on the server: [cluster] decides where this node takes its settings from, and [anycast] runs commands"})
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": key + " can only be changed in the configuration file on the server: [cluster] decides where this node takes its settings from, [anycast] runs commands, and [locality] decides where questions leave from"})
 		return
 	}
 	res, ok := a.check(w, snap, src)
@@ -995,7 +1027,7 @@ func fileOnlyChange(old, new []byte) string {
 	keys := map[string]bool{}
 	for _, d := range []*config.Document{od, nd} {
 		for _, e := range d.Entries {
-			if slices.Contains(config.FileOnlyTables, e.Table) {
+			if slices.Contains(config.FileOnlyTables, e.Table) && !slices.Contains(config.FileOnlyExceptions, e.Table+"."+e.Key) {
 				keys[e.Table+"\x00"+e.Key] = true
 			}
 		}
