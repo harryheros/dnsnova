@@ -45,6 +45,9 @@ jobs:
           - insight:FuzzArchiveLine
           - insight:FuzzNODLoad
           - dnstap:FuzzReadControl
+          - locality:FuzzParseExits
+          - locality:FuzzParseCountries
+          - recursor:FuzzLoadZones
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6

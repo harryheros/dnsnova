@@ -86,6 +86,7 @@ type alertInput struct {
 	configErr string        // follower: the primary's configuration does not work here
 	anycast   string        // announced, withdrawn or "" (off)
 	clockOff  time.Duration // recursor.ClockOff
+	exitsDown []string      // private locality: exits not answering
 }
 
 func pct(f float64) string { return fmt.Sprintf("%.1f%%", f*100) }
@@ -192,6 +193,13 @@ func evaluate(in alertInput) []alert.Condition {
 		add(alert.Condition{Key: "clock", Severity: alert.Critical,
 			Summary: "This server's clock is " + recursor.ClockText(in.clockOff) + ": DNSSEC answers fail",
 			Details: []string{"the clock reads " + in.now.UTC().Format("2006-01-02 15:04 UTC"), "set the time, for example with NTP (systemd-timesyncd, chrony)"}})
+	}
+
+	// private locality: exits that stopped answering
+	for _, e := range in.exitsDown {
+		add(alert.Condition{Key: "locality_exit:" + e, Severity: alert.Warning, For: 2 * time.Minute,
+			Summary: "Exit " + e + " is not answering: its clients get the server's own answers",
+			Details: []string{"check its tunnel and the host behind it; it is tried again on its own (Private locality page)"}})
 	}
 
 	// the certificate
@@ -342,6 +350,7 @@ func (s *Server) alertTick(now time.Time) {
 	}
 	if cfg.Recursion.Enabled {
 		in.clockOff = s.Rec.ClockOff()
+		in.exitsDown = s.localityDown()
 	}
 	for _, m := range members {
 		addr := m.U.String()

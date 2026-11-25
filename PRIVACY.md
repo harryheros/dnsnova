@@ -34,6 +34,13 @@ is your responsibility.
   servers you list for that zone in `local.forward`.
 - Names under a domain in `local.forward` go only to the servers listed for
   it, without EDNS Client Subnet.
+- With private locality (`[locality]`, off by default), a client's address,
+  and the country or network it is in, only pick which answer it gets
+  inside the server: they are never sent, and never written to disk. Names
+  whose answers depend on where they are asked from are asked from the
+  server and through every exit at once, whoever needs them, so what is
+  sent does not depend on who asked. Exits never see clients' addresses
+  ([docs/private-locality.md](./docs/private-locality.md)).
 
 ## What is kept, where, and for how long
 
@@ -42,6 +49,9 @@ is your responsibility.
 | Cached DNS answers | Memory | Their TTL, plus up to `cache.serve_stale` |
 | The same answers, in public mode or with `cache.persist = "on"` (names and records; no client addresses, no times of queries) | `/var/lib/dnsnova/cache.bin`, mode 0600, saved every 10 minutes and on shutdown | Replaced at each save; answers past their TTL plus `cache.serve_stale` are left out. Deleted when saving is off (private mode, or `cache.persist = "off"`) and when the cache is cleared |
 | With recursion, what was learnt about name servers, saved with the answers above (their addresses, round-trip times and quirks; no names, no zones, no clients) | `/var/lib/dnsnova/servers.bin`, mode 0600, saved with `cache.bin` | Replaced at each save; only servers used in the last 15 minutes, or with a quirk still in force (an hour at most). Deleted with `cache.bin` |
+| With private locality, the zones found to answer by where they are asked from, saved with the answers above (zone names; no clients, no answers) | `/var/lib/dnsnova/locality-zones.bin`, mode 0600, saved with `cache.bin` | Replaced at each save; deleted with `cache.bin` and when private locality is off |
+| With private locality and an exit serving clients by country, the regional Internet registries' public address files (no client data) | `/var/lib/dnsnova/locality/` | Replaced by the daily download |
+| With private locality, queries counted by the country they came from, and how many were for names whose answers vary (counts only: no names, no addresses) | Memory | Until the process stops, or private locality is turned off |
 | DNS Cookie secret (makes server cookies; no client data) | `/var/lib/dnsnova/secrets/cookie-secret`, mode 0600 | Until you delete it (a new one is then made) |
 | Counters and response-time histograms | Memory | Until the process stops |
 | Rate-limit state (per client address or network) | Memory | About a minute after the last query |

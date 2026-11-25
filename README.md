@@ -2,7 +2,7 @@
 
 > A secure DNS server, from one box at home to a public resolver on several continents.
 
-[![Version](https://img.shields.io/badge/version-v1.8.4-blue.svg)](https://github.com/harryheros/dnsnova/releases)
+[![Version](https://img.shields.io/badge/version-v1.9.0-blue.svg)](https://github.com/harryheros/dnsnova/releases)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](#license)
 [![Platform](https://img.shields.io/badge/platform-Linux%20amd64%20%7C%20arm64%20%7C%20arm-lightgrey.svg)](#install)
 [![CI](https://github.com/harryheros/dnsnova/actions/workflows/ci.yml/badge.svg)](https://github.com/harryheros/dnsnova/actions/workflows/ci.yml)
@@ -47,6 +47,7 @@ The wizard sets the administrator, who the server is for, recursion or upstreams
 - **Opt-in filtering**: the usual addresses answer everything; a second address, name or DoH path blocks ads, trackers, malware and CNAME-cloaked trackers. The default list is [ShieldNova](https://github.com/harryheros/shieldnova) (free to use in DNSNova, commercially too); AdGuard-style, hosts, RPZ and domain lists also work. A broken list update never replaces a working list, *Check a domain* shows which list blocks a name, and one click allows it again.
 - **Client groups**: devices sorted by network, each group with its own filtering and its own blocked or allowed domains (the finance office filtered, the lab never, social networks blocked for guests).
 - **Local names** such as `nas.home`; **domains with their own servers**, such as an office's Active Directory or a router's device names, asked only there; blocked clients; and EDNS Client Subnet for a network you choose (never your clients' addresses).
+- **Private locality** (optional): clients far from the server get the answers name servers give where they are, so content comes from servers near them. Names whose answers depend on where they are asked from are asked through small exits in other places, all at once whoever needs them; nothing about clients is sent ([docs/private-locality.md](./docs/private-locality.md)).
 - **DNS rebinding protection**: a name from outside that answers with an address of your network gets none, so a web page cannot reach your router, NAS or printer through it; your own names are let through, and one click in the query log allows a public name you gave a device at home.
 
 ### On the internet
@@ -91,6 +92,7 @@ For encrypted DNS only, choose *Only this server* in the wizard: plain DNS then 
 - [docs/cluster.md](./docs/cluster.md): several servers sharing one configuration, and anycast.
 - [docs/alerts.md](./docs/alerts.md): notifications, what is checked, the webhook format.
 - [docs/restricted-networks.md](./docs/restricted-networks.md): resolving where DNS answers are forged or intercepted on the path.
+- [docs/private-locality.md](./docs/private-locality.md): answers for where clients are, through exits, with nothing about them sent.
 - [docs/server-itself.md](./docs/server-itself.md): programs on the server itself (apt, certificate renewal, mail) using DNSNova.
 - [docs/api.md](./docs/api.md): the admin API used by the web interface, for scripts.
 - [docs/benchmark.md](./docs/benchmark.md): performance, and how to measure it yourself.

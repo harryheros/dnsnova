@@ -45,7 +45,9 @@ func (r *Resolver) SaveCache(w io.Writer) (int, error) {
 		sh := &r.cache.shards[i]
 		sh.mu.RLock()
 		for k, e := range sh.m {
-			if !e.failure && e.cacheable && now.Before(e.expire.Add(s.ServeStale)) {
+			// answers that depend on where they are asked from (private
+			// locality) are not kept: short-lived, and one per view
+			if !e.failure && e.cacheable && e.views == nil && now.Before(e.expire.Add(s.ServeStale)) {
 				list = append(list, struct {
 					key string
 					e   *entry

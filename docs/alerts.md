@@ -41,6 +41,7 @@ check off.
 | Slow answers | The 95th percentile response time of queries not in the cache exceeds `latency_p95` (500ms), over at least `latency_min_queries` (100), for `latency_for` (5m). Cached answers are excluded: they would hide a slow upstream. | warning | `latency_*` |
 | DNSSEC failures | At least `dnssec_failures` (100) answers refused for failing validation. The message names the domains; see the DNSSEC page. | warning | `dnssec_failures` |
 | Clock wrong | With recursion: the root's DNSSEC signatures show this machine's clock is more than about a day off (a machine without a battery-backed clock started with an old time), so signed answers fail. Says by how much. | critical | |
+| Exit not answering | With private locality: an exit stopped answering ([private locality](./private-locality.md)) and is left out for now, for 2 minutes. Its clients get this server's own answers meanwhile; it is tried again on its own. | warning | |
 | Certificate expiring | `cert_warn_days` (14) days before expiry, critical from `cert_critical_days` (3). | warning, critical | `cert_*_days` |
 | Certificate not renewed | The last attempt failed, with its reason. Critical when there is no certificate at all. | warning, critical | |
 | Configuration not applied | The configuration file changed on disk but is not valid, with the reason; the previous configuration stays in force. | warning | |

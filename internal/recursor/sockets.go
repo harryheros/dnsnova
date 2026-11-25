@@ -36,7 +36,15 @@ const (
 type sockPool struct {
 	mu    sync.Mutex
 	slots [2][poolSize]*psock // IPv4, IPv6
+	// exit: the pool of an exit (private locality), whose sockets are bound
+	// to its source addresses (local: IPv4, IPv6) so that the system routes
+	// them into its tunnel. A family without one is not used.
+	exit  bool
+	local [2]netip.Addr
 }
+
+// errNoFamily: an exit without a source address of the server's family.
+var errNoFamily = errors.New("the exit has no source address of this family")
 
 type psock struct {
 	conn    *net.UDPConn
@@ -86,7 +94,15 @@ func (p *sockPool) get(addr netip.AddrPort, q []byte) (*psock, *waiter, error) {
 			if fam == 1 {
 				network = "udp6"
 			}
-			c, err := net.ListenUDP(network, nil)
+			var laddr *net.UDPAddr
+			if p.exit {
+				if !p.local[fam].IsValid() {
+					p.mu.Unlock()
+					return nil, nil, errNoFamily
+				}
+				laddr = net.UDPAddrFromAddrPort(netip.AddrPortFrom(p.local[fam], 0))
+			}
+			c, err := net.ListenUDP(network, laddr)
 			if err != nil {
 				p.slots[fam][i] = nil
 				p.mu.Unlock()
@@ -107,6 +123,20 @@ func (p *sockPool) get(addr netip.AddrPort, q []byte) (*psock, *waiter, error) {
 		s.mu.Unlock()
 	}
 	return nil, nil, errBusy
+}
+
+// closeAll retires every socket (an exit that is no longer used).
+func (p *sockPool) closeAll() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for f := range p.slots {
+		for i, s := range p.slots[f] {
+			if s != nil {
+				s.retire()
+				p.slots[f][i] = nil
+			}
+		}
+	}
 }
 
 // retire stops new queries; the socket closes when the last one is done.

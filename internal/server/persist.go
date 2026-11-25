@@ -97,6 +97,13 @@ func (s *Server) saveCache() error {
 	if s.Rec == nil {
 		return nil
 	}
+	if localityOn(st.cfg) {
+		if err := writeFileAtomic(zonesPath(st.cfg), func(w io.Writer) error { _, err := s.Rec.SaveZones(w); return err }); err != nil {
+			return err
+		}
+	} else {
+		os.Remove(zonesPath(st.cfg))
+	}
 	return writeFileAtomic(serversPath(st.cfg), func(w io.Writer) error { _, err := s.Rec.SaveServers(w); return err })
 }
 
@@ -135,6 +142,7 @@ func (s *Server) dropCacheFile(c *config.Config) {
 		s.Log.Info("saved cache removed", "file", cachePath(c))
 	}
 	os.Remove(serversPath(c))
+	os.Remove(zonesPath(c))
 }
 
 // cacheSaver saves the cache every cacheSaveEvery until the server stops

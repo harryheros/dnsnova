@@ -78,6 +78,9 @@ func dohPaths(c *config.Config) string {
 	if c.ECS.ClientPath != "" && c.Recursion.Enabled {
 		p += " " + c.ECS.ClientPath
 	}
+	if mp := measurePrefix(c); mp != "" {
+		p += " " + mp // the exit's name follows
+	}
 	return p
 }
 

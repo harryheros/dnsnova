@@ -30,7 +30,8 @@ jobs:
           set -e
           for t in dnsmsg:FuzzParseQuery dnsmsg:FuzzOptions config:FuzzParse config:FuzzLists config:FuzzMerge \
                    resolver:FuzzAnalyze resolver:FuzzLoadCache filter:FuzzParse recursor:FuzzParseMessage \
-                   proxyproto:FuzzParseV2 proxyproto:FuzzReadV1 cookie:FuzzCookie upstream:FuzzParseSpec; do
+                   proxyproto:FuzzParseV2 proxyproto:FuzzReadV1 cookie:FuzzCookie upstream:FuzzParseSpec \
+                   locality:FuzzParseExits locality:FuzzParseCountries recursor:FuzzLoadZones; do
             go test ./internal/${t%%:*} -run '^$' -fuzz "^${t##*:}\$" -fuzztime 30s
           done
       - name: build

@@ -197,6 +197,7 @@ func (s *Server) PublicStatus() admin.PublicInfo {
 	// With recursion on, the server answers by itself: a working resolver
 	// is healthy even with no (or no healthy) upstreams, as in /healthz.
 	info.Recursion = c.Recursion.Enabled
+	info.Locality = localityOn(c)
 	if c.Recursion.Enabled && s.Rec != nil && s.Rec.Healthy() && !s.Rec.Intercepted() {
 		info.Healthy = true
 	}

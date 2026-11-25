@@ -4,6 +4,52 @@ All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
 **Security**.
 
+## 1.9.0 (2026-11-25)
+
+**Private locality**, off by default: clients far from the server get the
+answers name servers give where they are, without anything about them
+being sent ([docs/private-locality.md](./docs/private-locality.md)).
+
+- **Exits.** `[locality] exits` lists small hosts in other places, reached
+  through tunnels, that only pass questions on. Each serves clients by
+  country code or network (a network wins, the narrowest first); every
+  other client gets the server's own answers, as before.
+- **Which zones vary is learnt.** Now and then a question just answered is
+  asked again through an exit; a zone whose addresses share no /24 (IPv6:
+  /48) with the server's three times in a row is marked, and checked again
+  as it is used (`relearn`). The root, top-level domains, DS and DNSKEY are
+  always asked from the server itself, so the chain of trust never passes
+  through an exit.
+- **Private by construction.** A name in a marked zone is asked from the
+  server and every exit at once, whoever needs it, and all its answers
+  expire together, so what is sent never depends on who asked. A client's
+  address, country or network only pick its answer inside the server. Each
+  place keeps its own delegations and what it learns about name servers
+  (round trips, cookies).
+- **When an exit fails.** A client waits `exit_timeout` (800 ms) for its
+  exit, then gets the server's answer. An exit with eight timeouts in a
+  row, or three names only it fails to resolve, is left out for 30 seconds
+  (doubling up to 10 minutes) and raises an alert. Over `fanout_qps`
+  (200 a second), names are asked from the server alone.
+- **Countries** come from the five regional registries' daily files, kept
+  in `data_dir/locality/`, and are downloaded only when an exit serves
+  clients by country.
+- **Seeing it work.** A *Private locality* page (exits, zones that vary,
+  and queries counted by country, to choose where an exit would help); a
+  line on the overview's Resolution card; *Trace a lookup* lists what each
+  place got and can ask through one exit; `dig CH TXT locality.server`
+  tells a client which answer it gets; `GET /api/v1/locality`; metrics
+  `dnsnova_locality_*`; the status page says a visitor's location only
+  picks its answer.
+- **Measuring.** `measure_path`, a secret DoH path, answers
+  `<path>/<exit>` as asked through that exit, without the cache.
+- `[locality]` is each node's own (never taken from a primary) and is set
+  only in the file. It cannot be used with `ecs.address`.
+- Off, nothing changes: an answer from the cache takes as long as before
+  (419 ns against 418, the median of 12 alternated runs), with the same
+  allocations. On, 60 to 70 ns more.
+- New fuzz targets: exit lines, registry files and the zones file.
+
 ## 1.8.4 (2026-11-23)
 
 - **A quieter top of the overview.** The DNSNova title was more than twice

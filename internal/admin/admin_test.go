@@ -102,6 +102,8 @@ func (f *fake) Trace(_ context.Context, name string, qt uint16) *recursor.TraceR
 }
 func (f *fake) DNSSEC() DNSSEC       { return DNSSEC{Recursion: true, Enabled: true, Bogus: 1} }
 func (f *fake) ClearDNSSECFailures() {}
+func (f *fake) Locality() Locality   { return Locality{Exits: []LocalityExit{}, Zones: []string{}} }
+
 func (f *fake) Alerts() Alerts {
 	f.mu.Lock()
 	defer f.mu.Unlock()

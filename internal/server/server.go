@@ -28,6 +28,7 @@ import (
 	"github.com/harryheros/dnsnova/internal/filter"
 	"github.com/harryheros/dnsnova/internal/guard"
 	"github.com/harryheros/dnsnova/internal/insight"
+	"github.com/harryheros/dnsnova/internal/locality"
 	"github.com/harryheros/dnsnova/internal/recursor"
 	"github.com/harryheros/dnsnova/internal/resolver"
 	"github.com/harryheros/dnsnova/internal/stats"
@@ -44,6 +45,8 @@ type state struct {
 	// closing them.
 	fwd       *resolver.Forwards
 	fwdGroups []*upstream.Group
+	// loc picks each client's view (private locality); nil when off
+	loc *locality.Mapper
 }
 
 // close shuts every upstream connection of st.
@@ -100,6 +103,7 @@ type Server struct {
 
 	cookieJar *cookie.Jar // DNS Cookies; nil until first turned on (set in Start, then under mu)
 
+	loc locServer    // private locality: country table, siting report
 	cl  clusterState // nothing runs here without a [cluster] role
 	any anycastState // nor here without [anycast] enabled
 	al  alertState   // checks and notifications, quiet without [alerts] enabled
@@ -300,6 +304,7 @@ func settingsFrom(c *config.Config, st *state) resolver.Settings {
 		UpstreamConcurrency: c.Limits.UpstreamConcurrency,
 		ZoneConcurrency:     c.Limits.ZoneConcurrency,
 		ECS:                 ecsOption(c),
+		Locality:            st.loc,
 	}
 }
 
@@ -386,7 +391,7 @@ func (s *Server) buildState(c *config.Config) (*state, error) {
 	if err != nil {
 		return nil, err
 	}
-	st := &state{cfg: c, group: g}
+	st := &state{cfg: c, group: g, loc: s.localityMapper(c)}
 	if err := st.buildForwards(c, s.TLS); err != nil {
 		st.close()
 		return nil, err
@@ -448,6 +453,8 @@ func (s *Server) Start() error {
 	s.applyCookies(snap.Config)
 	s.loadCache(snap.Config) // before any listener: the first queries already find it
 	s.loadServers(snap.Config)
+	s.applyLocality(snap.Config)
+	s.loadZones(snap.Config)
 	s.applyRetention(snap.Config)
 	s.QArchive.Configure(archiveSettings(snap.Config))
 	s.Tap.Configure(s.tapSettings(snap.Config))
@@ -548,6 +555,7 @@ func (s *Server) Apply(snap *config.Snapshot) error {
 	s.Tap.Configure(s.tapSettings(snap.Config))
 	s.applyNOD(snap.Config)
 	s.Rec.SetConfig(recConfig(snap.Config))
+	s.applyLocality(snap.Config)
 	s.res.SetUpstreams(s.exchanger(snap.Config, st))
 	s.Filter.Configure(filterSettings(snap.Config))
 	if !snap.Config.PersistCache() {

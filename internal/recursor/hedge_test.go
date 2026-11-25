@@ -128,14 +128,14 @@ func TestHedgeAfterFollowsVariance(t *testing.T) {
 	for range 20 {
 		r.infra.ok(exA, 100*time.Millisecond, now)
 	}
-	if d := r.hedgeAfter(exA); d < 120*time.Millisecond || d > 130*time.Millisecond {
+	if d := r.hedgeAfter(r.infra, exA); d < 120*time.Millisecond || d > 130*time.Millisecond {
 		t.Fatalf("steady: hedge after %v", d)
 	}
 	for i := range 20 {
 		r.infra.ok(ex2A, time.Duration(50+100*(i%2))*time.Millisecond, now)
 	}
 	srtt, _ := r.infra.rttStats(ex2A)
-	if d := r.hedgeAfter(ex2A); d != 2*srtt {
+	if d := r.hedgeAfter(r.infra, ex2A); d != 2*srtt {
 		t.Fatalf("unsteady: hedge after %v (srtt %v)", d, srtt)
 	}
 }

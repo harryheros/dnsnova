@@ -86,6 +86,7 @@ func recConfig(c *config.Config) recursor.Config {
 		ECS:               ecsOption(c),
 		NTAs:              ntaNames(r.NegativeTrustAnchors),
 		Cookies:           r.Cookies,
+		Locality:          localityConfig(c),
 	}
 }
 
@@ -118,7 +119,7 @@ func (s *Server) RecursionStatus() admin.Recursion {
 	c := s.state.Load().cfg
 	r := s.Rec
 	sets, negs, keys, delegs, servers := r.CacheSizes()
-	return admin.Recursion{
+	out := admin.Recursion{
 		Enabled: c.Recursion.Enabled, DNSSEC: c.Recursion.DNSSEC, QNameMinimisation: c.Recursion.QNameMinimisation,
 		Fallback: c.Recursion.Fallback && len(c.Upstream.Primary) > 0, Healthy: r.Healthy(),
 		Queries: r.Stats.Queries.Load(), Timeouts: r.Stats.Timeouts.Load(), TCP: r.Stats.TCP.Load(),
@@ -131,6 +132,15 @@ func (s *Server) RecursionStatus() admin.Recursion {
 		Retries: r.Stats.Retries.Load(), RetriesAnswered: r.Stats.RetriesAnswered.Load(),
 		Hedges: r.Stats.Hedges.Load(), HedgesWon: r.Stats.HedgesWon.Load(),
 	}
+	if l := r.Locality(); l != nil {
+		out.LocalityExits, out.LocalityZones = len(l.Exits), l.ZonesVarying
+		for _, e := range l.Exits {
+			if e.Up {
+				out.LocalityUp++
+			}
+		}
+	}
+	return out
 }
 
 func ms(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 }
@@ -171,5 +181,21 @@ func (s *Server) writeRecursionMetrics(w io.Writer) {
 	fmt.Fprintf(w, "# TYPE dnsnova_recursion_cache_entries gauge\n")
 	for k, v := range map[string]int{"rrsets": sets, "negative": negs, "zones": keys, "delegations": delegs, "servers": servers} {
 		fmt.Fprintf(w, "dnsnova_recursion_cache_entries{kind=%q} %d\n", k, v)
+	}
+	if l := r.Locality(); l != nil {
+		fmt.Fprintf(w, "# HELP dnsnova_locality_exit_up 1 while an exit answers (private locality).\n# TYPE dnsnova_locality_exit_up gauge\n")
+		for _, e := range l.Exits {
+			up := 0
+			if e.Up {
+				up = 1
+			}
+			fmt.Fprintf(w, "dnsnova_locality_exit_up{exit=%q} %d\n", e.Name, up)
+		}
+		fmt.Fprintf(w, "# HELP dnsnova_locality_exit_fallbacks_total Clients given the server's own answer because their exit's was late or failed.\n# TYPE dnsnova_locality_exit_fallbacks_total counter\n")
+		for _, e := range l.Exits {
+			fmt.Fprintf(w, "dnsnova_locality_exit_fallbacks_total{exit=%q} %d\n", e.Name, e.Fallbacks)
+		}
+		fmt.Fprintf(w, "# HELP dnsnova_locality_zones_varying Zones whose answers depend on where they are asked from.\n# TYPE dnsnova_locality_zones_varying gauge\ndnsnova_locality_zones_varying %d\n", l.ZonesVarying)
+		fmt.Fprintf(w, "# TYPE dnsnova_locality_forks_total counter\ndnsnova_locality_forks_total{kind=\"all\"} %d\ndnsnova_locality_forks_total{kind=\"limited\"} %d\n", l.Forks, l.ForksLimited)
 	}
 }

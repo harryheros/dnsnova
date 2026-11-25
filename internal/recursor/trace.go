@@ -35,6 +35,18 @@ type TraceStep struct {
 	// DNSSEC: secure, insecure or bogus, and why
 	Sec string `json:"dnssec,omitempty"`
 	Why string `json:"why,omitempty"`
+	// Via: where the question was asked from, when answers depend on it
+	// (private locality): "server" or an exit's name
+	Via string `json:"via,omitempty"`
+}
+
+// TraceView is what one view got for a name whose answers depend on where
+// they are asked from (private locality).
+type TraceView struct {
+	Via     string   `json:"via"` // "server" or an exit's name
+	Rcode   string   `json:"rcode,omitempty"`
+	Answers []string `json:"answers,omitempty"`
+	Error   string   `json:"error,omitempty"`
 }
 
 // TraceResult is a finished trace.
@@ -53,6 +65,12 @@ type TraceResult struct {
 	Truncate bool        `json:"truncated,omitempty"` // more steps than kept
 	// Subnet is the client network name servers were asked for, if any
 	Subnet string `json:"subnet,omitempty"`
+	// Views: what each view got, when the answers depend on where they
+	// are asked from (private locality); the answer above is the server's
+	Views []TraceView `json:"views,omitempty"`
+	// Exit: the exit every zone below the top-level domains was asked
+	// through (WithTraceExit), if any
+	Exit string `json:"exit,omitempty"`
 }
 
 const maxTraceSteps = 400
@@ -64,6 +82,11 @@ type tracer struct {
 	start time.Time
 	steps []TraceStep
 	cut   bool
+	views []TraceView
+	// via names the view the steps are for (private locality). Kept here,
+	// not in the task: reading a string from the task would let the task's
+	// contents escape to the heap, a cost on every query.
+	via string
 }
 
 func (tr *tracer) add(t *task, s TraceStep) {
@@ -73,6 +96,7 @@ func (tr *tracer) add(t *task, s TraceStep) {
 	}
 	s.MS = float64(time.Since(tr.start).Microseconds()) / 1000
 	s.Depth = max(t.depth-1, 0)
+	s.Via = tr.via
 	tr.steps = append(tr.steps, s)
 }
 
@@ -92,12 +116,33 @@ func (r *Recursor) Trace(ctx context.Context, name string, qtype uint16) *TraceR
 	t.trace = &tracer{start: time.Now()}
 	t.fresh = true
 	out := &TraceResult{Name: m.NameString(name), Type: m.TypeString(qtype)}
+	if name, ok := ctx.Value(traceExitKey{}).(string); ok {
+		lc := r.loc.Load()
+		if lc == nil {
+			out.Rcode, out.Error = "SERVFAIL", "private locality is off: no exits"
+			return out
+		}
+		var ex *exitPath
+		for _, e := range lc.exits {
+			if e.name == name {
+				ex = e
+			}
+		}
+		if ex == nil {
+			out.Rcode, out.Error = "SERVFAIL", "no exit named "+name
+			return out
+		}
+		// as a measurement through it is (ExchangeExit): nothing it
+		// learns goes into the shared cache
+		t.view, t.pinned, t.private, out.Exit = ex.view, true, true, ex.name
+		t.trace.via = ex.name
+	}
 	r.netMu.RLock()
 	ans, err := r.resolve(ctx, t, name, qtype, cfg.DNSSEC)
 	r.netMu.RUnlock()
 	out.MS = float64(time.Since(t.trace.start).Microseconds()) / 1000
 	out.Queries = 2*maxQueriesPerTask - t.budget
-	out.Steps, out.Truncate = t.trace.steps, t.trace.cut
+	out.Steps, out.Truncate, out.Views = t.trace.steps, t.trace.cut, t.trace.views
 	if err != nil {
 		out.Rcode, out.Error = "SERVFAIL", err.Error()
 		if errors.Is(err, errBudget) {
@@ -181,6 +226,14 @@ func plural(n int) string {
 		return ""
 	}
 	return "s"
+}
+
+type traceExitKey struct{}
+
+// WithTraceExit returns ctx for a Trace that asks every zone below the
+// top-level domains through exit (private locality).
+func WithTraceExit(ctx context.Context, exit string) context.Context {
+	return context.WithValue(ctx, traceExitKey{}, exit)
 }
 
 // describeRR renders a record in zone file style, data short.

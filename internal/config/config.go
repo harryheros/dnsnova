@@ -16,6 +16,7 @@ import (
 
 	"github.com/harryheros/dnsnova/internal/dnstap"
 	"github.com/harryheros/dnsnova/internal/filter"
+	"github.com/harryheros/dnsnova/internal/locality"
 	"github.com/harryheros/dnsnova/internal/recursor"
 	"github.com/harryheros/dnsnova/internal/upstream"
 )
@@ -205,6 +206,31 @@ type Config struct {
 		RootHints            []string // replace the root server addresses
 		Cookies              bool     // DNS Cookies with authoritative servers (RFC 7873)
 	}
+	// Locality is private locality (package locality): clients far from
+	// the server get the answers name servers give where they are, asked
+	// through exits, with nothing about them sent.
+	Locality struct {
+		Enabled bool
+		// Exits: "name source-address[,source-address] clients...", the
+		// clients being country codes and networks (locality.ParseExits).
+		Exits []string
+		// ExitTimeout: how long a client waits for its exit's answer
+		// before it gets the server's own.
+		ExitTimeout time.Duration
+		// FanoutQPS bounds the names asked from every exit per second.
+		FanoutQPS int
+		// Relearn: how long a zone found not to vary stays so.
+		Relearn time.Duration
+		// CountrySources: the registries' files the country table is
+		// built from (http(s) URLs or absolute paths). Empty: the five
+		// regional registries.
+		CountrySources []string
+		// MeasurePath is a DoH path, kept secret, on which every zone
+		// below the top-level domains is asked through the exit named
+		// after it (/<path>/<exit>), for tools that measure how names
+		// resolve there. Empty: off.
+		MeasurePath string
+	}
 }
 
 // DefaultFilterList is ShieldNova's full list: privacy, ads and security,
@@ -256,6 +282,9 @@ func Defaults() *Config {
 	c.Anycast.Rise = 3
 	c.Anycast.Fall = 3
 	c.Anycast.Drain = 5 * time.Second
+	c.Locality.ExitTimeout = 800 * time.Millisecond
+	c.Locality.FanoutQPS = 200
+	c.Locality.Relearn = 168 * time.Hour
 	c.Alerts = DefaultAlerts
 	c.Limits.ClientQPS = 100
 	c.Limits.ClientBurst = 400
@@ -535,6 +564,7 @@ func (c *Config) validate(lines map[string]int) (Errors, []string) {
 	}
 	errs, warns = c.validateFilter(lines, errs, warns)
 	errs, warns = c.validateRecursion(lines, errs, warns)
+	errs, warns = c.validateLocality(lines, errs, warns)
 	if c.Log.QueryDays < 0 || c.Log.QueryDays > 3650 {
 		bad("log.query_days", "a number of days, 0 (off) to 3650")
 	}
@@ -638,6 +668,60 @@ func (c *Config) validateRecursion(lines map[string]int, errs Errors, warns []st
 		warns = append(warns, "recursion.dnssec is off: answers are not checked, so forged ones can get through")
 	}
 	return errs, warns
+}
+
+func (c *Config) validateLocality(lines map[string]int, errs Errors, warns []string) (Errors, []string) {
+	bad := func(key, msg string) { errs = append(errs, &Error{Line: lines[key], Key: key, Msg: msg}) }
+	l := &c.Locality
+	exits, err := locality.ParseExits(l.Exits)
+	if err != nil {
+		bad("locality.exits", err.Error())
+	}
+	if l.ExitTimeout < 50*time.Millisecond || l.ExitTimeout > 5*time.Second {
+		bad("locality.exit_timeout", "between 50ms and 5s")
+	}
+	if l.FanoutQPS < 1 || l.FanoutQPS > 100000 {
+		bad("locality.fanout_qps", "between 1 and 100000")
+	}
+	if l.Relearn < time.Hour || l.Relearn > 30*24*time.Hour {
+		bad("locality.relearn", "between 1h and 720h (30 days)")
+	}
+	for _, src := range l.CountrySources {
+		if !strings.HasPrefix(src, "https://") && !strings.HasPrefix(src, "http://") && !strings.HasPrefix(src, "/") {
+			bad("locality.country_sources", fmt.Sprintf("%q: an http(s) URL or an absolute file path", src))
+		}
+	}
+	if p := l.MeasurePath; p != "" {
+		switch {
+		case !strings.HasPrefix(p, "/") || strings.ContainsAny(p, " ?#%") || strings.Count(p, "/") != 1 || len(p) < 25:
+			bad("locality.measure_path", "a secret path: / and at least 24 random letters or digits, like /exit-k3v9q2m8x7w4r1t6y5u0p2z8 (the exit's name is added after it)")
+		case p == c.DoH.Path || p == c.Filter.DoHPath || p == c.ECS.ClientPath:
+			bad("locality.measure_path", "must differ from doh.path, filter.doh_path and ecs.client_path")
+		case c.DoH.Listen == "" && len(c.DoH.HTTPSListen) == 0:
+			bad("locality.measure_path", "needs DNS over HTTPS: set doh.https_listen or doh.listen")
+		}
+	}
+	if !l.Enabled {
+		return errs, warns
+	}
+	switch {
+	case !c.Recursion.Enabled:
+		bad("locality.enabled", "needs recursion.enabled: answers are asked from the domains' own name servers, from here and through the exits")
+	case c.ECS.Address != "":
+		bad("locality.enabled", "choose one: ecs.address sends one network for every client; private locality asks from where clients are instead. Empty ecs.address, or turn locality off")
+	case err == nil && len(exits) == 0:
+		bad("locality.exits", "private locality needs at least one exit")
+	}
+	return errs, warns
+}
+
+// LocalityExits returns locality.exits parsed (nil when invalid).
+func (c *Config) LocalityExits() []locality.Exit {
+	exits, err := locality.ParseExits(c.Locality.Exits)
+	if err != nil {
+		return nil
+	}
+	return exits
 }
 
 // RecursionNetworks returns recursion.allow_networks parsed.
@@ -1011,6 +1095,13 @@ var fields = map[string]field{
 	"dnstap.full_ip":             boolean(func(c *Config) *bool { return &c.Dnstap.FullIP }),
 	"ecs.address":                str(func(c *Config) *string { return &c.ECS.Address }),
 	"ecs.client_path":            str(func(c *Config) *string { return &c.ECS.ClientPath }),
+	"locality.enabled":           boolean(func(c *Config) *bool { return &c.Locality.Enabled }),
+	"locality.exits":             strList(func(c *Config) *[]string { return &c.Locality.Exits }),
+	"locality.exit_timeout":      duration(func(c *Config) *time.Duration { return &c.Locality.ExitTimeout }),
+	"locality.fanout_qps":        integer(func(c *Config) *int { return &c.Locality.FanoutQPS }),
+	"locality.relearn":           duration(func(c *Config) *time.Duration { return &c.Locality.Relearn }),
+	"locality.country_sources":   strList(func(c *Config) *[]string { return &c.Locality.CountrySources }),
+	"locality.measure_path":      str(func(c *Config) *string { return &c.Locality.MeasurePath }),
 	"stats.retention":            str(func(c *Config) *string { return &c.Stats.Retention }),
 
 	"limits.client_qps":           number(func(c *Config) *float64 { return &c.Limits.ClientQPS }),
@@ -1090,7 +1181,7 @@ var fields = map[string]field{
 }
 
 var knownTables = map[string]bool{
-	"cluster": true, "anycast": true, "alerts": true,
+	"cluster": true, "anycast": true, "alerts": true, "locality": true,
 	"server": true, "doh": true, "dot": true, "doq": true, "tls": true, "ddr": true, "upstream": true, "cache": true,
 	"access": true, "limits": true, "metrics": true, "log": true, "admin": true, "status": true, "local": true, "clients": true, "dnstap": true, "nod": true, "stats": true, "ecs": true, "filter": true,
 	"recursion": true,
@@ -1522,13 +1613,14 @@ type Anycast struct {
 }
 
 // NodeLocalTables are never synced from a primary: each node's own
-// [cluster] and [anycast] settings (who it follows, which commands it runs).
-var NodeLocalTables = []string{"cluster", "anycast"}
+// [cluster] and [anycast] settings (who it follows, which commands it runs),
+// and its [locality] (its exits are its own tunnels).
+var NodeLocalTables = []string{"cluster", "anycast", "locality"}
 
 // FileOnlyTables cannot be changed through the admin API, only in the file
 // on the server: [cluster] decides where a node takes its configuration
-// from and [anycast] runs commands, so a stolen admin password must not
-// reach either.
+// from, [anycast] runs commands and [locality] decides where questions
+// leave from, so a stolen admin password must not reach any of them.
 var FileOnlyTables = NodeLocalTables
 
 func (c *Config) validateCluster(lines map[string]int, errs Errors, warns []string) (Errors, []string) {

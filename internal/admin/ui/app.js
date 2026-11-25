@@ -760,7 +760,7 @@ const NAV = [
 // pageTitle is the browser tab title of a page: its name in the menu.
 function pageTitle(r) {
   const item = NAV.flatMap(([, items]) => items).find(([, path]) => path === r);
-  return (item ? item[0] : { dnssec: "DNSSEC", nodes: "Nodes" }[r] || "Overview") + " · DNSNova";
+  return (item ? item[0] : { dnssec: "DNSSEC", nodes: "Nodes", locality: "Private locality" }[r] || "Overview") + " · DNSNova";
 }
 
 // encryptedOn: some encrypted protocol is served (settings values).
@@ -834,6 +834,7 @@ async function showApp() {
     if (title !== "Status") return items;
     const out = [...items];
     if (state.dnssec && state.dnssec.recursion) out.push(["DNSSEC", "dnssec", "shieldcheck"]); // only when resolving from the root
+    if (state.locality && state.locality.enabled) out.push(["Private locality", "locality", "dns"]); // only when it is on
     if (state.cluster && state.cluster.role) out.push(["Nodes", "nodes", "network"]);
     return out;
   };
@@ -842,6 +843,7 @@ async function showApp() {
     navItems(title, items).map(([label, r, ic]) => h("a", { href: "#/" + r, "aria-current": route() === r ? "page" : null }, line(ic, 19), h("span", null, label))))));
   try { state.cluster = await api("GET", "/cluster"); } catch (e) { state.cluster = null; }
   try { state.dnssec = await api("GET", "/dnssec"); } catch (e) { state.dnssec = null; }
+  try { state.locality = await api("GET", "/locality"); } catch (e) { state.locality = null; }
   const go = () => {
     setMenu(false);
     top.closeMenu();
@@ -1404,6 +1406,12 @@ function recCard(rec) {
     ["cyan", "Lookup time", rec.lookup_p50_ms ? fmt.ms(rec.lookup_p50_ms) + " ms" : "–",
       rec.lookup_p95_ms ? `95% within ${fmt.ms(rec.lookup_p95_ms)} ms · ${fmt.pct(rec.queries ? rec.timeouts / rec.queries : 0)} of queries timed out` : "none yet"],
   ];
+  if (rec.locality_exits) {
+    // private locality: shown among the first rows, next to resolution
+    const all = rec.locality_up === rec.locality_exits;
+    rows.splice(3, 0, [all ? "ok" : "warn", h("a", { href: "#/locality" }, "Private locality"), `${rec.locality_up}/${rec.locality_exits}`,
+      all ? `exits answering · ${fmt.int(rec.locality_zones)} zones vary by place` : "an exit is not answering"]);
+  }
   if (rec.fallback) rows.push(["idle", "Answered by upstreams", fmt.short(rec.fallbacks), "when no name server answered"]);
   if (rec.intercepted) rows.unshift(["err", "Network answers for name servers", fmt.short(rec.rewritten), "port 53 intercepted: use your own DNSNova elsewhere as upstream"]);
   if (rec.clock_off_seconds) rows.unshift(["err", "Server clock is wrong", clockText(rec.clock_off_seconds), "DNSSEC answers fail until the time is set (NTP)"]);
@@ -1624,13 +1632,17 @@ function tracePage(main) {
   type.style.maxWidth = "120px";
   const subnet = h("input", { type: "text", class: "mono", value: p.subnet || "", placeholder: "e.g. 219.141.140.0/24", "aria-label": "As seen from network (optional)", spellcheck: "false" });
   subnet.style.maxWidth = "220px";
+  // private locality: ask every zone below the top-level domains through one exit
+  const exits = (state.locality && state.locality.enabled ? state.locality.exits : []).map((e) => e.name);
+  const exit = h("select", { "aria-label": "Through an exit (optional)" }, h("option", { value: "" }, "This server"), exits.map((n) => h("option", { value: n, selected: p.exit === n }, n)));
+  exit.style.maxWidth = "220px";
   const out = h("div", { style: { display: "flex", flexDirection: "column", gap: "18px" } });
   const btn = h("button", { type: "submit", class: "btn primary" }, "Trace");
   const run = async () => {
     btn.disabled = true;
     fill(out, h("p", { class: "muted" }, "Asking the name servers… this can take a few seconds."));
     try {
-      const r = await api("POST", "/tools/trace", { name: name.value, type: type.value, subnet: subnet.value });
+      const r = await api("POST", "/tools/trace", { name: name.value, type: type.value, subnet: subnet.value, exit: exit.value });
       fill(out, traceView(r));
     } catch (e) { fill(out, errorBox(e)); }
     btn.disabled = false;
@@ -1642,7 +1654,10 @@ function tracePage(main) {
         h("div", { style: { flex: "1 1 260px" } }, name), type, btn),
       h("details", { class: "adv", open: !!p.subnet }, h("summary", null, "As seen from another network"),
         h("label", { class: "small", style: { display: "grid", gap: "6px", marginTop: "8px" } },
-          "Client network sent to name servers (EDNS Client Subnet), to see what they answer for it. An address stands for its /24 or /56.", subnet))),
+          "Client network sent to name servers (EDNS Client Subnet), to see what they answer for it. An address stands for its /24 or /56.", subnet)),
+      exits.length ? h("details", { class: "adv", open: !!p.exit }, h("summary", null, "Through an exit"),
+        h("label", { class: "small", style: { display: "grid", gap: "6px", marginTop: "8px" } },
+          "Every zone below the top-level domains is asked through this exit, to see what name servers answer there (private locality). Nothing it learns goes into the cache.", exit)) : null),
     out);
   if (p.name) run(); else name.focus();
 }
@@ -1657,18 +1672,30 @@ function traceView(r) {
       r.why ? h("div", null, h("dt", null, "Why"), h("dd", { class: "small", style: { whiteSpace: "normal" } }, r.why)) : null,
       h("div", null, h("dt", null, r.dnssec === "bogus" ? "Answer (refused: clients get SERVFAIL)" : "Answer"), h("dd", { class: "mono small", style: { whiteSpace: "normal" } }, (r.answers || []).length ? r.answers.map((a) => h("div", null, a)) : "none")),
       r.subnet ? h("div", null, h("dt", null, "As seen from"), h("dd", { class: "mono" }, r.subnet)) : null,
+      r.exit ? h("div", null, h("dt", null, "Asked through"), h("dd", { class: "mono" }, r.exit)) : null,
       h("div", null, h("dt", null, "Work"), h("dd", null, `${fmt.int(r.queries)} queries · ${fmt.ms(r.ms)} ms`))));
   const kindLabel = { query: "Asked", cname: "Alias", keys: "Keys", validate: "Checked" };
+  // private locality: the answers depend on where they were asked from
+  const serves = Object.fromEntries(((state.locality && state.locality.exits) || []).map((e) => [e.name, (e.serves || []).join(", ")]));
+  const views = (r.views || []).length ? h("section", { class: "card" }, h("h2", null, "Answers by where they were asked from"),
+    h("p", { class: "small muted", style: { marginTop: 0 } }, "The answers for this name depend on where the question comes from. Each client gets the answer of its own exit; the others get this server's. The answer above is this server's."),
+    h("div", { class: "tablewrap" }, h("table", { class: "stack" },
+      h("thead", null, h("tr", null, ["Asked from", "Clients", "Answer"].map((t) => h("th", { scope: "col" }, t)))),
+      h("tbody", null, r.views.map((v) => h("tr", null,
+        h("td", { class: "mono head" }, v.via === "server" ? "this server" : v.via),
+        h("td", { class: "small muted", "data-label": "Clients" }, v.via === "server" ? "all others" : serves[v.via] || ""),
+        h("td", { class: "mono small", "data-label": "Answer", style: { whiteSpace: "normal" } }, v.error ? h("span", { class: "err" }, v.error) : (v.answers || []).length ? v.answers.map((a) => h("div", null, a)) : (v.rcode || "")))))))) : null;
+  const via = (r.steps || []).some((s) => s.via);
   const rows = (r.steps || []).map((s) => h("tr", null,
     h("td", { class: "r num muted", "data-label": "At" }, fmt.ms(s.ms) + " ms"),
     h("td", { "data-label": "Step", style: { paddingLeft: 12 + 18 * s.depth + "px" } }, h("strong", null, kindLabel[s.kind] || s.kind),
       s.zone ? h("span", { class: "muted small" }, " " + s.zone) : null),
-    h("td", { class: "mono small", "data-label": "Server" }, s.server || ""),
+    h("td", { class: "mono small", "data-label": "Server" }, s.server || "", via && s.via ? h("div", { class: "muted" }, "via " + (s.via === "server" ? "this server" : s.via)) : null),
     h("td", { class: "mono small", "data-label": "Question" }, s.name ? `${s.name} ${s.type || ""}` : ""),
     h("td", { "data-label": "Outcome", style: { whiteSpace: "normal" } }, s.dnssec ? [secPill(secOf(s.dnssec, s.why)), " "] : null, s.result,
       s.why ? h("div", { class: "small muted" }, s.why) : null),
     h("td", { class: "r num", "data-label": "Time" }, s.rtt_ms ? fmt.ms(s.rtt_ms) + " ms" : "")));
-  return [summary,
+  return [summary, views,
     h("section", { class: "card" }, h("h2", null, "Steps"),
       h("div", { class: "tablewrap" }, h("table", { class: "stack" },
         h("thead", null, h("tr", null, ["At", "Step", "Server", "Question", "Outcome", "Time"].map((t, i) => h("th", { scope: "col", class: i === 0 || i === 5 ? "r" : "" }, t)))),
@@ -1690,6 +1717,63 @@ function ntaGuess(name) {
   const l = name.replace(/\.$/, "").split(".");
   const keep = l.length >= 3 && l[l.length - 2].length <= 3 && l[l.length - 1].length === 2 ? 3 : 2;
   return l.slice(-keep).join(".");
+}
+
+// ---------- private locality ----------
+
+// localityPage shows the exits, the zones whose answers vary by where they
+// are asked from, and the siting report (counts by country, in memory).
+function localityPage(main) {
+  const body = h("div", { style: { display: "flex", flexDirection: "column", gap: "18px" } }, h("p", { class: "muted" }, "Loading…"));
+  main.append(pageHead("Private locality", "Status"), body);
+  const load = async () => {
+    try {
+      const l = await api("GET", "/locality");
+      state.locality = l;
+      if (!l.enabled) {
+        fill(body, h("section", { class: "card" }, h("p", { style: { margin: 0 } }, "Private locality is off. With it, clients far from this server get the answers name servers give where they are, asked through exits, and nothing about them is sent. It is set in the configuration file ([locality]); see docs/private-locality.md.")));
+        return;
+      }
+      const st = l.status || {};
+      const up = l.exits.filter((e) => e.up).length;
+      const total = l.report.reduce((a, x) => a + x.queries, 0);
+      const tile = (color, ic, label, value, note) => kpiCard(color, ic, label, value, null, null, note, null, true);
+      fill(body,
+        h("div", { class: "dash" },
+          tile(up === l.exits.length ? "var(--c3)" : "var(--c2)", "network", "Exits answering", `${up}/${l.exits.length}`, up === l.exits.length ? "every exit is in use" : "clients of the others get this server's answers"),
+          tile("var(--c1)", "layers", "Zones that vary", fmt.int(l.zones.length), "answers depend on where they are asked from"),
+          tile("var(--c1)", "bars", "Asked from every exit", fmt.short(st.forks), st.forks_limited ? `${fmt.short(st.forks_limited)} over the limit, asked from here` : "names whose answers vary, since start"),
+          tile("var(--c2)", "shieldcheck", "Given this server's answer", fmt.short(l.exits.reduce((a, e) => a + e.fallbacks, 0)), "their exit was late or not answering")),
+        h("section", { class: "card" }, h("h2", null, "Exits"),
+          h("div", { class: "tablewrap" }, h("table", { class: "stack" },
+            h("thead", null, h("tr", null, ["State", "Exit", "Clients", "Round trip", "Questions", "Timeouts", "Given this server's answer", "Last answer"].map((t, i) => h("th", { scope: "col", class: i >= 3 && i <= 6 ? "r" : "" }, t)))),
+            h("tbody", null, l.exits.map((e) => h("tr", null,
+              h("td", { "data-label": "State" }, h("span", { class: "state " + (e.up ? "ok" : "err") }, h("span", { class: "dot " + (e.up ? "ok" : "err") }), e.up ? "Answering" : "Not answering")),
+              h("td", { class: "mono head" }, e.name),
+              h("td", { class: "small", "data-label": "Clients" }, (e.serves || []).join(", ")),
+              h("td", { class: "r num", "data-label": "Round trip" }, e.rtt_ms ? fmt.ms(e.rtt_ms) + " ms" : "–"),
+              h("td", { class: "r num", "data-label": "Questions" }, fmt.int(e.queries)),
+              h("td", { class: "r num", "data-label": "Timeouts" }, fmt.int(e.timeouts)),
+              h("td", { class: "r num", "data-label": "Given this server's answer" }, fmt.int(e.fallbacks)),
+              h("td", { class: "muted", "data-label": "Last answer" }, fmt.ago(e.last_ok))))))),
+          h("p", { class: "small muted" }, "Through an exit go only questions for zones whose answers vary by where they are asked from; the root, top-level domains and DNSSEC keys are always asked from here. An exit that stops answering is left out for a while, and its clients get this server's answers meanwhile.")),
+        h("section", { class: "card" }, h("h2", null, "Where clients are"),
+          l.countries ? h("p", { class: "small muted", style: { marginTop: 0 } }, `Country table: ${fmt.int(l.countries.blocks)} address blocks from the registries, updated ${fmt.ago(l.countries.updated)}` + (l.countries.error ? ` · last update failed: ${l.countries.error}` : "")) : null,
+          total ? h("div", { class: "tablewrap" }, h("table", { class: "stack" },
+            h("thead", null, h("tr", null, ["Country", "Share of queries", "For names that vary", "Possibly sent far away"].map((t, i) => h("th", { scope: "col", class: i ? "r" : "" }, t)))),
+            h("tbody", null, l.report.slice(0, 30).map((x) => h("tr", null,
+              h("td", { class: "mono head" }, x.country === "--" ? "not known" : x.country),
+              h("td", { class: "r num", "data-label": "Share of queries" }, fmt.pct(x.queries / total)),
+              h("td", { class: "r num", "data-label": "For names that vary" }, x.queries ? fmt.pct(x.varying / x.queries) : "–"),
+              h("td", { class: "r num", "data-label": "Possibly sent far away" }, fmt.pct(x.varying / total))))))) : h("p", { class: "muted" }, "No queries counted yet."),
+          h("p", { class: "small muted" }, "Counts only, in memory since start: no names and no addresses. The last column is the share of all queries from that country for names whose answers depend on where they are asked from: where an exit would help most. \"Not known\": private networks and addresses no exit serves by country.")),
+        h("section", { class: "card" }, h("h2", null, "Zones whose answers vary"),
+          l.zones.length ? h("p", { class: "mono small", style: { whiteSpace: "normal", margin: 0 } }, l.zones.join("  ")) : h("p", { class: "muted", style: { margin: 0 } }, "None found yet: zones are compared, from here and through an exit, as they are used."),
+          h("p", { class: "small muted" }, "Learnt by asking the same question from here and through an exit: a zone whose addresses share no /24 three times in a row varies. Checked again as it is used.")));
+    } catch (e) { if (e.status !== 401) fill(body, errorBox(e)); }
+  };
+  load();
+  state.timer = setInterval(() => { if (document.visibilityState === "visible") load(); }, 15000);
 }
 
 function dnssecPage(main) {
@@ -2185,7 +2269,7 @@ const SETTINGS = {
         { key: "recursion.cookies", adv: true, label: "DNS Cookies with name servers", type: "bool", help: "Send each name server a cookie and check the one it returns (RFC 7873). A UDP answer with the wrong cookie, or none from a server that always sends one, is dropped as forged.", show: (v) => v["recursion.enabled"] },
         { key: "recursion.negative_trust_anchors", adv: true, label: "Domains not validated", type: "list", help: "Negative trust anchors (RFC 7646): domains with broken DNSSEC, answered without validation. Remove each once fixed. The DNSSEC page lists failures.", show: (v) => v["recursion.enabled"] && v["recursion.dnssec"] },
         { key: "recursion.allow_networks", label: "Private networks to query", type: "list", help: "Networks with your own name servers, such as 10.0.0.0/8. A public server otherwise never sends queries into private networks.", show: (v) => v["recursion.enabled"] },
-        { key: "ecs.address", label: "Answer as if from (client subnet)", type: "text", placeholder: "off", help: "A public IP address or network. Name servers answer as they would for it (EDNS Client Subnet); your clients\u2019 addresses are never sent. Empty: off." },
+        { key: "ecs.address", label: "Answer as if from (client subnet)", type: "text", placeholder: "off", help: "A public IP address or network. Name servers answer as they would for it (EDNS Client Subnet); your clients\u2019 addresses are never sent. Empty: off. Not with private locality ([locality] in the configuration file), which answers each client for where it is instead." },
       ] },
       { title: "Upstreams", fields: [
         { key: "upstream.primary", label: "Primary upstreams", type: "list", help: "Asked in parallel; the fastest answer wins. https://…/dns-query, h3://…/dns-query (HTTP/3), tls://host, quic://host, udp://IP or an IP address. With recursion, a fallback only.", show: upShown },
@@ -2357,7 +2441,7 @@ const SETTINGS = {
 };
 
 const PAGES_BY_ROUTE = {
-  overview, upstreams: upstreamsPage, querylog: queryLogPage, newdomains: newDomainsPage, nodes: nodesPage, dnssec: dnssecPage, "tools/trace": tracePage, "tools/lookup": lookupPage, "tools/guide": guidePage,
+  overview, upstreams: upstreamsPage, querylog: queryLogPage, newdomains: newDomainsPage, nodes: nodesPage, dnssec: dnssecPage, locality: localityPage, "tools/trace": tracePage, "tools/lookup": lookupPage, "tools/guide": guidePage,
   "settings/dns": (m) => settingsPage(m, "dns"),
   "settings/encryption": (m) => settingsPage(m, "encryption"),
   "settings/filter": (m) => settingsPage(m, "filter"),

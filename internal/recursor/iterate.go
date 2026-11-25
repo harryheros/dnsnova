@@ -113,7 +113,16 @@ func (r *Recursor) closestDeleg(ctx context.Context, t *task, qname string, qtyp
 		name = "" // a trace walks down from the root
 	}
 	now := r.now()
+	view := -1
+	if r.loc.Load() != nil && t.view >= 0 {
+		view = t.view // its own delegations first (private locality)
+	}
 	for name != "" {
+		if view >= 0 {
+			if d, exp, ok := r.vdelegs.get(vkey(name, view)); ok && now.Before(exp) {
+				return d
+			}
+		}
 		if d, exp, ok := r.delegs.get(name); ok && now.Before(exp) {
 			return d
 		}
@@ -136,7 +145,14 @@ func (r *Recursor) iterate(ctx context.Context, t *task, qname string, qtype uin
 	if t.fresh || !t.shared() { // a trace, or one network's answer, joins no other lookup
 		return r.iterateOnce(ctx, t, qname, qtype)
 	}
-	v, err := r.fl.do(ctx, key, func() (any, error) { return r.iterateOnce(ctx, t, qname, qtype) })
+	fkey := key
+	switch {
+	case t.view >= 0: // one view of a fork joins only lookups for that view
+		fkey += string([]byte{1, byte(t.view)})
+	case r.forkable(t): // a client's own chain, which may fork
+		fkey += "\x02"
+	}
+	v, err := r.fl.do(ctx, fkey, func() (any, error) { return r.iterateOnce(ctx, t, qname, qtype) })
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +174,19 @@ func (r *Recursor) iterateOnce(ctx context.Context, t *task, qname string, qtype
 			sendName, sendType = ancestorAt(qname, labelCount(known)+1), m.TypeA
 			steps++
 		}
+		if qtype != typeDS && qtype != typeDNSKEY && r.forkable(t) {
+			if zone, ok := r.loc.Load().zones.markedAt(d.zone); ok {
+				// answers vary from here down: the rest is resolved for
+				// every view (fork)
+				return nil, &errFork{zone: zone}
+			}
+		}
 		msg, err := r.query(ctx, t, d, sendName, sendType, sendName != qname)
+		if err == nil && t.view < 0 && !t.pinned && !t.private && !t.fresh {
+			if lc := r.loc.Load(); lc != nil {
+				r.maybeProbe(lc, d, sendName, sendType, msg, sendName != qname)
+			}
+		}
 		if err != nil {
 			if sendName != qname && errors.Is(err, ErrUnreachable) {
 				// no server gave a usable reply to the shortened name (some
@@ -174,7 +202,13 @@ func (r *Recursor) iterateOnce(ctx context.Context, t *task, qname string, qtype
 				return nil, ErrUnreachable // the parent must answer DS itself
 			}
 			child.signed = slices.ContainsFunc(msg.authority, func(a rr) bool { return a.typ == typeDS && a.name == child.zone })
-			r.storeDeleg(child, ttl)
+			if v := r.storeView(t, d.zone); v >= 0 {
+				// learnt through an exit, or below a zone whose answers
+				// vary: kept for this view only
+				r.vdelegs.set(vkey(child.zone, v), child, r.now().Add(time.Duration(min(max(ttl, 5), 86400))*time.Second))
+			} else {
+				r.storeDeleg(child, ttl)
+			}
 			r.storeReferralDS(msg, child.zone, d.zone)
 			d, known = child, child.zone
 			continue
@@ -338,8 +372,20 @@ func usable(msg *message, zone, qname string) bool {
 // Giving up on the first such reply would send the full name onwards,
 // to every later server, because of one server.
 func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name string, qtype uint16, minimised bool) (*message, error) {
+	return r.queryVia(ctx, t, d, name, qtype, minimised, r.pathFor(t, d.zone, qtype))
+}
+
+// queryVia is query through exit ex (nil: from here).
+func (r *Recursor) queryVia(ctx context.Context, t *task, d *delegation, name string, qtype uint16, minimised bool, ex *exitPath) (*message, error) {
 	cfg := r.cfg.Load()
-	addrs := r.serverAddrs(ctx, t, d, cfg, false)
+	// through an exit (private locality): its own sockets and what it knows
+	// of the servers, which differ from here (round trips, cookies)
+	in := r.infra
+	if ex != nil {
+		in = ex.infra
+		ctx = withExit(ctx, ex)
+	}
+	addrs := ex.usableAddrs(r.serverAddrs(ctx, t, d, cfg, false))
 	now := r.now()
 	tried := 0
 	var asked, timedOut []netip.Addr
@@ -360,7 +406,7 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 			// every address known failed: look up the zone's other name
 			// servers (glueless ones are only partly looked up at first)
 			more = true
-			for _, a := range r.serverAddrs(ctx, t, d, cfg, true) {
+			for _, a := range ex.usableAddrs(r.serverAddrs(ctx, t, d, cfg, true)) {
 				if !slices.Contains(asked, a) {
 					addrs = append(addrs, a)
 				}
@@ -378,7 +424,7 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 		scores := make(map[netip.Addr]time.Duration, len(addrs))
 		v6proven := r.v6Proven()
 		for _, a := range addrs {
-			scores[a] = r.infra.score(a, d.zone, now)
+			scores[a] = in.score(a, d.zone, now)
 			if a.Is6() && !v6proven {
 				// IPv6 that may be silently broken: IPv4 first
 				scores[a] += v6Penalty
@@ -387,7 +433,7 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 		slices.SortStableFunc(addrs, func(a, b netip.Addr) int { return int(scores[a] - scores[b]) })
 		a := addrs[0]
 		if !peek {
-			r.infra.decay(addrs[1:], a)
+			in.decay(addrs[1:], a)
 		}
 		if peek {
 			// worth a hedge: not set aside (lame, failing), not IPv6 that
@@ -433,9 +479,9 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 	hedged := func(a netip.Addr, first context.CancelCauseFunc) flight {
 		c, cancel := context.WithCancelCause(ctx)
 		start := time.Now()
-		rep := &reply{a: a, before: r.infra.rtt(a), hedge: true}
+		rep := &reply{a: a, before: in.rtt(a), hedge: true}
 		go func() {
-			rep.msg, rep.err = r.ask(c, a, d, name, qtype, 0)
+			rep.msg, rep.err = r.ask(c, in, ex, a, d, name, qtype, 0)
 			rep.rtt = time.Since(start)
 			if first != nil && rep.err == nil && (rep.msg.rcode == m.RcodeNoError || rep.msg.rcode == m.RcodeNXDomain) {
 				first(errCalledOff)
@@ -483,7 +529,7 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 			switch {
 			case errors.Is(err, context.DeadlineExceeded) || isTimeout(err):
 				note(a, "timed out")
-				if !retried && !r.infra.backoff(a, r.now()) && (a.Is4() || r.v6Proven()) {
+				if !retried && !in.backoff(a, r.now()) && (a.Is4() || r.v6Proven()) {
 					if len(timedOut) == 0 {
 						retryWait = time.Second
 						if rp.before > 0 {
@@ -509,7 +555,7 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 			}
 			note(a, m.RcodeString(msg.rcode))
 			if !minimised {
-				r.infra.setLame(a, d.zone, now)
+				in.setLame(a, d.zone, now)
 			}
 			return nil, nil
 		}
@@ -525,7 +571,7 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 				note(a, "no usable reply to the shortened name")
 				return nil, nil
 			}
-			r.infra.setLame(a, d.zone, now)
+			in.setLame(a, d.zone, now)
 			note(a, "not authoritative (lame)")
 			return nil, nil
 		}
@@ -554,7 +600,7 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 	// as they have been waited for
 	slowOthers := func() {
 		for a, f := range inflight {
-			r.infra.slow(a, time.Since(f.started), r.now())
+			in.slow(a, time.Since(f.started), r.now())
 		}
 	}
 	for {
@@ -575,7 +621,7 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 			if retried {
 				wait = retryWait
 			}
-			rp := reply{a: a, before: r.infra.rtt(a), retry: retried}
+			rp := reply{a: a, before: in.rtt(a), retry: retried}
 			c := ctx
 			var h *armed
 			var first context.CancelCauseFunc
@@ -587,7 +633,7 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 					}
 					c, first = context.WithCancelCause(ctx)
 					h = &armed{b: b}
-					h.timer = time.AfterFunc(r.hedgeAfter(a), func() {
+					h.timer = time.AfterFunc(r.hedgeAfter(in, a), func() {
 						h.mu.Lock()
 						defer h.mu.Unlock()
 						if !h.off {
@@ -600,7 +646,7 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 			if t.asked.IsZero() {
 				t.asked = start
 			}
-			rp.msg, rp.err = r.ask(c, a, d, name, qtype, wait)
+			rp.msg, rp.err = r.ask(c, in, ex, a, d, name, qtype, wait)
 			rp.rtt = time.Since(start)
 			if h != nil {
 				h.timer.Stop()
@@ -620,7 +666,7 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 				}
 				if lost {
 					// the hedge has answered: its reply is next
-					r.infra.slow(a, rp.rtt, r.now())
+					in.slow(a, rp.rtt, r.now())
 					continue
 				}
 			}
@@ -640,7 +686,7 @@ func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name strin
 		if len(inflight) == 1 && hedgeable() {
 			if _, ok := next(true); ok {
 				for a, f := range inflight {
-					timer = time.NewTimer(max(r.hedgeAfter(a)-time.Since(f.started), 0))
+					timer = time.NewTimer(max(r.hedgeAfter(in, a)-time.Since(f.started), 0))
 					hedge = timer.C
 				}
 			}
@@ -699,8 +745,8 @@ const hedgeWorth = 5 * time.Second
 // (jitter is no reason); 400 ms for a server not asked before. A steady
 // server is hedged soon after a lost packet; an unsteady one no later than
 // twice its round trip.
-func (r *Recursor) hedgeAfter(a netip.Addr) time.Duration {
-	srtt, rttvar := r.infra.rttStats(a)
+func (r *Recursor) hedgeAfter(in *infra, a netip.Addr) time.Duration {
+	srtt, rttvar := in.rttStats(a)
 	if srtt == 0 {
 		return 400 * time.Millisecond
 	}
@@ -926,10 +972,10 @@ func (r *Recursor) v6Result(a netip.Addr, err error, now time.Time) {
 // is waited for. Only when none comes is the question asked over TCP.
 // ask asks a, waiting up to wait for a UDP reply (0: as long as a's
 // round trips call for).
-func (r *Recursor) ask(ctx context.Context, a netip.Addr, d *delegation, name string, qtype uint16, wait time.Duration) (*message, error) {
+func (r *Recursor) ask(ctx context.Context, in *infra, ex *exitPath, a netip.Addr, d *delegation, name string, qtype uint16, wait time.Duration) (*message, error) {
 	now := r.now()
 	cfg := r.cfg.Load()
-	edns := r.infra.useEDNS(a, now)
+	edns := in.useEDNS(a, now)
 	ap := netip.AddrPortFrom(a, r.port)
 	// The client subnet goes with questions for a name's records, not
 	// with those that only find the way there (NS, DS, DNSKEY, SOA).
@@ -940,24 +986,25 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, d *delegation, name st
 			ecs = v
 		}
 	}
-	plain := r.infra.plain(a, now)
-	noTCP := r.infra.noTCP(a, now)
+	plain := in.plain(a, now)
+	noTCP := in.noTCP(a, now)
 	// From a server without TCP, an unusual answer is taken at once only if
 	// it came no sooner than the server answers: an injector on the path is
 	// nearer, and answers first. One that came sooner waits, as any doubtful
 	// answer does, and is used only if no other answer comes (pick).
 	var noTCPAfter time.Duration
 	if noTCP {
-		noTCPAfter = max(0, r.infra.rtt(a)*3/4-time.Millisecond)
+		noTCPAfter = max(0, in.rtt(a)*3/4-time.Millisecond)
 	}
 	// on a network that answers in the servers' place, nothing better
 	// than an impossible answer is coming
-	intercepted := r.Intercepted()
+	// (through an exit, the server's own network says nothing of its path)
+	intercepted := ex == nil && r.Intercepted()
 	cookies, badRetried := cfg.Cookies, false
 	for attempt := 0; attempt < 5; attempt++ {
 		opts, cc := ecs, []byte(nil)
 		if cookies && edns {
-			if c, sc, ok := r.infra.cookieFor(a, now, r.clientCookie); ok {
+			if c, sc, ok := in.cookieFor(a, now, r.clientCookie); ok {
 				cc = c
 				opts = append(append(make([]byte, 0, len(ecs)+4+8+len(sc)), ecs...), cookieOption(cc, sc)...)
 			}
@@ -983,7 +1030,7 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, d *delegation, name st
 					v = vGiveUp
 				}
 			} else if !plain {
-				v, _ = r.doubt(msg, a, d, name, qtype, sentEDNS, sentCookie, now)
+				v, _ = r.doubt(in, msg, a, d, name, qtype, sentEDNS, sentCookie, now)
 				if v == vSuspect && noTCP && time.Since(start) >= noTCPAfter {
 					// merely unusual, from a server that cannot be asked
 					// over TCP, and as late as its own answers come
@@ -996,7 +1043,7 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, d *delegation, name st
 			return v
 		}
 		overTCP := func() (*message, error) {
-			c, cancel := context.WithTimeout(ctx, 2*r.infra.timeout(a)+time.Second)
+			c, cancel := context.WithTimeout(ctx, 2*in.timeout(a)+time.Second)
 			resp, err := r.send(c, ap, q, true)
 			cancel()
 			if calledOff(ctx) { // another server answered first
@@ -1004,13 +1051,13 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, d *delegation, name st
 			}
 			r.Stats.TCP.Add(1)
 			if err != nil {
-				r.infra.fail(a, now)
+				in.fail(a, now)
 				return nil, err
 			}
 			return parseMessage(resp)
 		}
 		start = time.Now()
-		udpWait := r.infra.timeout(a)
+		udpWait := in.timeout(a)
 		if wait > 0 {
 			udpWait = wait
 		}
@@ -1041,7 +1088,7 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, d *delegation, name st
 				resp, err, usedKept = kept, nil, true
 				break
 			}
-			wait := 2*r.infra.timeout(a) + time.Second
+			wait := 2*in.timeout(a) + time.Second
 			if kept != nil || noTCP {
 				// with an answer in hand, or from a server that does not
 				// answer over TCP, TCP gets a short chance: a few round
@@ -1062,12 +1109,18 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, d *delegation, name st
 				// balancers): its doubtful answer, the only one that came
 				// and with nothing forged beside it, is the genuine one.
 				// An injector would have reset the connection instead.
-				r.infra.setNoTCP(a, now)
+				in.setNoTCP(a, now)
 				r.Stats.NoTCP.Add(1)
 				resp, err, tcp, usedKept = kept, nil, false, true
 			}
 		}
 		if err != nil {
+			if why, ok := sawImpossible.Load().(string); ok && tcp && ctx.Err() == nil && ex != nil {
+				// an exit's path answers in the servers' place: its clients get
+				// the server's own answers instead
+				ex.result(r, context.DeadlineExceeded, 0, now)
+				return nil, &rewritten{why: why}
+			}
 			if why, ok := sawImpossible.Load().(string); ok && tcp && ctx.Err() == nil {
 				r.failRun.Add(1)
 				if r.takenOver(d.zone, name, now) {
@@ -1089,8 +1142,12 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, d *delegation, name st
 			if errors.Is(err, context.DeadlineExceeded) || isTimeout(err) {
 				r.Stats.Timeouts.Add(1)
 			}
+			in.fail(a, now)
+			if ex != nil {
+				ex.result(r, err, 0, now)
+				return nil, err
+			}
 			r.v6Result(a, err, now)
-			r.infra.fail(a, now)
 			r.failRun.Add(1)
 			return nil, err
 		}
@@ -1100,6 +1157,10 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, d *delegation, name st
 				// not from the server at all: someone in between answers
 				// for it, over TCP too (or the answer would have been
 				// dropped above)
+				if ex != nil {
+					ex.result(r, context.DeadlineExceeded, 0, now)
+					return nil, &rewritten{why: why}
+				}
 				r.noteRewritten(a, why, now)
 				r.failRun.Add(1)
 				return nil, &rewritten{why: why}
@@ -1111,12 +1172,16 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, d *delegation, name st
 		} else if tcp && !tcpStart.IsZero() {
 			rtt = time.Since(tcpStart) // nor does the wait for a UDP answer before it
 		}
-		r.infra.ok(a, rtt, now)
-		r.v6Result(a, nil, now)
-		r.lastOK.Store(now.UnixNano())
-		r.failRun.Store(0)
+		in.ok(a, rtt, now)
+		if ex != nil {
+			ex.result(r, nil, rtt, now)
+		} else {
+			r.v6Result(a, nil, now)
+			r.lastOK.Store(now.UnixNano())
+			r.failRun.Store(0)
+		}
 		if perr != nil {
-			r.infra.setLame(a, "", now)
+			in.setLame(a, "", now)
 			return nil, perr
 		}
 		if msg.tc() && !tcp {
@@ -1128,8 +1193,8 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, d *delegation, name st
 		if doubted && !plain && !usedKept {
 			// The genuine answer, over TCP, looks just like the doubted ones
 			// did: that is how this server answers. Stop doubting it.
-			if v, _ := r.doubt(msg, a, d, name, qtype, sentEDNS, nil, now); v != vAccept {
-				r.infra.setPlain(a, now)
+			if v, _ := r.doubt(in, msg, a, d, name, qtype, sentEDNS, nil, now); v != vAccept {
+				in.setPlain(a, now)
 				plain = true
 			}
 		}
@@ -1137,10 +1202,10 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, d *delegation, name st
 			// no TCP to check a missing cookie against: not every
 			// instance of this server sends one
 			if msg.cookie == nil {
-				r.infra.cookieLoose(a, now)
+				in.cookieLoose(a, now)
 			}
 		} else if cc != nil {
-			switch r.checkCookie(a, cc, msg, tcp, badRetried, now) {
+			switch r.checkCookie(in, a, cc, msg, tcp, badRetried, now) {
 			case cookieAgain: // BADCOOKIE: now with the server cookie it just gave
 				badRetried = true
 				continue
@@ -1148,7 +1213,7 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, d *delegation, name st
 				if msg, err = overTCP(); err != nil {
 					return nil, err
 				}
-				r.checkCookie(a, cc, msg, true, true, now) // learns from the genuine answer
+				r.checkCookie(in, a, cc, msg, true, true, now) // learns from the genuine answer
 			}
 		}
 		if msg.rcode == m.RcodeFormErr || msg.rcode == m.RcodeNotImp {
@@ -1157,10 +1222,10 @@ func (r *Recursor) ask(ctx context.Context, a netip.Addr, d *delegation, name st
 				ecs = nil
 				continue
 			case cc != nil: // or over the cookie
-				r.infra.setNoCookie(a, now)
+				in.setNoCookie(a, now)
 				continue
 			case edns && !msg.edns:
-				r.infra.setNoEDNS(a, now)
+				in.setNoEDNS(a, now)
 				edns = false
 				continue
 			}
@@ -1230,7 +1295,7 @@ func impossible(msg *message, zone, name string, qtype uint16) string {
 // server's, vSuspect when it is merely unlike it. The reason is for the
 // trace. The same checks on a genuine (TCP) answer show whether the server
 // simply answers that way (infra.setPlain).
-func (r *Recursor) doubt(msg *message, a netip.Addr, d *delegation, name string, qtype uint16, edns bool, cc []byte, now time.Time) (verdict, string) {
+func (r *Recursor) doubt(in *infra, msg *message, a netip.Addr, d *delegation, name string, qtype uint16, edns bool, cc []byte, now time.Time) (verdict, string) {
 	if msg.rcode != m.RcodeNoError && msg.rcode != m.RcodeNXDomain {
 		return vAccept, ""
 	}
@@ -1238,7 +1303,7 @@ func (r *Recursor) doubt(msg *message, a netip.Addr, d *delegation, name string,
 		switch valid := len(msg.cookie) >= 8 && bytes.Equal(msg.cookie[:8], cc); {
 		case msg.cookie != nil && !valid:
 			return vForged, "another client's cookie"
-		case msg.cookie == nil && r.infra.cookieExpected(a, now):
+		case msg.cookie == nil && in.cookieExpected(a, now):
 			// an injector cannot send the right cookie, but instances of
 			// one anycast server can differ: doubtful, not impossible
 			return vSuspect, "no cookie from a server that always sends one"
@@ -1321,7 +1386,7 @@ const (
 	cookieTCP   // looks forged: ask over TCP
 )
 
-func (r *Recursor) checkCookie(a netip.Addr, cc []byte, msg *message, tcp, retried bool, now time.Time) int {
+func (r *Recursor) checkCookie(in *infra, a netip.Addr, cc []byte, msg *message, tcp, retried bool, now time.Time) int {
 	valid := len(msg.cookie) >= 8 && bytes.Equal(msg.cookie[:8], cc)
 	switch {
 	case msg.cookie != nil && !valid:
@@ -1331,7 +1396,7 @@ func (r *Recursor) checkCookie(a netip.Addr, cc []byte, msg *message, tcp, retri
 		r.Stats.CookieMismatch.Add(1)
 		return cookieTCP
 	case valid:
-		r.infra.cookieGood(a, msg.cookie[8:])
+		in.cookieGood(a, msg.cookie[8:])
 		if msg.rcode == m.RcodeBadCookie && !retried {
 			return cookieAgain
 		}
@@ -1339,9 +1404,9 @@ func (r *Recursor) checkCookie(a netip.Addr, cc []byte, msg *message, tcp, retri
 			return cookieTCP
 		}
 		return cookieOK
-	case r.infra.cookieExpected(a, now):
+	case in.cookieExpected(a, now):
 		if tcp {
-			r.infra.cookieLoose(a, now) // genuinely without one: not every instance does cookies
+			in.cookieLoose(a, now) // genuinely without one: not every instance does cookies
 			return cookieOK
 		}
 		r.Stats.CookieMissing.Add(1)
@@ -1376,10 +1441,21 @@ var udpBufs = sync.Pool{New: func() any { b := make([]byte, 65535); return &b }}
 // exchange sends q to addr and waits for the matching answer: over UDP
 // from the socket pool, over TCP on a new connection.
 func (r *Recursor) exchange(ctx context.Context, addr netip.AddrPort, q []byte, tcp bool) ([]byte, error) {
+	ex := exitOf(ctx)
 	if !tcp {
+		if ex != nil {
+			return ex.socks.exchangeUDP(ctx, addr, q)
+		}
 		return r.socks.exchangeUDP(ctx, addr, q)
 	}
 	var d net.Dialer
+	if ex != nil {
+		l, ok := ex.local(addr.Addr())
+		if !ok {
+			return nil, errNoFamily
+		}
+		d.LocalAddr = net.TCPAddrFromAddrPort(netip.AddrPortFrom(l, 0))
+	}
 	conn, err := d.DialContext(ctx, "tcp", addr.String())
 	if err != nil {
 		return nil, err

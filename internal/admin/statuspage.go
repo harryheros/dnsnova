@@ -27,6 +27,9 @@ type PublicInfo struct {
 	QueryLogDays   int      `json:"query_log_days,omitempty"` // queries kept on disk this long
 	QueryExport    bool     `json:"query_export,omitempty"`   // queries sent to a log collector (dnstap)
 	Recursion      bool     `json:"recursion"`                // resolves from the root servers, not through upstreams
+	// Locality: private locality is on (answers for where the visitor is,
+	// with nothing about the visitor sent)
+	Locality bool `json:"locality,omitempty"`
 	// Filtered lists the addresses of the filtered service, when it is on.
 	Filtered *Filtered `json:"filtered,omitempty"`
 }

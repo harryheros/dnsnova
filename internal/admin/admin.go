@@ -37,6 +37,7 @@ import (
 	"github.com/harryheros/dnsnova/internal/events"
 	"github.com/harryheros/dnsnova/internal/filter"
 	"github.com/harryheros/dnsnova/internal/insight"
+	"github.com/harryheros/dnsnova/internal/locality"
 	"github.com/harryheros/dnsnova/internal/recursor"
 	"github.com/harryheros/dnsnova/internal/stats"
 	"github.com/harryheros/dnsnova/internal/tlsmgr"
@@ -106,6 +107,25 @@ type Backend interface {
 	SetAlertDestination(name string, fields map[string]string) error
 	// TestAlerts sends a test notification to every destination now.
 	TestAlerts(ctx context.Context) (map[string]string, error)
+	// Locality describes private locality: the exits, the zones whose
+	// answers vary, the country table and the siting report.
+	Locality() Locality
+}
+
+// Locality is private locality, for its page.
+type Locality struct {
+	Enabled   bool                     `json:"enabled"`
+	Exits     []LocalityExit           `json:"exits"`
+	Zones     []string                 `json:"zones"` // whose answers vary by where they are asked from
+	Countries *locality.CountryStatus  `json:"countries,omitempty"`
+	Report    []locality.ReportRow     `json:"report"`
+	Status    *recursor.LocalityStatus `json:"status,omitempty"`
+}
+
+// LocalityExit is one exit, its state and the clients it serves.
+type LocalityExit struct {
+	recursor.ExitStatus
+	Serves []string `json:"serves"`
 }
 
 // Alerts is the state of notifications, for the Alerts page.
@@ -196,6 +216,11 @@ type Recursion struct {
 	Hedges          int64          `json:"hedges"`           // a slow server's question also sent to the next
 	HedgesWon       int64          `json:"hedges_won"`       // and that answer was the one used
 	Cache           map[string]int `json:"cache"`
+	// private locality, when on: exits, those answering, zones whose
+	// answers vary by where they are asked from
+	LocalityExits int `json:"locality_exits,omitempty"`
+	LocalityUp    int `json:"locality_up,omitempty"`
+	LocalityZones int `json:"locality_zones,omitempty"`
 }
 
 // Tops are the lists shown beside the statistics.
@@ -318,6 +343,7 @@ func (a *Admin) routes() {
 	m.Handle("GET /api/v1/cluster", auth(func(w http.ResponseWriter, r *http.Request, c *call) { writeJSON(w, http.StatusOK, a.b.Cluster()) }))
 	m.Handle("POST /api/v1/tools/lookup", auth(a.lookup))
 	m.Handle("POST /api/v1/tools/trace", auth(a.trace))
+	m.Handle("GET /api/v1/locality", auth(func(w http.ResponseWriter, r *http.Request, c *call) { writeJSON(w, http.StatusOK, a.b.Locality()) }))
 	m.Handle("GET /api/v1/dnssec", auth(func(w http.ResponseWriter, r *http.Request, c *call) { writeJSON(w, http.StatusOK, a.b.DNSSEC()) }))
 	m.Handle("DELETE /api/v1/dnssec/failures", auth(func(w http.ResponseWriter, r *http.Request, c *call) {
 		a.b.ClearDNSSECFailures()

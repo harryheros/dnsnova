@@ -2,6 +2,7 @@ package recursor
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	m "github.com/harryheros/dnsnova/internal/dnsmsg"
@@ -65,7 +66,11 @@ func (r *Recursor) fresh(exp time.Time, orig uint32, final bool) bool {
 func (r *Recursor) step(ctx context.Context, t *task, ans *answer, name string, qtype uint16, validate, first bool) (string, bool, error) {
 	// the cache (not for a trace, nor for one network's own answer)
 	if t.fresh || !t.shared() {
-		goto ask
+		return r.stepAsk(ctx, t, ans, name, qtype, validate)
+	}
+	// answers kept for every view (private locality), for a client's chain
+	if r.forkable(t) && r.lookupVaried(t, ans, name, qtype, validate) {
+		return "", true, nil
 	}
 	if cs, exp, ok := r.sets.get(tkey(name, qtype)); ok && r.fresh(exp, cs.orig, true) {
 		r.Stats.CacheHits.Add(1)
@@ -115,12 +120,23 @@ func (r *Recursor) step(ctx context.Context, t *task, ans *answer, name string, 
 		}
 	}
 	r.Stats.CacheMisses.Add(1)
-ask:
+	return r.stepAsk(ctx, t, ans, name, qtype, validate)
+}
+
+// stepAsk resolves one link of a chain by asking name servers.
+func (r *Recursor) stepAsk(ctx context.Context, t *task, ans *answer, name string, qtype uint16, validate bool) (string, bool, error) {
 	resp, err := r.iterate(ctx, t, name, qtype)
 	if err != nil {
+		var fk *errFork
+		if errors.As(err, &fk) {
+			return r.fork(ctx, t, ans, name, qtype, validate, fk.zone)
+		}
 		return "", false, err
 	}
 	now := r.now()
+	// what a server of a zone whose answers vary said is this view's only:
+	// not for the shared cache (private locality)
+	keep := t.shared() && r.keepShared(resp.zone)
 	sets := groupRRsets(resp.msg.answer)
 	auth := groupRRsets(resp.msg.authority)
 	var proof []*rrset
@@ -141,14 +157,14 @@ ask:
 	added := false
 	for i := 0; i < maxCNAMEs; i++ {
 		if s := find(cur, qtype); s != nil {
-			cs := r.storeSet(s, resp.zone, proof, now, t.shared())
+			cs := r.storeSet(s, resp.zone, proof, now, keep)
 			return "", true, r.addSet(ctx, t, ans, cs, now.Add(time.Duration(cs.orig)*time.Second), validate)
 		}
 		if qtype == m.TypeANY {
 			found := false
 			for _, s := range sets {
 				if s.name == cur {
-					cs := r.storeSet(s, resp.zone, proof, now, t.shared())
+					cs := r.storeSet(s, resp.zone, proof, now, keep)
 					if err := r.addSet(ctx, t, ans, cs, now.Add(time.Duration(cs.orig)*time.Second), validate); err != nil {
 						return "", false, err
 					}
@@ -160,7 +176,7 @@ ask:
 			}
 		}
 		if dn := findDNAME(sets, cur); dn != nil && qtype != typeDNAME {
-			cs := r.storeSet(dn, resp.zone, nil, now, t.shared())
+			cs := r.storeSet(dn, resp.zone, nil, now, keep)
 			if err := r.addSet(ctx, t, ans, cs, now.Add(time.Duration(cs.orig)*time.Second), validate); err != nil {
 				return "", false, err
 			}
@@ -178,7 +194,7 @@ ask:
 			continue
 		}
 		if s := find(cur, m.TypeCNAME); s != nil && qtype != m.TypeCNAME && len(s.data) == 1 {
-			cs := r.storeSet(s, resp.zone, proof, now, t.shared())
+			cs := r.storeSet(s, resp.zone, proof, now, keep)
 			if err := r.addSet(ctx, t, ans, cs, now.Add(time.Duration(cs.orig)*time.Second), validate); err != nil {
 				return "", false, err
 			}
@@ -209,7 +225,7 @@ ask:
 		if ne.rcode == m.RcodeNXDomain {
 			k = tkey(name, 0)
 		}
-		if ne.soa != nil && t.shared() {
+		if ne.soa != nil && keep {
 			r.negs.set(k, ne, exp)
 		}
 		return "", true, r.addNeg(ctx, t, ans, ne, exp, name, qtype, validate)
@@ -268,7 +284,7 @@ func (r *Recursor) addSet(ctx context.Context, t *task, ans *answer, cs *cachedS
 		if v.sec == secBogus {
 			exp = r.now().Add(bogusTTL * time.Second)
 		}
-		if ttl > 0 {
+		if ttl > 0 && r.keepShared(cs.zone) {
 			r.sets.set(tkey(cs.set.name, cs.set.typ), v, exp)
 		}
 		cs = v
@@ -296,7 +312,7 @@ func (r *Recursor) addNeg(ctx context.Context, t *task, ans *answer, ne *negEntr
 		if ne.rcode == m.RcodeNXDomain {
 			k = tkey(name, 0)
 		}
-		if (ne.soa != nil || qtype == typeDS) && exp.After(r.now()) {
+		if (ne.soa != nil || qtype == typeDS) && exp.After(r.now()) && r.keepShared(ne.zone) {
 			r.negs.set(k, v, exp)
 		}
 		ne = v

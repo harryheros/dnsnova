@@ -46,6 +46,8 @@ var (
 
 	wireIDServer     = toWire("id.server")
 	wireHostnameBind = toWire("hostname.bind")
+	// CH TXT locality.server: which view a client gets (private locality)
+	wireLocality = toWire("locality.server")
 
 	wireResolverArpa = toWire("resolver.arpa")
 	wireDDR          = toWire("_dns.resolver.arpa")

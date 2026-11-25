@@ -17,6 +17,7 @@ import (
 	"github.com/harryheros/dnsnova/internal/cookie"
 	m "github.com/harryheros/dnsnova/internal/dnsmsg"
 	"github.com/harryheros/dnsnova/internal/filter"
+	"github.com/harryheros/dnsnova/internal/locality"
 	"github.com/harryheros/dnsnova/internal/stats"
 )
 
@@ -66,6 +67,10 @@ type Settings struct {
 	ServerID string
 	// Groups sorts clients into groups with their own filtering. Nil: none.
 	Groups *Groups
+	// Locality picks which view's answer a client gets, for names whose
+	// answers depend on where they are asked from (private locality, see
+	// package locality). Nil: off.
+	Locality *locality.Mapper
 }
 
 var (
@@ -114,6 +119,10 @@ func (r *Resolver) SetSettings(s Settings) {
 		r.set.Store(&s)
 	}
 	r.cache.setSize(s.CacheSize)
+	if old != nil && old.Locality.Signature() != s.Locality.Signature() {
+		// answers kept per view belonged to other exits (or locality is off)
+		r.cache.dropVariants()
+	}
 	if old == nil || old.UpstreamConcurrency != s.UpstreamConcurrency {
 		if s.UpstreamConcurrency > 0 {
 			ch := make(chan struct{}, s.UpstreamConcurrency)
@@ -213,6 +222,15 @@ func (r *Resolver) resolve(req []byte, o Opts, mayFetch bool) (Result, bool) {
 	if s.ServerID != "" && q.Class == classCH && q.Type == typeTXT && (q.Name == wireIDServer || q.Name == wireHostnameBind) {
 		return f.done(Result{Resp: m.Answer(req, q, 0, txt(s.ServerID)), Q: q, Source: stats.SourceLocal, Status: "local"}, nil), true
 	}
+	if s.Locality != nil && q.Class == classCH && q.Type == typeTXT && q.Name == wireLocality {
+		// which view this client gets, and why: for the client alone
+		v, by := s.Locality.Explain(o.Client)
+		if by == "" {
+			by = "none"
+		}
+		return f.done(Result{Resp: m.AnswerMulti(req, q, 0, [][]byte{txt("view=" + s.Locality.ViewName(v)), txt("by=" + by)}),
+			Q: q, Source: stats.SourceLocal, Status: "local"}, nil), true
+	}
 	switch {
 	case q.Class != m.ClassIN, q.Type == m.TypeAXFR, q.Type == m.TypeIXFR:
 		return f.done(Result{Resp: m.ErrorResponse(req, q, m.RcodeRefused), Q: q, Source: stats.SourceLocal, Status: "refused"},
@@ -252,41 +270,50 @@ func (r *Resolver) resolve(req []byte, o Opts, mayFetch bool) (Result, bool) {
 	if e != nil {
 		e.touch()
 	}
-	if e != nil && now.Before(e.expire) {
+	// private locality: an answer that depends on where it is asked from
+	// has one variant per view, and the client gets its own
+	view, cc := 0, ""
+	if s.Locality != nil {
+		view, _, cc = s.Locality.Place(o.Client)
+	}
+	ev := e.variant(view) // nil: none for this view yet (asked below)
+	if ev != nil && now.Before(e.expire) {
 		if s.Prefetch && e.ttl >= 10 && e.expire.Sub(now) < time.Duration(e.ttl)*time.Second/10 {
-			r.refreshAsync(key, q, e, now)
+			r.refreshAsync(key, q, e, now, view)
 		}
-		if blocked, byGroup := f.cnameBlocked(e); blocked {
+		if blocked, byGroup := f.cnameBlocked(ev); blocked {
 			return f.blocked(byGroup), true
 		}
-		if f.rebound(e) {
+		if f.rebound(ev) {
 			return f.rebinding(), true
 		}
-		res := Result{Resp: r.build(e, req, q, now, false, s), Q: q, Source: stats.SourceCache, Status: "hit"}
-		if e.failure {
+		res := Result{Resp: r.build(ev, req, q, now, false, s), Q: q, Source: stats.SourceCache, Status: "hit"}
+		if ev.failure {
 			res.Status = "servfail"
 		}
+		f.report(e, cc)
 		r.stats.LatencyCache.Observe(r.now().Sub(start))
-		return f.done(res, e.ede), true
+		return f.done(res, ev.ede), true
 	}
-	stale := e != nil && !e.failure && s.ServeStale > 0 && now.Before(e.expire.Add(s.ServeStale))
+	stale := ev != nil && !e.failure && s.ServeStale > 0 && now.Before(e.expire.Add(s.ServeStale))
 	if stale {
-		r.refreshAsync(key, q, e, now)
-		if blocked, byGroup := f.cnameBlocked(e); blocked {
+		r.refreshAsync(key, q, e, now, view)
+		if blocked, byGroup := f.cnameBlocked(ev); blocked {
 			return f.blocked(byGroup), true
 		}
-		if f.rebound(e) {
+		if f.rebound(ev) {
 			return f.rebinding(), true
 		}
-		res := Result{Resp: r.build(e, req, q, now, true, s), Q: q, Source: stats.SourceStale, Status: "stale"}
+		res := Result{Resp: r.build(ev, req, q, now, true, s), Q: q, Source: stats.SourceStale, Status: "stale"}
+		f.report(e, cc)
 		r.stats.LatencyCache.Observe(r.now().Sub(start))
-		return f.done(res, append(slices.Clip(e.ede), m.EDE(m.EDEStaleAnswer, "")...)), true
+		return f.done(res, append(slices.Clip(ev.ede), m.EDE(m.EDEStaleAnswer, "")...)), true
 	}
 
 	if !mayFetch {
 		return Result{}, false
 	}
-	fresh, err := r.sf.do(key, func() (*entry, error) { return r.fetch(q) })
+	fresh, err := r.sf.do(flightKey(key, s, view), func() (*entry, error) { return r.fetch(q, view) })
 	if err != nil {
 		switch {
 		case errors.Is(err, errUpstreamBusy):
@@ -296,6 +323,10 @@ func (r *Resolver) resolve(req []byte, o Opts, mayFetch bool) (Result, bool) {
 		}
 		return f.done(Result{Resp: m.ErrorResponse(req, q, m.RcodeServFail), Q: q, Source: stats.SourceUpstream, Status: "servfail"},
 			m.EDE(m.EDEOther, "server busy")), true
+	}
+	top := fresh
+	if fresh = top.variant(view); fresh == nil {
+		fresh = top // (the recursion always answers for the view asked)
 	}
 	if blocked, byGroup := f.cnameBlocked(fresh); blocked {
 		return f.blocked(byGroup), true
@@ -307,8 +338,33 @@ func (r *Resolver) resolve(req []byte, o Opts, mayFetch bool) (Result, bool) {
 	if fresh.failure {
 		res.Status = "servfail"
 	}
+	f.report(top, cc)
 	r.stats.LatencyUpstream.Observe(r.now().Sub(start))
 	return f.done(res, fresh.ede), true
+}
+
+// report counts the query for the siting report (private locality): the
+// client's country, and whether the answer depends on where it is asked
+// from. Counts only.
+// cc is the client's country as Place found it: "" when a network chose
+// its view first, then looked up here (once per such query).
+func (f *finisher) report(e *entry, cc string) {
+	if l := f.s.Locality; l != nil {
+		if cc == "" {
+			cc = l.Country(f.o.Client)
+		}
+		l.Report.Add(cc, e.views != nil)
+	}
+}
+
+// flightKey: lookups for clients of different views do not share one
+// flight, since each needs its own view's answer (the recursion shares
+// the questions sent).
+func flightKey(key string, s *Settings, view int) string {
+	if s.Locality == nil {
+		return key
+	}
+	return key + string([]byte{0xff, byte(view)})
 }
 
 // finisher prepares every response the same way, whatever produced it.
@@ -425,16 +481,19 @@ func (f finisher) done(res Result, ede []byte) Result {
 
 // refreshAsync fetches a fresh copy in the background, at most once per 5s
 // per entry; concurrent refreshes of a key share one upstream query.
-func (r *Resolver) refreshAsync(key string, q *m.Query, e *entry, now time.Time) {
+func (r *Resolver) refreshAsync(key string, q *m.Query, e *entry, now time.Time, view int) {
 	next := e.nextRefresh.Load()
 	if now.UnixNano() < next || !e.nextRefresh.CompareAndSwap(next, now.Add(5*time.Second).UnixNano()) {
 		return
 	}
 	r.stats.Refreshes.Add(1)
-	go r.sf.do(key, func() (*entry, error) { return r.fetch(q) })
+	s := r.set.Load()
+	go r.sf.do(flightKey(key, s, view), func() (*entry, error) { return r.fetch(q, view) })
 }
 
-func (r *Resolver) fetch(q *m.Query) (*entry, error) {
+// fetch asks the upstreams (or the recursion) for q, for a client in view
+// (private locality; 0 when off).
+func (r *Resolver) fetch(q *m.Query, view int) (*entry, error) {
 	r.netMu.RLock()
 	defer r.netMu.RUnlock()
 	s := r.set.Load() // one snapshot for the whole lookup
@@ -461,6 +520,11 @@ func (r *Resolver) fetch(q *m.Query) (*entry, error) {
 	if fwd != nil {
 		x, ecs = fwd, nil // a private server: no client subnet
 	}
+	var vars *locality.Variants
+	if s.Locality != nil && fwd == nil {
+		vars = &locality.Variants{}
+		ctx = locality.WithVariants(locality.WithView(ctx, view), vars)
+	}
 	resp, err := x.Exchange(ctx, m.BuildUpstreamQuery(q, ecs))
 	if err == nil && fwd != nil && len(resp) >= m.HeaderLen {
 		// Not validated here, and a router's AD bit says nothing: no AD.
@@ -485,6 +549,9 @@ func (r *Resolver) fetch(q *m.Query) (*entry, error) {
 		e.cacheable = e.ttl > 0
 	}
 	e.expire = e.stored.Add(time.Duration(e.ttl) * time.Second)
+	if vars != nil && err == nil && !e.failure {
+		e.addVariants(vars.Get(), q, view, s)
+	}
 	key := q.CacheKey()
 	if e.failure && s.ServeStale > 0 {
 		// An answer that can still be served stale is better than SERVFAIL.

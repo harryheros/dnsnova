@@ -17,6 +17,7 @@ import (
 	"time"
 
 	m "github.com/harryheros/dnsnova/internal/dnsmsg"
+	"github.com/harryheros/dnsnova/internal/locality"
 	"github.com/harryheros/dnsnova/internal/stats"
 )
 
@@ -53,6 +54,9 @@ type Config struct {
 	// Cookies sends DNS Cookies (RFC 7873) to authoritative servers and
 	// checks the ones they return.
 	Cookies bool
+	// Locality turns private locality on (see package locality and
+	// locality.go). Nil: off.
+	Locality *LocalityConfig
 }
 
 // Stats are counters for monitoring.
@@ -109,6 +113,12 @@ type Recursor struct {
 	delegs   *ttlMap[*delegation]
 	infra    *infra
 	fl       flights
+	// private locality (locality.go): nil when off; the answers for every
+	// view of names whose answers vary; delegations learnt through one
+	// path (keyed by zone and view)
+	loc     atomic.Pointer[locState]
+	lsets   *ttlMap[*locEntry]
+	vdelegs *ttlMap[*delegation]
 	// netMu orders a change of the client subnet against resolutions (see
 	// SetConfig): nothing learnt for the old network is cached after it.
 	netMu sync.RWMutex
@@ -185,17 +195,19 @@ func ParseAnchor(s string) ([]byte, error) {
 // New returns a Recursor.
 func New(c Config, log *slog.Logger) *Recursor {
 	r := &Recursor{
-		sets:   newTTLMap[*cachedSet](0),
-		wilds:  newTTLMap[*cachedSet](10000),
-		negs:   newTTLMap[*negEntry](0),
-		keys:   newTTLMap[*keyEntry](10000),
-		delegs: newTTLMap[*delegation](0),
-		infra:  newInfra(),
-		Stats:  Stats{Lookups: stats.NewHistogram(), RTT: stats.NewHistogram()},
-		log:    log,
-		now:    time.Now,
-		port:   53,
-		hostV6: hasGlobalIPv6,
+		sets:    newTTLMap[*cachedSet](0),
+		wilds:   newTTLMap[*cachedSet](10000),
+		negs:    newTTLMap[*negEntry](0),
+		keys:    newTTLMap[*keyEntry](10000),
+		delegs:  newTTLMap[*delegation](0),
+		infra:   newInfra(),
+		lsets:   newTTLMap[*locEntry](20000),
+		vdelegs: newTTLMap[*delegation](20000),
+		Stats:   Stats{Lookups: stats.NewHistogram(), RTT: stats.NewHistogram()},
+		log:     log,
+		now:     time.Now,
+		port:    53,
+		hostV6:  hasGlobalIPv6,
 	}
 	rand.Read(r.cookieKey[:])
 	r.send = r.exchange
@@ -242,6 +254,7 @@ func (r *Recursor) SetConfig(c Config) {
 		r.cfg.Store(&c)
 	}
 	r.anchors.Store(ds)
+	r.setLocality(c.Locality)
 	if old != nil && (old.DNSSEC != c.DNSSEC || fmt.Sprint(old.TrustAnchors) != fmt.Sprint(c.TrustAnchors) || fmt.Sprint(old.NTAs) != fmt.Sprint(c.NTAs) ||
 		fmt.Sprint(old.RootHints) != fmt.Sprint(c.RootHints)) {
 		r.ClearCache()
@@ -261,6 +274,8 @@ func (r *Recursor) ClearCache() {
 	r.negs.clear()
 	r.keys.clear()
 	r.delegs.clear()
+	r.lsets.clear()
+	r.vdelegs.clear()
 	r.nsecs.mu.Lock()
 	r.nsecs.zones = nil
 	r.nsecs.mu.Unlock()
@@ -288,6 +303,11 @@ func (r *Recursor) Janitor(ctx context.Context) {
 			r.delegs.sweep(now, time.Minute)
 			r.wilds.sweep(now, time.Minute)
 			r.nsecs.sweep(now)
+			r.lsets.sweep(now, time.Minute)
+			r.vdelegs.sweep(now, time.Minute)
+			if lc := r.loc.Load(); lc != nil {
+				lc.zones.sweep(now)
+			}
 		}
 	}
 }
@@ -318,6 +338,19 @@ type task struct {
 	// the cache), for the lookup time; set there, so a cached answer costs
 	// no clock reading
 	asked time.Time
+	// Private locality (locality.go). view: -1 for a client's lookup;
+	// 0..n for the lookup made for one view when a name's answers vary
+	// (0: from the server itself, i: through exit i). pinned: a measurement
+	// through exit view (ExchangeExit), every zone below the top-level
+	// domains asked there. clientView: the view of the client a client's
+	// lookup is for. splice: where an answer for every view was put into
+	// this lookup's answer. (Nothing here points to an exit: a pointer read
+	// from the task and kept would let every task's contents escape to the
+	// heap, a cost on every query.)
+	view       int
+	pinned     bool
+	clientView int
+	splice     *splice
 }
 
 // shared reports whether this lookup may read and fill the shared cache:
@@ -334,13 +367,13 @@ const (
 )
 
 func newTask() *task {
-	return &task{budget: maxQueriesPerTask, sigBudget: maxValidations, stack: map[string]bool{}}
+	return &task{budget: maxQueriesPerTask, sigBudget: maxValidations, stack: map[string]bool{}, view: -1}
 }
 
 // Exchange implements resolver.Exchanger: msg is a query (RD set, CD and DO
 // as the client asked) and the response is built from the recursion.
 func (r *Recursor) Exchange(ctx context.Context, msg []byte) ([]byte, error) {
-	return r.answerQuery(ctx, msg, false)
+	return r.answerQuery(ctx, msg, false, nil)
 }
 
 // subnetKey carries an EDNS Client Subnet option for one lookup.
@@ -353,7 +386,7 @@ type subnetKey struct{}
 // it. It is for tools that measure how names resolve from a given network
 // (server ecs.client_path).
 func (r *Recursor) ExchangeSubnet(ctx context.Context, msg, ecs []byte) ([]byte, error) {
-	return r.answerQuery(WithSubnet(ctx, ecs), msg, true)
+	return r.answerQuery(WithSubnet(ctx, ecs), msg, true, nil)
 }
 
 // WithSubnet returns ctx carrying ecs (an EDNS Client Subnet option): the
@@ -363,7 +396,9 @@ func WithSubnet(ctx context.Context, ecs []byte) context.Context {
 	return context.WithValue(ctx, subnetKey{}, ecs)
 }
 
-func (r *Recursor) answerQuery(ctx context.Context, msg []byte, private bool) ([]byte, error) {
+// pin, when set, asks every zone below the top-level domains through
+// that exit (ExchangeExit).
+func (r *Recursor) answerQuery(ctx context.Context, msg []byte, private bool, pin *exitPath) ([]byte, error) {
 	q, rcode, err := m.ParseQuery(msg)
 	if err != nil {
 		return nil, err
@@ -388,6 +423,11 @@ func (r *Recursor) answerQuery(ctx context.Context, msg []byte, private bool) ([
 	validate := cfg.DNSSEC && q.Flags&m.FlagCD == 0
 	t := newTask()
 	t.private = private
+	if pin != nil {
+		t.view, t.pinned = pin.view, true
+	} else if lc := r.loc.Load(); lc != nil {
+		t.clientView = min(max(locality.ViewFrom(ctx), 0), len(lc.exits))
+	}
 	ans, err := r.resolve(ctx, t, q.Name, q.Type, cfg.DNSSEC)
 	if !t.asked.IsZero() { // name servers were asked: not from the cache
 		r.Stats.Lookups.Observe(time.Since(t.asked))
@@ -397,6 +437,11 @@ func (r *Recursor) answerQuery(ctx context.Context, msg []byte, private bool) ([
 			r.Stats.BudgetReached.Add(1)
 		}
 		return nil, err
+	}
+	if t.splice != nil {
+		if x := locality.VariantsFrom(ctx); x != nil {
+			x.Set(r.variants(q, flags, t.splice, cfg.DNSSEC, validate))
+		}
 	}
 	return r.respond(q, flags, ans, validate), nil
 }
@@ -414,7 +459,6 @@ type answer struct {
 }
 
 func (r *Recursor) respond(q *m.Query, flags uint16, ans *answer, validate bool) []byte {
-	now := r.now()
 	switch ans.sec {
 	case secSecure:
 		r.Stats.Secure.Add(1)
@@ -423,12 +467,18 @@ func (r *Recursor) respond(q *m.Query, flags uint16, ans *answer, validate bool)
 	default:
 		r.Stats.Insecure.Add(1)
 	}
+	if ans.sec == secBogus {
+		r.failures.add(q.Name, q.Type, ans.ede, ans.why, r.now())
+	}
+	return r.message(q, flags, ans, validate)
+}
+
+// message builds the response to q from ans (respond, without counting).
+func (r *Recursor) message(q *m.Query, flags uint16, ans *answer, validate bool) []byte {
+	now := r.now()
 	var ede []byte
 	if ans.ede != 0 || ans.sec == secBogus {
 		ede = m.EDE(ans.ede, ans.why)
-	}
-	if ans.sec == secBogus {
-		r.failures.add(q.Name, q.Type, ans.ede, ans.why, now)
 	}
 	if ans.sec == secBogus && validate {
 		return buildMessage(q.ID, flags|m.RcodeServFail, q.Name, q.Type, nil, nil, nil, true, q.DO, ede)

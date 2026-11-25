@@ -163,9 +163,9 @@ func TestUIFocusLinksNameASetting(t *testing.T) {
 // bookmarks, and for screen readers announcing the page.
 func TestUIPageTitles(t *testing.T) {
 	got := runJS(t, []string{"NAV", "pageTitle"}, `
-console.log(["overview", "querylog", "settings/encryption", "settings/logs", "settings/admin", "tools/trace", "dnssec", "nodes", "nosuch"].map(pageTitle).join("|"));
+console.log(["overview", "querylog", "settings/encryption", "settings/logs", "settings/admin", "tools/trace", "dnssec", "nodes", "locality", "nosuch"].map(pageTitle).join("|"));
 `)
-	want := "Overview · DNSNova|Query log · DNSNova|Addresses & encryption · DNSNova|Logs & statistics · DNSNova|Admin · DNSNova|Trace a lookup · DNSNova|DNSSEC · DNSNova|Nodes · DNSNova|Overview · DNSNova"
+	want := "Overview · DNSNova|Query log · DNSNova|Addresses & encryption · DNSNova|Logs & statistics · DNSNova|Admin · DNSNova|Trace a lookup · DNSNova|DNSSEC · DNSNova|Nodes · DNSNova|Private locality · DNSNova|Overview · DNSNova"
 	if got != want {
 		t.Fatalf("got\n%s\nwant\n%s", got, want)
 	}

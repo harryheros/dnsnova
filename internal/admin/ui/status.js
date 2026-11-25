@@ -203,6 +203,7 @@ async function boot() {
     ["Queries sent to a log collector", info.query_export ? "Yes" : "No", info.query_export ? "warn" : "ok"],
     ["Your address kept on disk", info.query_log_days ? (info.query_log_full_ip ? "Yes, with the queries" : "Shortened, with the queries") : "Never", info.query_log_days ? "warn" : "ok"],
     [info.recursion ? "Your address sent to name servers" : "Your address sent upstream", "Never", "ok"],
+    ...(info.locality ? [["Your location used", "Only to pick your answer, here", "ok"]] : []),
     ["Ads, tracking, telemetry", "None", "ok"],
   ];
   const privacy = dcard("s6", "What this server keeps", "shield",
@@ -210,7 +211,8 @@ async function boot() {
     h("footer", { class: "dfoot" }, h("span", null, `Counts and popular domains (asked by ${info.mode === "private" ? "2+ devices" : "5+ networks"}) are kept in memory only.`), h("span")));
   const about = dcard("s6", "About this server", "code",
     h("p", { class: "small", style: { margin: 0 } }, info.recursion
-      ? "Runs DNSNova, an open-source DNS server. It answers from its cache or asks each domain's own name servers; they see this server's address, not yours."
+      ? "Runs DNSNova, an open-source DNS server. It answers from its cache or asks each domain's own name servers; they see this server's address, not yours." +
+        (info.locality ? " For names whose answers depend on where they are asked from, it asks from a few places at once, whoever needs them, and gives you the answer for where you are." : "")
       : "Runs DNSNova, an open-source DNS server. It answers from its cache or asks its upstream resolvers; they see this server's address, not yours."),
     h("p", { class: "small", style: { margin: 0 } }, "The query log is for troubleshooting only: when the operator turns it on, it runs for a limited time, in memory, and this page says so."),
     h("p", { class: "small muted", style: { margin: 0 } }, "This page loads nothing from other sites. The check above sends one DNS query for a random name; only that name and the protocol are kept, for five minutes."),

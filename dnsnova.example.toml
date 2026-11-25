@@ -203,6 +203,30 @@ address = ""
 # network.
 # client_path = "/ecs-<24 or more random letters and digits>"
 
+[locality]
+# Private locality: clients far from this server get the answers name
+# servers give where they are, asked through exits (small hosts elsewhere,
+# reached through tunnels, that only pass questions on). Nothing about
+# clients is sent: names whose answers depend on where they are asked from
+# are asked from here and through every exit at once, whoever needs them.
+# Needs recursion; not with ecs.address. This node's own: never taken from
+# a primary, changed only in this file. See docs/private-locality.md.
+enabled = false
+# "name source-address[,source-address] clients...": the source addresses
+# lead into the exit's tunnel (the system routes them there); the clients
+# are country codes (ISO 3166) and networks. A network wins over a country.
+exits = [
+  # "exit-a 10.66.1.2 XA,XB",
+  # "office-b 10.66.3.2 10.20.0.0/16",
+]
+exit_timeout = "800ms" # a client waits this long for its exit, then gets this server's answer
+fanout_qps = 200       # names asked from every place per second; over it, from here alone
+relearn = "168h"       # a zone found not to vary is checked again after this
+# country_sources = [] # registry files for the country table; empty: the five registries
+# For measurement tools: a secret DoH path; /<path>/<exit> asks through that
+# exit. Answers bypass the cache.
+# measure_path = "/exit-<24 or more random letters and digits>"
+
 [stats]
 # Overview history: "24h", "7d" or "30d". In memory only.
 retention = "7d"

@@ -282,10 +282,11 @@ func (a *Admin) status(w http.ResponseWriter, r *http.Request, c *call) {
 		"privacy": map[string]any{
 			"query_log":            ql.On || arch.On,
 			"query_log_full_ip":    (ql.On && ql.FullIP) || arch.FullIP,
-			"query_log_days":       arch.Days * boolInt(arch.On), // kept on disk; 0: not kept
-			"query_export":         a.b.Dnstap().On,              // sent to a log collector (dnstap)
-			"client_ip_upstream":   false,                        // clients' addresses are never sent on
-			"client_subnet":        ecsShown(cfg),                // the one fixed ecs.address sent instead, or ""
+			"query_log_days":       arch.Days * boolInt(arch.On),                  // kept on disk; 0: not kept
+			"query_export":         a.b.Dnstap().On,                               // sent to a log collector (dnstap)
+			"client_ip_upstream":   false,                                         // clients' addresses are never sent on
+			"client_subnet":        ecsShown(cfg),                                 // the one fixed ecs.address sent instead, or ""
+			"locality":             cfg.Locality.Enabled && cfg.Recursion.Enabled, // private locality: answers for where clients are, nothing sent
 			"telemetry":            false,
 			"zero_rtt":             false,
 			"private_ptr_answered": true,
@@ -498,6 +499,7 @@ func (a *Admin) trace(w http.ResponseWriter, r *http.Request, c *call) {
 		Name   string `json:"name"`
 		Type   string `json:"type"`
 		Subnet string `json:"subnet"` // optional: ask name servers for this network
+		Exit   string `json:"exit"`   // optional: ask through this exit (private locality)
 	}
 	if !decode(w, r, 8<<10, &req) {
 		return
@@ -536,6 +538,13 @@ func (a *Admin) trace(w http.ResponseWriter, r *http.Request, c *call) {
 	defer cancel()
 	if subnet.IsValid() {
 		ctx = recursor.WithSubnet(ctx, m.ClientSubnet(subnet))
+	}
+	if exit := strings.TrimSpace(req.Exit); exit != "" {
+		if subnet.IsValid() {
+			writeError(w, http.StatusBadRequest, "a client network or an exit, not both")
+			return
+		}
+		ctx = recursor.WithTraceExit(ctx, strings.ToLower(exit))
 	}
 	res := a.b.Trace(ctx, wire, qt)
 	if subnet.IsValid() && res.Subnet == "" {

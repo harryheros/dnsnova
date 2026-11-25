@@ -44,9 +44,91 @@ type entry struct {
 
 	nextRefresh atomic.Int64 // unix nanos; throttles background refreshes
 
+	// views: the answer for each view, when it depends on where it is
+	// asked from (private locality); nil for a view whose answer is not
+	// known yet. Nil: the same answer for everyone. All expire together.
+	views []*entry
+
 	// used: a client was answered from it since eviction last looked at
 	// it (see cache.set)
 	used atomic.Bool
+}
+
+// variant returns the answer for a client in view: e itself when it is
+// the same for everyone, nil when e is nil or that view's is not known.
+func (e *entry) variant(view int) *entry {
+	if e == nil || e.views == nil {
+		return e
+	}
+	if view < len(e.views) {
+		return e.views[view]
+	}
+	return e.views[0]
+}
+
+// addVariants attaches every view's answer to e (the answer for view):
+// each is checked as e was, and all expire with the first of them.
+func (e *entry) addVariants(resps [][]byte, q *m.Query, view int, s *Settings) {
+	if len(resps) < 2 {
+		return
+	}
+	views := make([]*entry, len(resps))
+	expire := e.expire
+	for v, resp := range resps {
+		if resp == nil {
+			continue
+		}
+		ev, err := analyze(resp, q)
+		if err != nil || ev.failure || !ev.cacheable {
+			continue
+		}
+		ev.stored = e.stored
+		if ev.signed && !ev.negative {
+			ev.ttl = clampSigned(ev.ttl, s)
+		} else {
+			ev.ttl = clampTTL(ev.ttl, ev.negative, false, s)
+		}
+		if ev.ttl == 0 {
+			continue
+		}
+		ev.expire = ev.stored.Add(time.Duration(ev.ttl) * time.Second)
+		expire = minTime(expire, ev.expire)
+		views[v] = ev
+	}
+	if view < len(views) {
+		views[view] = e
+	}
+	for _, ev := range views {
+		if ev != nil && ev != e {
+			ev.expire = expire
+			ev.ttl = min(ev.ttl, uint32(expire.Sub(e.stored)/time.Second))
+		}
+	}
+	e.expire = expire
+	e.ttl = uint32(expire.Sub(e.stored) / time.Second)
+	e.cacheable = e.ttl > 0
+	e.views = views
+}
+
+func minTime(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
+}
+
+// dropVariants removes the answers kept per view (private locality).
+func (c *cache) dropVariants() {
+	for i := range c.shards {
+		sh := &c.shards[i]
+		sh.mu.Lock()
+		for k, e := range sh.m {
+			if e.views != nil {
+				delete(sh.m, k)
+			}
+		}
+		sh.mu.Unlock()
+	}
 }
 
 // touch notes that a client was answered from e. Read first: most hits

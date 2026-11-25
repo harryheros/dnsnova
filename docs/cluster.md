@@ -13,7 +13,8 @@ each one asks the primary whether the settings changed, applies them, and
 tells the primary how it is doing. The primary needs no list of followers.
 
 What a follower takes from the primary: everything except the primary's own
-`[cluster]` and `[anycast]`. What it keeps: every setting in its own file,
+`[cluster]`, `[anycast]` and `[locality]` (each node's exits are its own
+tunnels, see [private locality](./private-locality.md)). What it keeps: every setting in its own file,
 which wins over the primary's. A follower's file is therefore short: the
 settings that differ from server to server, usually the addresses.
 

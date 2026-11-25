@@ -645,6 +645,10 @@ func (s *Server) handleDoH(w http.ResponseWriter, r *http.Request) {
 		s.handleSubnetDoH(w, r, msg, st.cfg)
 		return
 	}
+	if p := measurePrefix(st.cfg); p != "" && strings.HasPrefix(r.URL.Path, p) {
+		s.handleExitDoH(w, r, msg, st.cfg)
+		return
+	}
 	start := time.Now()
 	sni := ""
 	if r.TLS != nil {
