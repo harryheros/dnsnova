@@ -5,9 +5,9 @@ compares with AdGuard Home, a popular DNS server written in the same
 language. The tools are in [`tools/bench`](../tools/bench), so anyone can
 repeat the test.
 
-These numbers measure the server itself: the upstream answers instantly and
-everything runs on one machine. On the internet, the time to reach the
-server and the upstream adds to every answer.
+These benchmarks use a local upstream with negligible network latency and
+run on one machine, so they measure the server itself. Real-world
+throughput and latency depend on workload and network conditions.
 
 ## Results
 
@@ -58,7 +58,7 @@ Memory (resident): idle, 10 MB and 31 MB; idle with the blocklist, about
   AdGuard Home 0.0.0.0 (its default).
 - Each test runs 3 seconds to warm up, then 10 seconds measured.
 
-## Repeat it
+## Run the benchmarks
 
 ```sh
 go build -o upstream ./tools/bench/upstream

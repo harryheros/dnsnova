@@ -1,4 +1,4 @@
-# Several servers
+# Deploy a DNSNova cluster
 
 DNSNova servers can share one configuration, and each can take its anycast
 route back when it cannot answer. Both are optional: a server without
@@ -10,7 +10,7 @@ answers from its own cache; queries never go from one server to another.
 One server is the **primary**: its settings, edited in its web interface or
 its file, are the cluster's. The others are **followers**: every few seconds
 each one asks the primary whether the settings changed, applies them, and
-tells the primary how it is doing. The primary needs no list of followers.
+reports its health and configuration status to the primary. The primary needs no list of followers.
 
 What a follower takes from the primary: everything except the primary's own
 `[cluster]`, `[anycast]` and `[locality]` (each node's exits are its own
@@ -130,7 +130,7 @@ drain = "5s"      # at shutdown: withdraw, then keep answering this long
   `cluster.name` (default: the host name) to clients that ask, with NSID
   (RFC 5001) or a CH TXT query for `id.server`:
   `dig +nsid @dns.example.com example.com` or
-  `dig CH TXT id.server @dns.example.com`. A single server says nothing.
+  `dig CH TXT id.server @dns.example.com`. A standalone server returns no node identifier.
 
 The commands run as the dnsnova user, without a shell, and come only from
 the file on the server: neither the web interface nor a cluster primary can

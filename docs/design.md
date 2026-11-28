@@ -74,11 +74,11 @@ a 1 px blue-tinted border.
 | `--accent-2` | `#39d0f2` | `#0ea5c6` | Second series, live values, protocols |
 | `--grad` | blue → deep blue | same | Selected item, primary button, switch on |
 | `--grad-bar` | cyan → blue | same | Bars in lists |
-| `--ok` `--warn` `--err` `--idle` | green, amber, red, grey | darker versions | State only |
+| `--ok` `--warn` `--err` `--idle` | green, amber, red, gray | darker versions | State only |
 | `--c1`…`--c4` | blue, cyan, green, violet | | One color per key figure or answer source |
 
 Colors have jobs. Blue is the brand and "where you are"; cyan is "live";
-green, amber, red and grey are state, and red is for errors only. Main
+green, amber, red and gray are state, and red is for errors only. Main
 actions are blue (not green): green means *healthy*.
 
 ## Brand
@@ -87,11 +87,14 @@ actions are blue (not green): green means *healthy*.
   on slender bent arms, an angular crossbar and a diamond pommel, silver
   lit from the left, with blue light along the inner edges and two lit
   windows. Two forms:
-  - **drawing** everywhere on a page (the rail, sign-in, wizard, phone
-    rail, status page): `mark.svg`, a vector, sharp at any size and on any
-    screen. The metal is opaque; only the glow around it is translucent,
-    so it works on dark and light surfaces. It leaves room for the glow,
-    so it is set about a fifth larger than a plain icon.
+  - **drawing** everywhere on a page: a vector, sharp at any size and on
+    any screen. The metal is opaque; only the glow is translucent, so it
+    works on dark and light surfaces. Large (sign-in) it is `mark.svg`,
+    with a halo around the outline, which leaves room for it, so it is set
+    about a fifth larger than a plain icon. Elsewhere (the rail, phone
+    bar, wizard, status page) it is `mark-crisp.svg`: the same drawing
+    without the halo and the widest neon glow, framed closer, because at
+    32 to 96 px the halo blurs the outline.
   - **silhouette** for the browser tab icon (`logo.svg`): a solid
     `#1478f5` vector of the same outline, legible at 16 px.
 - **Wordmark**: "DNSN" in capitals and "OVA" in small capitals (76% of the
@@ -136,7 +139,8 @@ color. No glow on icons. Icons never replace a label.
 
 - **Shell**: the brand rail (256 px) with the lock-up, grouped navigation
   (Status, Settings, Tools) and the version at the foot; a sticky top bar
-  with search (`/`), the system state ("System Online", or what is wrong)
+  with search (`/`), the system state ("Resolver healthy", "Running on
+  fallback", "Health status unavailable", or what is wrong)
   and the account menu (appearance, account, API docs, sign out). Below
   800 px the rail folds into a bar with a Menu button.
 - **Overview grid**: 12 columns.
@@ -149,12 +153,15 @@ color. No glow on icons. Icons never replace a label.
   3. DNS Traffic (`s8`): queries per second or response time, range 1h /
      24h / 7d (/ 30d), y and x axes, a readout under the pointer, a lit
      point at "now". Beside it Traffic Flow (`s4`).
-  4. Features (`s12`): what the server does, on or off, each with a word
-     on its state and a link to its page or setting, so what sets DNSNova
-     apart is seen rather than looked for.
-  5. Top Domains, Upstream Servers (or Resolution with recursion), Recent
+  4. Top Domains, Upstream Resolvers (or Resolution with recursion), Recent
      Activity (`s4` each, five rows).
-  6. Details (`s3` each): Not Found, Rejected, Certificate, Privacy.
+  5. Details (`s3` each): Not Found, Rejected, Certificate, Privacy.
+  6. Capabilities (`s12`): grouped as resolution & routing, network &
+     reliability, and security & governance; each states what is actually
+     running ("Private locality · 3 exits", "Anycast · Announced") and
+     links to its page or setting. No on/off tallies.
+  A refresh that fails keeps the last figures and says from when, rather
+  than a state that is no longer known.
   Below 1360 px figures go two per row and the chart and flow stack; below
   1000 px everything is one column; below 560 px figures are one per row.
 - Every list has a fixed number of rows; missing rows are faint
@@ -173,7 +180,7 @@ color. No glow on icons. Icons never replace a label.
 - **Traffic Flow** (`flowCard`): clients by protocol (share of queries) →
   the node → upstreams or authoritative servers (health, latency, share).
   Link width follows the share; failing links are red, standby links
-  dashed grey. The diagram is static. The legend counts healthy, standby, slow and failing.
+  dashed gray. The diagram is static. The legend counts healthy, standby, slow and failing.
 - **Lists**: rank, name in monospace, gradient bar, count, share.
 - **Upstream rows**: state dot, name and role, success rate, a latency
   trend sampled while the page is open, smoothed latency.
@@ -183,13 +190,23 @@ color. No glow on icons. Icons never replace a label.
   What most people need is in view; rarely changed settings fold under
   *Advanced*, whose line names them with their values, so nothing is
   hidden behind it. A choice among ways is a list of explained options
-  (*Answers made for*: this server, one network, or each client). What
-  only the file can change is shown read-only, with where to change it.
+  (*Answer location*: this server, one client subnet, or each client).
+  What only the host configuration file can change is shown read-only,
+  with where to change it. Labels use industry terms (Recursive
+  resolution, QNAME minimization, Serve stale); help text says what they
+  do. Unsaved changes survive links within the page and are confirmed
+  before leaving it.
 - **Pages of features that are off** say what the feature does and the
   next step from where the server is (turn it on, or what it needs first),
   instead of being left out of the menu.
-- **Empty states** say why there is nothing and what to do: no upstreams
-  with recursion is "No upstreams needed", not an empty table.
+- **Empty states** say why there is nothing and what to do: no upstream
+  resolvers with recursion says so and states the resolution mode, not an
+  empty table.
+- **Wording**: one spelling standard (learned, minimization, behavior),
+  sentence case for buttons, settings and states, Title Case for card
+  titles; actions are verb and object (Refresh blocklists, Stop capture
+  and delete recorded queries); errors say what happened, the current
+  state, and what to do.
 - **Toasts**: bottom right, a state dot, errors stay longer.
 
 ## Clusters

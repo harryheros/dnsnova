@@ -53,7 +53,7 @@ func TestParseSpec(t *testing.T) {
 	}
 }
 
-// fake is an in-process Upstream with a scripted behaviour.
+// fake is an in-process Upstream with a scripted behavior.
 type fake struct {
 	name  string
 	delay time.Duration

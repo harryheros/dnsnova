@@ -143,7 +143,7 @@ SANDBOX=fail run -u --purge
 check "  removed on uninstall" test ! -e "$R/etc/systemd/system/dnsnova.service.d"
 
 # 7. A certbot certificate (nginx in front): copied by a deploy hook.
-#    Needs root: the installer recognises certbot by its path in /etc.
+#    Needs root: the installer recognizes certbot by its path in /etc.
 if [ "$(id -u)" -ne 0 ]; then echo "skip certbot certificate (run as root)"; else
 machine certbot
 mkdir -p "$W/le/live/dns.example.com"
@@ -165,7 +165,7 @@ fi
 machine upgrade; run --upstream 1.1.1.1
 before="$(conf)"
 run --lan; rc=$?
-check "options on an installed server: a warning" has "apply to new installs only" "$W/out.txt"
+check "options on an installed server: a warning" has "apply only to new installations" "$W/out.txt"
 check "  the configuration is kept" test "$(conf)" = "$before"
 
 # 9. 32-bit ARM (Raspberry Pi OS 32-bit).

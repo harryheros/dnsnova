@@ -184,6 +184,24 @@ rrl_rate = 0
 		t.Fatalf("DoT listener lost: %v", dot)
 	}
 
+	// a change that turns certificates off and cannot open its port leaves
+	// the running DoT listener with its certificate (the rollback covers the
+	// certificate settings, which are set before the listeners)
+	code, m, raw = ac.do("PATCH", "/api/v1/config", map[string]any{"hash": hash, "set": map[string]any{
+		"tls.certificate": "off", "dot.listen": []string{}, "doq.listen": []string{}, "server.listen": []string{busy.Addr().String()}}})
+	if code != 422 || m["reverted"] != true {
+		t.Fatalf("busy port with certificates off: %d %s", code, raw)
+	}
+	dot, _ := s.Endpoints()
+	tc0, err := tls.Dial("tcp", dot[0], &tls.Config{ServerName: "dns.test", RootCAs: pool, NextProtos: []string{"dot"}})
+	if err != nil {
+		t.Fatalf("DoT after a failed change: %v", err)
+	}
+	tc0.Close()
+	if st := s.Certificate(); !st.Ready || st.Mode != "files" {
+		t.Fatalf("certificate after a failed change: %+v", st)
+	}
+
 	// the event log shows who changed what
 	_, m, raw = ac.do("GET", "/api/v1/events?limit=50", nil)
 	for _, want := range []string{"administrator created", "settings changed user=ops keys=doq.listen", "dnsnova started"} {

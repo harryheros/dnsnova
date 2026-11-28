@@ -366,7 +366,7 @@ func victim(s *cacheShard) string {
 	return any
 }
 
-// sweep removes entries past expiry plus the stale window.
+// sweep removes entries past expiration plus the stale window.
 func (c *cache) sweep(now time.Time, stale time.Duration) {
 	for i := range c.shards {
 		s := &c.shards[i]

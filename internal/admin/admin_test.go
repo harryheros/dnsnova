@@ -59,6 +59,7 @@ func (f *fake) Tops(time.Duration) Tops {
 func (f *fake) QueryLog() *insight.QueryLog { return f.qlog }
 func (f *fake) Archive() *insight.Archive   { return f.archive }
 func (f *fake) Dnstap() dnstap.State        { return dnstap.State{} }
+func (f *fake) Anycast() string             { return "" }
 func (f *fake) NOD() (insight.NODState, []insight.NewDomain, bool) {
 	if f.nod == nil {
 		return insight.NODState{}, nil, false
@@ -241,6 +242,62 @@ func (e *env) setup() {
 		e.t.Fatalf("setup: %d %s", r.code, r.raw)
 	}
 	e.csrf = r.body["csrf"].(string)
+}
+
+// Setup resumes until it is finished: an account created without the rest
+// of the wizard (a reload, a closed tab) leaves "pending" set while the
+// server serves no DNS; serving DNS, or skipping, ends it for good.
+func TestSetupResumes(t *testing.T) {
+	e := newEnv(t)
+	e.b.mu.Lock()
+	listen := e.b.snap.Config.Server.Listen
+	e.b.snap.Config.Server.Listen = nil
+	e.b.mu.Unlock()
+	if r := e.do(e.c, "GET", "/api/v1/setup", nil); r.body["needed"] != true || r.body["pending"] != false {
+		t.Fatalf("before the account: %s", r.raw)
+	}
+	e.setup()
+	for i := 0; i < 2; i++ { // a reload, and another
+		if r := e.do(e.c, "GET", "/api/v1/setup", nil); r.body["needed"] != false || r.body["pending"] != true {
+			t.Fatalf("account only: %s", r.raw)
+		}
+	}
+	if r := e.do(e.client(), "POST", "/api/v1/setup/done", nil); r.code != 401 {
+		t.Fatalf("done without signing in: %d", r.code)
+	}
+	// the configuration applied by the wizard serves DNS: setup is done,
+	// and stays done when DNS is turned off later
+	e.b.mu.Lock()
+	e.b.snap.Config.Server.Listen = listen
+	e.b.mu.Unlock()
+	if r := e.do(e.c, "GET", "/api/v1/setup", nil); r.body["pending"] != false {
+		t.Fatalf("serving DNS: %s", r.raw)
+	}
+	e.b.mu.Lock()
+	e.b.snap.Config.Server.Listen = nil
+	e.b.mu.Unlock()
+	if r := e.do(e.c, "GET", "/api/v1/setup", nil); r.body["pending"] != false {
+		t.Fatalf("after DNS was turned off: %s", r.raw)
+	}
+	b, _ := os.ReadFile(filepath.Join(e.dir, "secrets", "admin.json"))
+	if !strings.Contains(string(b), `"setup_done": true`) {
+		t.Fatalf("not recorded: %s", b)
+	}
+}
+
+// Skipping the rest of the wizard ends it too.
+func TestSetupSkipped(t *testing.T) {
+	e := newEnv(t)
+	e.b.mu.Lock()
+	e.b.snap.Config.Server.Listen = nil
+	e.b.mu.Unlock()
+	e.setup()
+	if r := e.do(e.c, "POST", "/api/v1/setup/done", nil); r.code != 204 {
+		t.Fatalf("skip: %d %s", r.code, r.raw)
+	}
+	if r := e.do(e.c, "GET", "/api/v1/setup", nil); r.body["pending"] != false {
+		t.Fatalf("after skipping: %s", r.raw)
+	}
 }
 
 func noLocalTrust(t *testing.T) {
@@ -715,7 +772,7 @@ func TestSetupTrustedPublicOnlyFromLoopback(t *testing.T) {
 			t.Errorf("%s: trusted without the setup code", ip)
 		}
 	}
-	// A setup-trust file is no longer honoured, and is removed on start.
+	// A setup-trust file is no longer honored, and is removed on start.
 	trust := filepath.Join(e.dir, "secrets", "setup-trust")
 	os.WriteFile(trust, []byte("203.0.113.7\n"), 0o600)
 	if e.a.sec.setupTrusted(netip.MustParseAddr("203.0.113.7")) {
@@ -945,7 +1002,7 @@ func TestStatusFeatures(t *testing.T) {
 		return e.do(e.c, "GET", "/api/v1/status", nil).body["features"].(map[string]any)
 	}
 	f := features()
-	want := strings.Fields("recursion dnssec fallback upstreams filter groups rebinding cookies name_cookies nod alerts status_page query_days dnstap prefetch persist serve_stale ecs locality locality_exits cluster anycast local_forward local_records")
+	want := strings.Fields("recursion dnssec fallback upstreams filter groups rebinding cookies rrl name_cookies nod alerts status_page query_days dnstap prefetch persist serve_stale ecs locality locality_exits cluster anycast local_forward local_records")
 	if len(f) != len(want) {
 		t.Fatalf("features: %v", f)
 	}

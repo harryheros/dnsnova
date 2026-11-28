@@ -99,7 +99,7 @@ type Server struct {
 	snap  atomic.Pointer[config.Snapshot]
 	hash  string
 
-	applyMu sync.Mutex // serialises admin API writes
+	applyMu sync.Mutex // serializes admin API writes
 
 	cookieJar *cookie.Jar // DNS Cookies; nil until first turned on (set in Start, then under mu)
 
@@ -122,7 +122,7 @@ type Server struct {
 	// FilterHTTP overrides the HTTP client used to download lists (tests only).
 	FilterHTTP *http.Client
 
-	mu      sync.Mutex // serialises reloads and listener changes
+	mu      sync.Mutex // serializes reloads and listener changes
 	udp     map[string]*udpListener
 	tcp     map[string]*tcpListener
 	dot     map[string]*tcpListener
@@ -521,7 +521,8 @@ func (s *Server) Reload() error {
 
 // Apply switches to a loaded configuration: new listeners are opened first,
 // then the state is swapped, then removed listeners are closed. Cached
-// answers and statistics are kept.
+// answers and statistics are kept. If it fails, nothing changes: the
+// certificate settings, set before the listeners, are put back too.
 func (s *Server) Apply(snap *config.Snapshot) error {
 	st, err := s.buildState(snap.Config)
 	if err != nil {
@@ -536,13 +537,16 @@ func (s *Server) Apply(snap *config.Snapshot) error {
 	if old := s.state.Load(); old != nil && !clusterEqual(old.cfg.Cluster, snap.Config.Cluster) {
 		s.Log.Warn("[cluster] changes take effect after a restart")
 	}
+	restoreCerts := s.Certs.Save()
 	if err := s.Certs.Configure(tlsSettings(snap.Config)); err != nil {
+		restoreCerts()
 		st.close()
 		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.syncListeners(snap.Config); err != nil {
+		restoreCerts()
 		st.close()
 		return err
 	}

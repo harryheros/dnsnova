@@ -31,7 +31,7 @@ clients ──► DNSNova ──────────────────
    no /24 (IPv6: /48) with the server's three times in a row is marked:
    its answers depend on where they are asked from. Below a marked zone,
    everything does too.
-2. **Asking from every place at once.** When a lookup reaches a marked zone,
+2. **Querying through every exit at once.** When a lookup reaches a marked zone,
    the rest of its chain is resolved from here and through every exit at
    once, whoever needs it. Each place keeps its own answers and its own
    delegations: some content networks also delegate to name servers near
@@ -70,7 +70,7 @@ for everyone; looking a client up in it sends nothing anywhere.
 ## When it helps
 
 - A server whose clients are in several places far from it, or an
-  organisation whose offices use one central resolver.
+  organization whose offices use one central resolver.
 - Not a home or office resolver near its clients: name servers already see
   a resolver where the clients are.
 - Not content networks that choose their server when the client connects
@@ -78,7 +78,7 @@ for everyone; looking a client up in it sends nothing anywhere.
 
 Compared with `ecs.address`, which sends one network for every client:
 that tells name servers the network, gives every client the same answer,
-and some name servers honour a client subnet only from resolvers they have
+and some name servers honor a client subnet only from resolvers they have
 an agreement with. Private locality sends no subnet and works with every
 name server; it costs one small host per place, and more questions for
 the names that vary. The two cannot be on together.
@@ -158,7 +158,7 @@ answers which exit the client gets and why (`view=exit-a`, `by=XA`), to that
 client alone. *Trace a lookup* shows, for a name whose answers vary, what
 each place got, and can ask every zone below the top-level domains through
 one exit (*Through an exit*). The *Private locality* page, under Status,
-shows the exits, the zones found to vary and the siting report.
+shows the exits, the zones found to vary and the site placement report.
 
 ## Settings
 
@@ -166,7 +166,7 @@ All in `[locality]`. Like `[cluster]`, the table is the node's own (its
 exits are its own tunnels): it is never taken from a primary, and the
 exits and their limits are changed only in the file on the server. Once
 exits are set, it is turned on and off in the admin interface too:
-*Settings › DNS & upstreams › Answers made for*, which chooses among this
+*Settings › DNS & upstreams › Answer location*, which chooses among this
 server's answers, one network (`ecs.address`) and private locality. The
 *Private locality* page says, while it is off, what it still needs.
 
@@ -191,7 +191,7 @@ for most addresses but not all. `country_sources` replaces the five
 sources (http(s) URLs or absolute paths, for a mirror or a server without
 internet access to the registries).
 
-## The siting report
+## The site placement report
 
 The *Private locality* page counts, in memory since start, the queries
 from each country and how many were for names whose answers vary. Counts
@@ -220,7 +220,7 @@ query to `https://your-server<measure_path>/<exit>` is resolved with every
 zone below the top-level domains asked through that exit. Its answers are
 never cached or shared, and are neither filtered nor logged. It is for
 tools that measure how names resolve in a place, which public resolvers
-with a client subnet do only for name servers that honour one.
+with a client subnet do only for name servers that honor one.
 
 ## Security
 
@@ -233,7 +233,7 @@ with a client subnet do only for name servers that honour one.
   sends.
 - **Forged answers:** every protection works through an exit as from here
   (random ports and IDs, DNS Cookies, TCP when an answer looks forged),
-  each with what it has learnt about servers seen from that exit (round
+  each with what it has learned about servers seen from that exit (round
   trips, cookies), which differ from what is seen from here.
 - **An exit is not an open relay:** it forwards port 53 from its tunnel
   only.

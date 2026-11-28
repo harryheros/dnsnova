@@ -159,7 +159,7 @@ func (s Slack) Send(ctx context.Context, n Notification) error {
 	return post(ctx, s.URL, msg, nil)
 }
 
-// Discord posts to a channel webhook, as an embed coloured by severity.
+// Discord posts to a channel webhook, as an embed colored by severity.
 type Discord struct{ URL string }
 
 func (d Discord) Name() string { return "discord" }

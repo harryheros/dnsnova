@@ -89,7 +89,7 @@ func appendField(b, f []byte) []byte {
 }
 
 // LoadCache reads a file written by SaveCache into the cache and returns
-// how many entries it added. Entries past expiry plus serve_stale are left
+// how many entries it added. Entries past expiration plus serve_stale are left
 // out, and so is everything when the file was saved for another client
 // subnet (ecs.address): those answers were for another network. Nothing is
 // added unless the whole file is intact.

@@ -24,18 +24,25 @@ type PublicInfo struct {
 	Check          bool     `json:"check"`
 	QueryLog       bool     `json:"query_log"`
 	QueryLogFullIP bool     `json:"query_log_full_ip"`
-	QueryLogDays   int      `json:"query_log_days,omitempty"` // queries kept on disk this long
-	QueryExport    bool     `json:"query_export,omitempty"`   // queries sent to a log collector (dnstap)
-	Recursion      bool     `json:"recursion"`                // resolves from the root servers, not through upstreams
+	QueryLogDays   int      `json:"query_log_days,omitempty"`  // queries kept on disk this long
+	ArchiveFullIP  bool     `json:"archive_full_ip,omitempty"` // with full client addresses on disk
+	QueryExport    bool     `json:"query_export,omitempty"`    // queries sent to a log collector (dnstap)
+	Recursion      bool     `json:"recursion"`                 // resolves from the root servers, not through upstreams
 	// Locality: private locality is on (answers for where the visitor is,
 	// with nothing about the visitor sent)
 	Locality bool `json:"locality,omitempty"`
+	// ClientSubnet: one fixed network is sent to name servers as EDNS Client
+	// Subnet (ecs.address), the same for every client, never theirs.
+	ClientSubnet bool `json:"client_subnet,omitempty"`
 	// Filtered lists the addresses of the filtered service, when it is on.
 	Filtered *Filtered `json:"filtered,omitempty"`
 }
 
 // Filtered describes the filtered service for clients.
 type Filtered struct {
+	// All: every endpoint filters. Otherwise only the ones listed do, and
+	// none listed means filtering is on without a filtered endpoint.
+	All   bool     `json:"all,omitempty"`
 	DoH   string   `json:"doh,omitempty"`
 	DoT   string   `json:"dot,omitempty"`
 	DoQ   string   `json:"doq,omitempty"`
@@ -70,7 +77,7 @@ type StatusPage struct {
 }
 
 // statusAssets are the files the status page may load.
-var statusAssets = map[string]bool{"app.css": true, "theme.js": true, "logo.svg": true, "mark.svg": true, "status.js": true, "guides.js": true}
+var statusAssets = map[string]bool{"app.css": true, "theme.js": true, "logo.svg": true, "mark-crisp.svg": true, "status.js": true, "guides.js": true}
 
 // NewStatusPage returns the page's handler.
 func NewStatusPage(b PublicBackend) *StatusPage {

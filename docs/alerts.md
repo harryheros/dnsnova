@@ -4,7 +4,7 @@ DNSNova notifies you when something goes wrong and when it is fixed, on
 Telegram, Discord, Slack or any JSON webhook (PagerDuty, Opsgenie, ntfy,
 n8n, your own). Off by default.
 
-## Setting it up
+## Configure alerts
 
 1. In **Settings › Alerts**, add one or more **Destinations**.
 2. Turn on **Send alerts** and apply.
@@ -26,7 +26,7 @@ saved (only a hint, such as the host). To change one, replace it.
 Messages carry no client addresses. Domain names in them are sent as plain
 text, so they cannot mention anyone on Discord or Slack or become links.
 
-## What is checked
+## Alert conditions
 
 Every 30 seconds, over the last five minutes. A threshold of 0 turns a
 check off.
@@ -42,7 +42,7 @@ check off.
 | DNSSEC failures | At least `dnssec_failures` (100) answers refused for failing validation. The message names the domains; see the DNSSEC page. | warning | `dnssec_failures` |
 | Clock wrong | With recursion: the root's DNSSEC signatures show this machine's clock is more than about a day off (a machine without a battery-backed clock started with an old time), so signed answers fail. Says by how much. | critical | |
 | Exit not answering | With private locality: an exit stopped answering ([private locality](./private-locality.md)) and is left out for now, for 2 minutes. Its clients get this server's own answers meanwhile; it is tried again on its own. | warning | |
-| Certificate expiring | `cert_warn_days` (14) days before expiry, critical from `cert_critical_days` (3). | warning, critical | `cert_*_days` |
+| Certificate expiring | `cert_warn_days` (14) days before expiration, critical from `cert_critical_days` (3). | warning, critical | `cert_*_days` |
 | Certificate not renewed | The last attempt failed, with its reason. Critical when there is no certificate at all. | warning, critical | |
 | Configuration not applied | The configuration file changed on disk but is not valid, with the reason; the previous configuration stays in force. | warning | |
 | Block list not updated | A list could not be downloaded; its previous copy stays in use. | warning | |
@@ -54,7 +54,7 @@ check off.
 problem that fires and resolves but a notice: at most every 10 minutes, the
 domains looked up for the first time since the last one, each with the name
 asked, its type, who asked first and when (`status` `event`, `kind`
-`new_domains`, `severity` `info`). See Status › New domains.
+`new_domains`, `severity` `info`). See Status › Newly observed domains.
 
 A problem that clears before its time is up sends nothing. Once sent, it is
 **resolved** after a minute without it (so a value near its threshold does
@@ -137,7 +137,7 @@ def genuine(secret: bytes, headers, body: bytes) -> bool:
 
 Redirects are not followed: give the final address.
 
-## Alongside metrics
+## Prometheus metrics
 
 Alerts serve a server or small fleet without a monitoring system. If you
 already scrape `/metrics` with Prometheus, alerting there works as well; the

@@ -53,7 +53,7 @@ func TestSecurityFindings(t *testing.T) {
 	}{
 		{"defaults, admin on loopback", "[admin]\nlisten=\"127.0.0.1:7000\"\n", safe, ""},
 		{"admin open without a certificate", "[admin]\nlisten=\":7000\"\n", safe, "ssh -L 7000:127.0.0.1:7000"},
-		{"admin on a LAN address without a certificate", "[admin]\nlisten=\"192.168.1.10:7000\"\n", safe, "no certificate"},
+		{"admin on a LAN address without a certificate", "[admin]\nlisten=\"192.168.1.10:7000\"\n", safe, "without a certificate"},
 		{"admin open, no two-step", "[admin]\nlisten=\"127.0.0.1:7000\"\n[tls]\ncertificate=\"acme\"\ndomains=[\"dns.example.com\"]\nip_addresses=false\n", hostFacts{euid: 1000, account: true}, ""},
 		{"admin open with certificate, no two-step", "[admin]\nlisten=\":7000\"\n[tls]\ncertificate=\"acme\"\ndomains=[\"dns.example.com\"]\n", hostFacts{euid: 1000, account: true}, "two-step verification is off"},
 		{"home network: admin open without a certificate", "[access]\nallow=[\"192.168.0.0/16\"]\n[admin]\nlisten=\":7000\"\n", hostFacts{euid: 1000, account: true}, ""},
@@ -107,13 +107,13 @@ func TestSelfCheckAtStartup(t *testing.T) {
 		}
 		return n
 	}
-	if count("admin interface listens on 0.0.0.0:0 with no certificate") != 1 {
+	if count("admin interface listens on 0.0.0.0:0 without a certificate") != 1 {
 		t.Fatalf("no startup warning about the open admin port: %+v", s.EventLog.Recent(50))
 	}
 	if err := s.Reload(); err != nil {
 		t.Fatal(err)
 	}
-	if n := count("with no certificate"); n != 1 {
+	if n := count("without a certificate"); n != 1 {
 		t.Fatalf("unchanged finding logged %d times after a reload, want once", n)
 	}
 	os.Chmod(filepath.Join(dir, "secrets"), 0o755)

@@ -690,7 +690,7 @@ ProtectClock=no
 ProtectHostname=no
 RestrictNamespaces=no
 UNIT
-    warn "this system cannot sandbox services (a container?): dnsnova runs without the sandbox ($DROPIN/sandbox.conf)"
+    warn "service sandboxing is unavailable (a container?); DNSNova will run without the systemd sandbox ($DROPIN/sandbox.conf)"
 }
 
 # The kernel caps socket buffers (net.core.rmem_max, often about 200 KB),
@@ -745,15 +745,15 @@ fresh_install() {
         local dns
         dns="$(port_users 53)"
         if [ -n "$dns" ]; then
-            warn "port 53 is in use by: $dns"
+            warn "port 53 is already in use by: $dns"
             case "$dns" in *AdGuardHome*) warn "stop it before you finish setup: systemctl disable --now AdGuardHome" ;;
-                *) warn "stop it before you finish setup, or choose other addresses there" ;; esac
+                *) warn "stop that service, or choose a different DNS listen address before you finish setup" ;; esac
         fi
         install_files
         systemd daemon-reload
         systemd enable --now dnsnova
         if healthy; then ok "dnsnova is running"; else
-            warn "dnsnova did not report healthy; see: journalctl -u dnsnova -n 50"
+            warn "DNSNova did not pass its health check. Review the service log: journalctl -u dnsnova -n 50"
         fi
         summary_simple
         return
@@ -770,7 +770,7 @@ fresh_install() {
     systemd daemon-reload
     systemd enable --now dnsnova
     if healthy; then ok "dnsnova is running"; else
-        warn "dnsnova did not report healthy; see: journalctl -u dnsnova -n 50"
+        warn "DNSNova did not pass its health check. Review the service log: journalctl -u dnsnova -n 50"
     fi
     summary
 }
@@ -781,15 +781,15 @@ upgrade() {
     old="$("$BIN" -v 2>/dev/null | awk '{print $2}' || true)"
     step "Upgrading dnsnova ${old:-}"
     if [ "$GIVEN" -eq 1 ]; then
-        warn "dnsnova is already installed: the options given apply to new installs only, and $CONF is kept"
-        warn "change settings in the web interface or in $CONF (or remove it first: -u --purge)"
+        warn "DNSNova is already installed: these options apply only to new installations; your existing configuration is still at $CONF"
+        warn "change settings in the web interface or in $CONF (or uninstall first with -u --purge, which deletes the configuration and stored data)"
     fi
     download
     if [ -n "$old" ] && [ "$old" = "$NEW_VERSION" ] && [ -z "$VERSION" ]; then
         ok "already up to date"
         return
     fi
-    "$PKG/dnsnova" -t -c "$CONF" >/dev/null || die "the new version does not accept $CONF; nothing was changed"
+    "$PKG/dnsnova" -t -c "$CONF" >/dev/null || die "this version could not validate $CONF; the installer did not make any changes"
     cp -p "$BIN" "$VAR/dnsnova.prev"
     install_files
     systemd daemon-reload
@@ -797,10 +797,10 @@ upgrade() {
     if healthy; then
         ok "upgraded to $NEW_VERSION"
     else
-        warn "the new version is not healthy: rolling back to ${old:-the previous version}"
+        warn "the new version failed its health check; restoring ${old:-the previous version}"
         install -m 755 "$VAR/dnsnova.prev" "$BIN"
         systemd restart dnsnova
-        die "upgrade failed and was rolled back; see: journalctl -u dnsnova -n 50"
+        die "the upgrade failed; version ${old:-the previous version} has been restored. Review the service log: journalctl -u dnsnova -n 50"
     fi
 }
 
@@ -834,7 +834,7 @@ summary() {
     echo "  Health:         curl http://$(metrics_addr)/healthz"
     echo "  Serving DNS on: ${LISTEN[*]}  (mode: $MODE)"
     case " ${LISTEN[*]} " in *" 127.0.0.1:53 "*)
-        echo "  This server:    nameserver 127.0.0.1 in /etc/resolv.conf to use it here too (docs/server-itself.md)" ;;
+        echo "  This host:      to use DNSNova on this host, configure the system resolver to use 127.0.0.1 (docs/server-itself.md)" ;;
     esac
     if [ "$DOH_PROXY" -eq 1 ]; then
         echo "  DoH backend:    http://127.0.0.1:8053/dns-query  (nginx example: /usr/local/share/doc/dnsnova)"
@@ -920,8 +920,8 @@ summary_simple() {
         { lan_urls; echo "http://127.0.0.1:$ADMIN_PORT"; } | sed 's/^/  /'
         firewall_hint "$ADMIN_PORT" "" || echo "If a firewall is on, open TCP port $ADMIN_PORT to your network."
     else
-        echo "The web interface is not encrypted yet, so it opens only on this server."
-        echo "On your computer, open a tunnel:"
+        echo "The admin interface is available locally over HTTP until HTTPS is configured."
+        echo "To open it from your computer, start an SSH tunnel:"
         echo "  $(tunnel_hint)"
         echo "then open http://127.0.0.1:$ADMIN_PORT/ and follow the setup wizard."
         if [ "$ADMIN" = public ]; then
@@ -932,16 +932,23 @@ summary_simple() {
             echo
             echo "This server has only private addresses: a cloud server behind NAT (as on AWS"
             echo "or Google Cloud; then keep this install), or a machine on a home or office"
-            echo "network. For a home or office network, install with --lan instead, and the"
-            echo "web interface opens directly from that network:"
+            echo "network. For a home or office network, reinstall with --lan, and the admin"
+            echo "interface opens directly from that network. Uninstalling with --purge deletes"
+            echo "the configuration and stored data:"
             echo "  curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | sh -s -- -u --purge"
             echo "  curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | sh -s -- --lan"
         fi
     fi
     echo
-    echo "Control the service: systemctl start|stop|restart|status dnsnova"
-    echo "Uninstall:           curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | sh -s -- -u"
-    echo "Forgot the password: dnsnova -reset-admin"
+    echo "Service commands:"
+    echo "  systemctl status dnsnova"
+    echo "  systemctl restart dnsnova"
+    echo "  systemctl stop dnsnova"
+    echo "  systemctl start dnsnova"
+    echo "Uninstall:"
+    echo "  curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | sh -s -- -u"
+    echo "Forgot your password? Run dnsnova -reset-admin, then create a new administrator"
+    echo "account in the admin interface."
 }
 
 admin_summary() {

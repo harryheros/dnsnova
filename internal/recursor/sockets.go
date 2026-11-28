@@ -20,7 +20,7 @@ import (
 // sockUses queries or sockAge, so ports keep changing. A forged answer has
 // to match the port, the 16-bit ID, the server's address and the question.
 //
-// A port in use can be learnt (a query to a server the attacker runs shows
+// A port in use can be learned (a query to a server the attacker runs shows
 // it), which leaves the ID to guess. Guessing sends many wrong answers in a
 // row, and those are seen: after spoofLimit packets from the server's
 // address that are not the answer, the query gives up on UDP (ErrSpoofed)

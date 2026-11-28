@@ -11,7 +11,7 @@ import (
 // servers are already known: the work done for most cache misses.
 func BenchmarkResolveNew(b *testing.B) {
 	for _, v := range []struct{ min, cookies bool }{{false, false}, {true, false}, {false, true}} {
-		b.Run(fmt.Sprintf("minimise=%v/cookies=%v", v.min, v.cookies), func(b *testing.B) {
+		b.Run(fmt.Sprintf("minimize=%v/cookies=%v", v.min, v.cookies), func(b *testing.B) {
 			n := world()
 			r := newTest(&testing.T{}, n, v.min)
 			c := *r.cfg.Load()

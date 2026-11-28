@@ -23,7 +23,7 @@ import (
 // hosts reached through tunnels, which only pass them on. Each exit is a
 // view; the server is view 0.
 //
-// Which zones answer by where they are asked from is learnt: now and then
+// Which zones answer by where they are asked from is learned: now and then
 // a question just answered from here is asked again through an exit, and a
 // zone whose addresses share no /24 (/48) with the server's three times in
 // a row is marked. Below a marked zone, answers are kept for every view:
@@ -177,7 +177,7 @@ func sameExits(a, b []locality.Exit) bool {
 }
 
 // setLocality applies the locality settings: new exits start afresh (their
-// answers and delegations are forgotten); the zones learnt are kept.
+// answers and delegations are forgotten); the zones learned are kept.
 func (r *Recursor) setLocality(c *LocalityConfig) {
 	old := r.loc.Load()
 	if c == nil || len(c.Exits) == 0 {
@@ -268,7 +268,7 @@ func (r *Recursor) pathFor(t *task, zone string, qtype uint16) *exitPath {
 }
 
 // storeView is the view whose delegations a lookup keeps apart, or -1 for
-// the shared ones: those learnt through an exit, or below a zone whose
+// the shared ones: those learned through an exit, or below a zone whose
 // answers vary, are kept apart.
 func (r *Recursor) storeView(t *task, zone string) int {
 	lc := r.loc.Load()
@@ -314,7 +314,7 @@ type zoneState struct {
 	last   time.Time // last probe
 }
 
-// take keeps what another table learnt.
+// take keeps what another table learned.
 func (z *zoneTable) take(o *zoneTable) {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
@@ -504,7 +504,7 @@ func overlap(a, b map[netip.Prefix]bool) bool {
 
 // maybeProbe asks msg's question again through an exit, now and then, to
 // learn whether zone's answers depend on where they are asked from.
-func (r *Recursor) maybeProbe(lc *locState, d *delegation, name string, qtype uint16, msg *message, minimised bool) {
+func (r *Recursor) maybeProbe(lc *locState, d *delegation, name string, qtype uint16, msg *message, minimized bool) {
 	if labelCount(d.zone) <= 1 || isSub(d.zone, arpaZone) || qtype == typeDS || qtype == typeDNSKEY {
 		return
 	}
@@ -531,7 +531,7 @@ func (r *Recursor) maybeProbe(lc *locState, d *delegation, name string, qtype ui
 		defer cancel()
 		t := newTask()
 		t.depth = 1 // what it looks up on the way is never a client's chain
-		pm, err := r.queryVia(ctx, t, d, name, qtype, minimised, ex)
+		pm, err := r.queryVia(ctx, t, d, name, qtype, minimized, ex)
 		if err != nil {
 			return
 		}
@@ -574,7 +574,7 @@ func (f *frag) clamp(exp time.Time) *frag {
 	return &c
 }
 
-// expiry is when the first part of f expires (zero: nothing to keep).
+// expiration is when the first part of f expires (zero: nothing to keep).
 func (f *frag) expiry() time.Time {
 	var exp time.Time
 	for _, u := range f.until {
@@ -897,7 +897,7 @@ func (r *Recursor) variants(q *m.Query, flags uint16, s *splice, dnssec, validat
 }
 
 // traceFork resolves the rest of the chain for every view in turn, each
-// step labelled with its view, and lists every view's answer.
+// step labeled with its view, and lists every view's answer.
 func (r *Recursor) traceFork(ctx context.Context, t *task, lc *locState, ans *answer, name string, qtype uint16, validate bool) (string, bool, error) {
 	var f0 *frag
 	var err0 error
@@ -1034,7 +1034,7 @@ func (r *Recursor) VaryingZones() []string {
 	return out
 }
 
-// ---- keeping what was learnt across a restart ----
+// ---- keeping what was learned across a restart ----
 //
 // The file holds the zones whose answers vary, and until when: names of
 // zones (content networks, mostly), no clients, no answers.

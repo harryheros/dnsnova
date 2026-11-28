@@ -45,7 +45,7 @@ func TestNODLearnsFirst(t *testing.T) {
 	}
 	c.add(25 * time.Hour)
 	if n.Observe("known.example", "www.known.example", "A", "") {
-		t.Fatal("a domain learnt was reported afterwards")
+		t.Fatal("a domain learned was reported afterwards")
 	}
 	if !n.Observe("other.example", "other.example", "A", "") || n.State().Learning {
 		t.Fatal("not reporting after learning")

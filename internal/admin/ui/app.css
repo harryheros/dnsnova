@@ -133,7 +133,7 @@ h2 { margin: 0; font-size: 15px; font-weight: 600; }
   background: radial-gradient(60% 38% at 30% 70%, rgba(80, 160, 255, 0.35), transparent 70%); filter: blur(18px); opacity: 0.35; }
 .side > * { position: relative; z-index: 1; }
 .railbrand { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 4px 0 2px; text-align: center; }
-.railbrand .wordmark { font-size: 33px; filter: drop-shadow(0 2px 10px rgba(75, 147, 255, 0.3)); }
+.railbrand .wordmark { font-size: 33px; filter: drop-shadow(0 1px 4px rgba(75, 147, 255, 0.22)); } /* light kept close: a wide glow blurs letters this size */
 .railbrand .tagline { font-size: 13px; margin-top: -2px; }
 .railtop { display: none; }
 .main { min-width: 0; padding: 0 28px 48px; display: flex; flex-direction: column; gap: 20px; }
@@ -142,7 +142,7 @@ h2 { margin: 0; font-size: 15px; font-weight: 600; }
 .nav { display: flex; flex-direction: column; gap: 16px; }
 .navgroup { display: flex; flex-direction: column; gap: 3px; }
 .navtitle { font-size: 10.5px; font-weight: 650; letter-spacing: 0.12em; text-transform: uppercase; color: var(--faint); padding: 0 14px 4px; }
-.nav a { position: relative; display: flex; align-items: center; gap: 14px; min-height: 40px; padding: 0 14px; border-radius: 10px; color: #d3def1; font-size: 14.5px; font-weight: 500;
+.nav a { position: relative; display: flex; align-items: center; gap: 12px; min-height: 40px; padding: 0 12px; white-space: nowrap; border-radius: 10px; color: #d3def1; font-size: 14.5px; font-weight: 500;
   transition: background-color 150ms ease, color 150ms ease, box-shadow 150ms ease; }
 .nav a .ic { color: #9db3d8; flex: none; width: 19px; height: 19px; }
 .nav a:hover { background: rgba(75, 147, 255, 0.10); color: #fff; text-decoration: none; }
@@ -305,8 +305,8 @@ input[aria-invalid="true"], textarea[aria-invalid="true"], select[aria-invalid="
 .mixleg { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; font-size: 11.5px; color: var(--muted); }
 .mixleg span { display: inline-flex; align-items: center; gap: 5px; }
 .mixleg i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
-.protos { display: flex; flex-wrap: wrap; gap: 6px; }
-.protos span { font-size: 11.5px; font-weight: 600; padding: 3px 8px; border-radius: 6px; border: 1px solid var(--border); color: var(--faint); font-family: var(--mono); }
+.protos { display: flex; flex-wrap: wrap; gap: 5px; }
+.protos span { font-size: 11.5px; font-weight: 600; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--border); color: var(--faint); font-family: var(--mono); }
 .protos span.on { color: var(--accent-2); border-color: color-mix(in srgb, var(--accent-2) 45%, transparent); background: color-mix(in srgb, var(--accent-2) 10%, transparent); }
 
 /* dashboard cards */
@@ -427,17 +427,19 @@ input[aria-invalid="true"], textarea[aria-invalid="true"], select[aria-invalid="
 .nodechip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); }
 a.nodechip { text-decoration: none; }
 a.nodechip:hover { border-color: var(--border-strong); color: var(--text); }
-/* the overview's Features: what this server does, each a way to its page */
-.feats { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
-.feats a { display: flex; align-items: center; gap: 12px; padding: 11px 13px; border: 1px solid var(--border); border-radius: 12px; color: var(--text); text-decoration: none; height: 100%; transition: border-color 150ms ease, background-color 150ms ease; }
-.feats a:hover { border-color: var(--border-strong); background: var(--raised); }
-.feats a > .ic { color: var(--muted); flex: none; }
-.feats a.on > .ic { color: var(--accent); }
-.feats .ftext { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
-.feats .ftext strong { font-size: 13.5px; font-weight: 600; }
-.feats .ftext .small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.feats a > .dot { flex: none; }
-@media (max-width: 560px) { .feats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .feats a { padding: 10px; gap: 8px; } .feats a > .ic { display: none; } .feats .ftext .small { white-space: normal; } }
+/* the overview's Capabilities: what runs, grouped, each with its state */
+.caps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 28px; }
+.caps h3 { margin: 0 0 6px; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.caps ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.caps li + li { border-top: 1px solid var(--hairline, var(--border)); }
+.caps a { display: flex; align-items: center; gap: 10px; padding: 9px 2px; color: var(--text); text-decoration: none; font-size: 13.5px; }
+.caps a:hover .cname { color: var(--accent); }
+.caps a > .ic { color: var(--muted); flex: none; }
+.caps .cname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.caps .cstate { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); text-align: right; white-space: nowrap; }
+.caps .cstate.ok { color: var(--text); }
+.caps .cstate.warn { color: var(--warn); }
+@media (max-width: 1100px) { .caps { grid-template-columns: 1fr; gap: 16px; } }
 
 table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 th { text-align: left; font-weight: 600; font-size: 11.5px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); padding: 8px 10px 8px 0; }
@@ -685,6 +687,11 @@ details.adv[open] > summary::before { content: "▾ "; }
 details.adv > summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
 details.adv > summary .advnames { color: var(--muted); font-weight: 400; font-size: 12.5px; }
 details.adv[open] > summary .advnames { display: none; }
+/* what setup applied, read back from the server */
+.checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.checks li { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; font-size: 13.5px; }
+.checks li > .dot { align-self: center; }
+.checks li > strong { min-width: 110px; }
 /* a choice among a few ways, each explained (Answers made for) */
 .wopts { display: flex; flex-direction: column; gap: 8px; width: 100%; }
 .wopt { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; cursor: pointer; transition: border-color 150ms ease, background-color 150ms ease; }

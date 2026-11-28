@@ -51,7 +51,7 @@ func (t *ttlMap[V]) shard(k string) *ttlShard[V] {
 	return &t.shards[maphash.String(t.seed, k)%uint64(len(t.shards))]
 }
 
-// get returns the value and its expiry, also when expired (callers decide).
+// get returns the value and its expiration, also when expired (callers decide).
 func (t *ttlMap[V]) get(k string) (V, time.Time, bool) {
 	s := t.shard(k)
 	s.mu.Lock()
@@ -132,7 +132,7 @@ func (s security) String() string {
 	return [...]string{"unchecked", "secure", "insecure", "bogus"}[s]
 }
 
-// cachedSet is an RRset learnt from an authoritative answer.
+// cachedSet is an RRset learned from an authoritative answer.
 type cachedSet struct {
 	set   *rrset
 	zone  string // the zone of the server it came from
@@ -244,7 +244,7 @@ func (in *infra) get(a netip.Addr) *server {
 	return s
 }
 
-// infraForget is how long what was learnt about a server's speed and
+// infraForget is how long what was learned about a server's speed and
 // failures counts: a server that timed out once is slow on paper and would
 // never be chosen again, so it would never get the chance to show it has
 // recovered. After this long it is treated as unknown and tried afresh.

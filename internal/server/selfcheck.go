@@ -36,8 +36,8 @@ func securityFindings(c *config.Config, f hostFacts) []string {
 	// interface to that network over plain HTTP on purpose.
 	if remote, port := reachableFromOthers(c.Admin.Listen); remote && c.Server.Mode == config.ModePublic {
 		if c.TLS.Certificate == "off" {
-			add("the admin interface listens on %s with no certificate, so other machines are refused (plain HTTP is answered only on this server); "+
-				"reach it through an SSH tunnel (ssh -L %s:127.0.0.1:%s), or set up a domain for HTTPS. admin.listen = \"127.0.0.1:%s\" makes the tunnel the only way",
+			add("the admin interface listens on %s without a certificate, so remote access is refused (plain HTTP is served only to this host); "+
+				"connect through an SSH tunnel (ssh -L %s:127.0.0.1:%s), or configure a domain for HTTPS. admin.listen = \"127.0.0.1:%s\" makes the tunnel the only way in",
 				c.Admin.Listen, port, port, port)
 		}
 		if f.account && !f.totp {
@@ -75,7 +75,7 @@ func securityFindings(c *config.Config, f hostFacts) []string {
 		}
 	}
 	if f.euid == 0 {
-		add("running as root; the installed service runs as the dnsnova user with only the right to bind low ports")
+		add("DNSNova is running as root; the installed service runs as the dnsnova user and can bind privileged ports")
 	}
 	return out
 }

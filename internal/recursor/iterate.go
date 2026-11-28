@@ -163,14 +163,14 @@ func (r *Recursor) iterateOnce(ctx context.Context, t *task, qname string, qtype
 	cfg := r.cfg.Load()
 	d := r.closestDeleg(ctx, t, qname, qtype)
 	known := d.zone
-	minimise := cfg.QNameMinimisation
+	minimize := cfg.QNameMinimisation
 	steps := 0
 	for i := 0; i < maxReferrals; i++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		sendName, sendType := qname, qtype
-		if minimise && steps < 10 && labelCount(qname) > labelCount(known)+1 {
+		if minimize && steps < 10 && labelCount(qname) > labelCount(known)+1 {
 			sendName, sendType = ancestorAt(qname, labelCount(known)+1), m.TypeA
 			steps++
 		}
@@ -192,7 +192,7 @@ func (r *Recursor) iterateOnce(ctx context.Context, t *task, qname string, qtype
 				// no server gave a usable reply to the shortened name (some
 				// mishandle names that only exist as part of longer ones):
 				// ask for the full name instead
-				minimise = false
+				minimize = false
 				continue
 			}
 			return nil, err
@@ -203,7 +203,7 @@ func (r *Recursor) iterateOnce(ctx context.Context, t *task, qname string, qtype
 			}
 			child.signed = slices.ContainsFunc(msg.authority, func(a rr) bool { return a.typ == typeDS && a.name == child.zone })
 			if v := r.storeView(t, d.zone); v >= 0 {
-				// learnt through an exit, or below a zone whose answers
+				// learned through an exit, or below a zone whose answers
 				// vary: kept for this view only
 				r.vdelegs.set(vkey(child.zone, v), child, r.now().Add(time.Duration(min(max(ttl, 5), 86400))*time.Second))
 			} else {
@@ -223,7 +223,7 @@ func (r *Recursor) iterateOnce(ctx context.Context, t *task, qname string, qtype
 			case msg.rcode == m.RcodeNoError && !hasAlias(msg, sendName):
 				known = sendName // no zone cut here; one label further
 			default:
-				minimise = false
+				minimize = false
 			}
 			continue
 		}
@@ -364,19 +364,19 @@ func usable(msg *message, zone, qname string) bool {
 // likely), not IPv6 that may be broken, and not one that refused or
 // answered without authority.
 //
-// For a shortened name (minimised, RFC 9156), a reply that is not usable
+// For a shortened name (minimized, RFC 9156), a reply that is not usable
 // says the server mishandles names that exist only as part of longer
 // ones, as some load balancers do; it may well answer the full name. So
 // it is not marked lame for the zone: the zone's other servers are asked,
 // and if none answers, the caller asks for the full name (ErrUnreachable).
 // Giving up on the first such reply would send the full name onwards,
 // to every later server, because of one server.
-func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name string, qtype uint16, minimised bool) (*message, error) {
-	return r.queryVia(ctx, t, d, name, qtype, minimised, r.pathFor(t, d.zone, qtype))
+func (r *Recursor) query(ctx context.Context, t *task, d *delegation, name string, qtype uint16, minimized bool) (*message, error) {
+	return r.queryVia(ctx, t, d, name, qtype, minimized, r.pathFor(t, d.zone, qtype))
 }
 
 // queryVia is query through exit ex (nil: from here).
-func (r *Recursor) queryVia(ctx context.Context, t *task, d *delegation, name string, qtype uint16, minimised bool, ex *exitPath) (*message, error) {
+func (r *Recursor) queryVia(ctx context.Context, t *task, d *delegation, name string, qtype uint16, minimized bool, ex *exitPath) (*message, error) {
 	cfg := r.cfg.Load()
 	// through an exit (private locality): its own sockets and what it knows
 	// of the servers, which differ from here (round trips, cookies)
@@ -554,7 +554,7 @@ func (r *Recursor) queryVia(ctx context.Context, t *task, d *delegation, name st
 				r.traceQuery(t, d.zone, a, name, qtype, rtt, msg, nil, false)
 			}
 			note(a, m.RcodeString(msg.rcode))
-			if !minimised {
+			if !minimized {
 				in.setLame(a, d.zone, now)
 			}
 			return nil, nil
@@ -563,11 +563,11 @@ func (r *Recursor) queryVia(ctx context.Context, t *task, d *delegation, name st
 		if !usable(msg, d.zone, name) {
 			if t.trace != nil {
 				r.traceQuery(t, d.zone, a, name, qtype, rtt, msg, nil, true)
-				if minimised {
+				if minimized {
 					t.trace.retell("no usable reply to the shortened name")
 				}
 			}
-			if minimised {
+			if minimized {
 				note(a, "no usable reply to the shortened name")
 				return nil, nil
 			}
@@ -725,11 +725,11 @@ func (r *Recursor) queryVia(ctx context.Context, t *task, d *delegation, name st
 	return nil, &unreachable{zone: d.zone, name: name, qtype: qtype, servers: len(d.ns), why: why}
 }
 
-// errCalledOff is why a query to a server is cancelled when another
+// errCalledOff is why a query to a server is canceled when another
 // server's answer is used.
 var errCalledOff = errors.New("another server answered first")
 
-// calledOff says whether ctx was cancelled because another server's
+// calledOff says whether ctx was canceled because another server's
 // answer is used: not the server's failure.
 func calledOff(ctx context.Context) bool {
 	return errors.Is(context.Cause(ctx), errCalledOff)

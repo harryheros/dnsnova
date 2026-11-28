@@ -151,6 +151,24 @@ func (m *Manager) Configure(s Settings) error {
 	return fmt.Errorf("tls: unknown mode %q", s.Mode)
 }
 
+// Save returns a function that puts the manager back as it is now: its
+// settings, certificate and status. A configuration whose listeners cannot
+// be opened is rolled back with it, so the certificate the running
+// listeners use is not lost with the change that failed.
+func (m *Manager) Save() (restore func()) {
+	m.mu.Lock()
+	set, status, backoff := m.set, m.status, m.backoff
+	m.mu.Unlock()
+	cur, leaf := m.cur.Load(), m.leaf.Load()
+	return func() {
+		m.mu.Lock()
+		m.set, m.status, m.backoff = set, status, backoff
+		m.mu.Unlock()
+		m.cur.Store(cur)
+		m.leaf.Store(leaf)
+	}
+}
+
 // Ready reports whether a certificate is available.
 func (m *Manager) Ready() bool { return m.cur.Load() != nil }
 

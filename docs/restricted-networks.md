@@ -1,4 +1,4 @@
-# Resolving where DNS is tampered with
+# Resolving DNS on networks that intercept DNS traffic
 
 DNSNova resolves names from the root servers so that no third party sees
 the queries. Some networks interfere. This page covers what DNSNova handles
@@ -66,10 +66,10 @@ doubtful answer does, and the genuine one that follows is used.
 They are counted in the metric `dnsnova_recursion_no_tcp_total`.
 
 The same servers often give an empty reply without authority for a name
-that only exists as part of longer ones, which QNAME minimisation asks
+that only exists as part of longer ones, which QNAME minimization asks
 for. DNSNova does not mark such a server lame for its whole zone: it asks
 the zone's other servers for the shortened name, and only if none answers,
-for the full name, so that one server does not end minimisation for the
+for the full name, so that one server does not end minimization for the
 rest of the lookup.
 
 ## Networks that take over port 53
@@ -78,7 +78,7 @@ rest of the lookup.
 by the network's own resolver, often over TCP too. No name server is
 reachable, so no resolver can resolve privately there.
 
-**What DNSNova does:** it recognises the interception (a root server never
+**What DNSNova does:** it recognizes the interception (a root server never
 answers without authority, or with an address) instead of trusting it.
 Below the root, a forged answer whose genuine answer was lost and whose
 TCP connection was reset is what an injector does for the names it

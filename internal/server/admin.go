@@ -452,5 +452,8 @@ func (s *Server) NOD() (insight.NODState, []insight.NewDomain, bool) {
 // Dnstap implements admin.Backend.
 func (s *Server) Dnstap() dnstap.State { return s.Tap.State() }
 
+// Anycast implements admin.Backend.
+func (s *Server) Anycast() string { return s.anycastState() }
+
 // Archive implements admin.Backend.
 func (s *Server) Archive() *insight.Archive { return s.QArchive }

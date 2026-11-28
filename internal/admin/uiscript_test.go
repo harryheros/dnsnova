@@ -112,8 +112,8 @@ console.log(focusParam("#/settings/admin"), focusParam("#/settings/admin?focus=a
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !regexp.MustCompile(`(?s)logs: \{.*?title: "Query records", fields: \[\s*\{ key: "log\.query_days", `).Match(src) {
-		t.Fatal("log.query_days is not the first setting of Settings › Logs & statistics › Query records")
+	if !regexp.MustCompile(`(?s)logs: \{.*?title: "Query archive", fields: \[\s*\{ key: "log\.query_days", `).Match(src) {
+		t.Fatal("log.query_days is not the first setting of Settings › Logs & statistics › Query archive")
 	}
 }
 
@@ -330,5 +330,40 @@ console.log(shortValue({ type: "text" }, "https://acme-v02.api.letsencrypt.org/d
 	want := "Minimum TTL 0s · Own root servers · Prefetch on · 1 more\nMinimum TTL · Own root servers 198.41.0.4\nhttps://acme-v02.api.…"
 	if got != want {
 		t.Fatalf("got\n%s\nwant\n%s", got, want)
+	}
+}
+
+// Every file the pages load from /assets/ is there, and the status page may
+// load those it uses: the interface's mark is mark-crisp.svg, without the
+// halo that blurs mark.svg at rail sizes; mark.svg stays for sign-in.
+func TestUIAssetsExist(t *testing.T) {
+	re := regexp.MustCompile(`/assets/([A-Za-z0-9._-]+)`)
+	for _, page := range []string{"app.js", "status.js", "index.html", "status.html"} {
+		src, err := os.ReadFile("ui/" + page)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range re.FindAllStringSubmatch(string(src), -1) {
+			if _, err := os.Stat("ui/" + m[1]); err != nil {
+				t.Errorf("%s loads /assets/%s, which is not in ui/", page, m[1])
+			}
+			if strings.HasPrefix(page, "status") && !statusAssets[m[1]] {
+				t.Errorf("the status page loads /assets/%s, which it may not", m[1])
+			}
+		}
+	}
+	app, err := os.ReadFile("ui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := regexp.MustCompile(`brandMark\(\d+, true\)`).FindAllString(string(app), -1); len(got) != 1 || got[0] != "brandMark(104, true)" {
+		t.Errorf("the mark with its halo is for sign-in only: %v", got)
+	}
+	crisp, err := os.ReadFile("ui/mark-crisp.svg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(crisp), "#halo") {
+		t.Error("mark-crisp.svg still has the halo")
 	}
 }

@@ -308,7 +308,7 @@ func TestLocalityTwoTierDelegation(t *testing.T) {
 	var mu sync.Mutex
 	r.now = func() time.Time { mu.Lock(); defer mu.Unlock(); return clock }
 	lc := r.loc.Load()
-	// learnt from the referrals themselves (the glue differs)
+	// learned from the referrals themselves (the glue differs)
 	for i := 0; i < zoneDiffer; i++ {
 		r.delegs.clear()
 		r.sets.clear()
@@ -569,7 +569,7 @@ func TestLocalityOffChangesNothing(t *testing.T) {
 
 // TestLocalityKeepsZonesAcrossChanges: changing the clients an exit serves
 // (which the resolver, not the recursion, uses) keeps the exits' state;
-// new exits keep the zones learnt.
+// new exits keep the zones learned.
 func TestLocalityKeepsZonesAcrossChanges(t *testing.T) {
 	g := locNet()
 	r := newGeo(t, g, nil)

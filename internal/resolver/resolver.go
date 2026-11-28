@@ -22,7 +22,7 @@ import (
 )
 
 // StaleTTL is the TTL given to clients for answers served past their
-// expiry while a fresh one is fetched (RFC 8767).
+// expiration while a fresh one is fetched (RFC 8767).
 const StaleTTL = 30
 
 // Exchanger is the upstream group.

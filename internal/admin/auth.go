@@ -34,6 +34,10 @@ type account struct {
 	Password string    `json:"password"` // PHC string: $argon2id$v=19$m=..,t=..,p=..$salt$hash
 	TOTP     string    `json:"totp,omitempty"`
 	Updated  time.Time `json:"updated"`
+	// SetupDone: the setup wizard was finished (or skipped) after the
+	// account was created. Until then, and while the server does not serve
+	// DNS, signing in resumes the wizard.
+	SetupDone bool `json:"setup_done,omitempty"`
 }
 
 type secrets struct {
@@ -84,6 +88,17 @@ func (s *secrets) account() *account {
 	}
 	a := *s.acc
 	return &a
+}
+
+// markSetupDone records that the setup wizard is finished.
+func (s *secrets) markSetupDone() error {
+	a := s.account()
+	if a == nil || a.SetupDone {
+		return nil
+	}
+	b := *a
+	b.SetupDone = true
+	return s.save(&b)
 }
 
 func (s *secrets) save(a *account) error {
@@ -169,7 +184,7 @@ func (s *secrets) setupTrusted(ip netip.Addr) bool {
 // dropLegacyTrust removes setup-trust, which installers before 1.3 wrote
 // with the SSH client's address so that setup from there needed no code.
 // That address may be shared by many people (NAT), so it is no longer
-// honoured; reports whether a file was removed.
+// honored; reports whether a file was removed.
 func (s *secrets) dropLegacyTrust() bool {
 	return os.Remove(filepath.Join(s.dir, "setup-trust")) == nil
 }
@@ -272,11 +287,11 @@ func validPassword(pw string) error {
 
 func validUsername(u string) error {
 	if u == "" || len(u) > 64 {
-		return errors.New("the user name must have 1 to 64 characters")
+		return errors.New("Enter a username with 1\u201364 characters.")
 	}
 	for _, c := range u {
 		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '_' || c == '-' || c == '@') {
-			return errors.New("the user name may use letters, digits and . _ - @")
+			return errors.New("Use only letters, digits, periods, underscores, hyphens, and @ signs in the username.")
 		}
 	}
 	return nil

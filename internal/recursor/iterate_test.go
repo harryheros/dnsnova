@@ -837,7 +837,7 @@ func TestClientSubnetChangeDuringResolution(t *testing.T) {
 	<-done
 	<-changed
 	if sets, negs, _, _, _ := r.CacheSizes(); sets != 0 || negs != 0 {
-		t.Fatalf("%d RRsets and %d negative answers learnt for the old network are cached after the change", sets, negs)
+		t.Fatalf("%d RRsets and %d negative answers learned for the old network are cached after the change", sets, negs)
 	}
 }
 

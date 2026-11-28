@@ -1,4 +1,4 @@
-# DNSNova for the server itself
+# Use DNSNova as the host's DNS resolver
 
 Programs on the server (apt, certificate renewal, mail) can use DNSNova too.
 The web setup and the installer listen on 127.0.0.1:53 for this: check that
@@ -32,5 +32,5 @@ options edns0 trust-ad
   time service a server by address so it works without DNS, for example
   `NTP=162.159.200.1` in `/etc/systemd/timesyncd.conf`, then
   `systemctl restart systemd-timesyncd`. With recursion, DNSNova notices a
-  clock more than about a day off from the root's signatures and says so,
+  clock more than about a day off from the root's signatures and reports the clock offset,
   with by how much, on the overview and in alerts.

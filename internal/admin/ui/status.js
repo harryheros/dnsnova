@@ -65,7 +65,7 @@ function stops(prefix, offsets) {
   return offsets.map((o, i) => s("stop", { offset: o, class: prefix + i }));
 }
 function logoMark(size = 28) {
-  return h("img", { src: "/assets/mark.svg", width: size, height: size, alt: "", "aria-hidden": "true", class: "mark", decoding: "async" });
+  return h("img", { src: "/assets/mark-crisp.svg", width: size, height: size, alt: "", "aria-hidden": "true", class: "mark", decoding: "async" });
 }
 
 // The wordmark: "DNSN" and small capitals "OVA" set in Exo 2 ExtraBold
@@ -108,7 +108,7 @@ function themeToggle() {
   return btn;
 }
 
-const PROTO_NAMES = { doh: "DNS over HTTPS", doh3: "DNS over HTTPS (HTTP/3)", dot: "DNS over TLS", doq: "DNS over QUIC", udp: "plain DNS (UDP)", tcp: "plain DNS (TCP)" };
+const PROTO_NAMES = { doh: "DNS over HTTPS", doh3: "DNS over HTTPS (HTTP/3)", dot: "DNS over TLS", doq: "DNS over QUIC", udp: "unencrypted DNS (UDP)", tcp: "unencrypted DNS (TCP)" };
 
 // ---------- the check ----------
 
@@ -141,11 +141,10 @@ async function runCheck(info, box) {
       h("div", null, h("strong", null, "Using this server, but unencrypted"), h("div", { class: "small" }, "Over " + PROTO_NAMES[r.proto] + ". Your network can read these queries. Switch to an encrypted address below."))), again);
   } else {
     fill(box, h("div", { class: "result no" }, h("span", { class: "badge" }, line("x", 22)),
-      h("div", null, h("strong", null, "This device is not using this server"), h("div", { class: "small" }, "Its DNS queries go somewhere else right now."))),
+      h("div", null, h("strong", null, "DNSNova did not receive the test query"), h("div", { class: "small" }, "This device\u2019s DNS queries are currently handled by another resolver."))),
     h("ul", { class: "small muted hints" },
       h("li", null, "Just changed the setting? Give it a minute, or reconnect to the network."),
-      h("li", null, "Browsers with their own “secure DNS” setting use that instead of the system's."),
-      h("li", null, "A VPN or iCloud Private Relay sends DNS through the VPN.")), again);
+      h("li", null, "A VPN, iCloud Private Relay, or a browser\u2019s Secure DNS setting may affect which resolver handles it.")), again);
   }
 }
 
@@ -170,8 +169,8 @@ async function boot() {
   const checkBox = h("div", { class: "checkbox", "aria-live": "polite" });
 
   const facts = [
-    info.query_log || info.query_export ? null : "No query log",
-    "Your address is never sent upstream",
+    info.query_log || info.query_export ? null : "No query logging",
+    "Source IP address not forwarded",
     "Open source",
   ].filter(Boolean);
   const hero = h("section", { class: "card hero2 s12", "aria-label": "Status" },
@@ -186,35 +185,36 @@ async function boot() {
     info.doh ? ["DNS over HTTPS", info.doh] : null,
     info.dot ? ["DNS over TLS", info.dot] : null,
     info.doq ? ["DNS over QUIC", info.doq] : null,
-    ...(info.plain || []).map((ip) => ["Plain DNS", ip]),
+    ...(info.plain || []).map((ip) => ["Unencrypted DNS", ip]),
   ].filter(Boolean);
   const filt = filtered(info, { h, copyrow }, "");
   const addresses = dcard("s5", "Addresses", "list",
-    addrRows.length ? h("div", { class: "addrs" }, addrRows.map(([k, v]) => copyrow(k, v))) : h("p", { class: "empty small" }, "No addresses are published."),
+    addrRows.length ? h("div", { class: "addrs" }, addrRows.map(([k, v]) => copyrow(k, v))) : h("p", { class: "empty small" }, "No DNS endpoints are listed."),
     filt ? h("div", { class: "filtered" }, h("h3", null, line("filter", 14), "With filtering"), ...filt) : null,
     h("footer", { class: "dfoot" }, h("span", null, info.http3 ? "HTTPS also over HTTP/3" : "HTTPS over HTTP/1.1 and HTTP/2"), h("span", null, info.mode === "public" ? "Open to everyone" : "Private")));
 
-  const guide = dcard("s7", "Use this server", "phone", ...tabs(guides(info, { h, copyrow }), { h, fill }),
+  const guide = dcard("s7", "Set up DNS on your device", "phone", ...tabs(guides(info, { h, copyrow }), { h, fill }),
     h("footer", { class: "dfoot" }, h("span", null, info.check ? "After changing the setting, check above that it works." : "Settings take effect within a minute."), h("span")));
 
   const privRows = [
-    ["Query log", info.query_log ? (info.query_log_full_ip ? "On, with addresses" : "On, addresses shortened") : "Off", info.query_log ? "warn" : "ok"],
-    ["Queries kept on disk", info.query_log_days ? `For ${info.query_log_days} ${info.query_log_days === 1 ? "day" : "days"}` : "Never", info.query_log_days ? "warn" : "ok"],
-    ["Queries sent to a log collector", info.query_export ? "Yes" : "No", info.query_export ? "warn" : "ok"],
-    ["Your address kept on disk", info.query_log_days ? (info.query_log_full_ip ? "Yes, with the queries" : "Shortened, with the queries") : "Never", info.query_log_days ? "warn" : "ok"],
-    [info.recursion ? "Your address sent to name servers" : "Your address sent upstream", "Never", "ok"],
-    ...(info.locality ? [["Your location used", "Only to pick your answer, here", "ok"]] : []),
+    ["Query logging", info.query_log ? (info.query_log_full_ip ? "On, full IP addresses" : "On, IP addresses masked") : "Off", info.query_log ? "warn" : "ok"],
+    ["Archived query retention", info.query_log_days ? `For ${info.query_log_days} ${info.query_log_days === 1 ? "day" : "days"}` : "Never", info.query_log_days ? "warn" : "ok"],
+    ["dnstap export", info.query_export ? "On" : "Off", info.query_export ? "warn" : "ok"],
+    ["Source IP address on disk", info.query_log_days ? (info.archive_full_ip ? "Full, with archived queries" : "Masked, with archived queries") : "Never", info.query_log_days ? "warn" : "ok"],
+    [info.recursion ? "Source IP address sent to name servers" : "Source IP address sent to upstream resolvers", "Never", "ok"],
+    ...(info.client_subnet ? [["EDNS Client Subnet", "One fixed network for all clients", "ok"]] : []),
+    ...(info.locality ? [["Client location", "Used only on this server, to select your response", "ok"]] : []),
     ["Ads, tracking, telemetry", "None", "ok"],
   ];
-  const privacy = dcard("s6", "What this server keeps", "shield",
+  const privacy = dcard("s6", "Data retention and privacy", "shield",
     h("dl", { class: "kvs" }, privRows.map(([k, v, c]) => h("div", null, h("dt", null, k), h("dd", { class: c }, v)))),
-    h("footer", { class: "dfoot" }, h("span", null, `Counts and popular domains (asked by ${info.mode === "private" ? "2+ devices" : "5+ networks"}) are kept in memory only.`), h("span")));
+    h("footer", { class: "dfoot" }, h("span", null, `Query counts and popular domains (queried by ${info.mode === "private" ? "2+ devices" : "5+ networks"}) are held in memory only.`), h("span")));
   const about = dcard("s6", "About this server", "code",
     h("p", { class: "small", style: { margin: 0 } }, info.recursion
-      ? "Runs DNSNova, an open-source DNS server. It answers from its cache or asks each domain's own name servers; they see this server's address, not yours." +
-        (info.locality ? " For names whose answers depend on where they are asked from, it asks from a few places at once, whoever needs them, and gives you the answer for where you are." : "")
-      : "Runs DNSNova, an open-source DNS server. It answers from its cache or asks its upstream resolvers; they see this server's address, not yours."),
-    h("p", { class: "small", style: { margin: 0 } }, "The query log is for troubleshooting only: when the operator turns it on, it runs for a limited time, in memory, and this page says so."),
+      ? "Runs DNSNova, an open-source DNS resolver. It answers from its cache or resolves directly from authoritative name servers, which see this server\u2019s address, not yours." +
+        (info.locality ? " Location-dependent names are also resolved through exits near clients, so you get the response for your own location." : "")
+      : "Runs DNSNova, an open-source DNS resolver. It answers from its cache or forwards to its upstream resolvers, which see this server\u2019s address, not yours."),
+    h("p", { class: "small", style: { margin: 0 } }, "Live capture, archived query records, and dnstap export are configured separately; the table shows which are on."),
     h("p", { class: "small muted", style: { margin: 0 } }, "This page loads nothing from other sites. The check above sends one DNS query for a random name; only that name and the protocol are kept, for five minutes."),
     h("footer", { class: "dfoot" }, h("span", null, "DNSNova · AGPL-3.0"), h("a", { href: "https://github.com/harryheros/dnsnova", rel: "noopener noreferrer" }, "Source code")));
 

@@ -10,7 +10,7 @@ import (
 	m "github.com/harryheros/dnsnova/internal/dnsmsg"
 )
 
-// sigExpiry is the earliest RRSIG expiry among sets.
+// sigExpiry is the earliest RRSIG expiration among sets.
 func sigExpiry(t *testing.T, sets ...*rrset) time.Time {
 	t.Helper()
 	var least time.Time
@@ -30,7 +30,7 @@ func sigExpiry(t *testing.T, sets ...*rrset) time.Time {
 }
 
 // A validated negative answer must not be cached, or served as secure,
-// beyond the expiry of the signatures that proved it.
+// beyond the expiration of the signatures that proved it.
 func TestNegativeCacheCappedBySignatureExpiry(t *testing.T) {
 	f := loadFixture(t)
 	zone := dotted("example.com.")

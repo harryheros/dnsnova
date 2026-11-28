@@ -34,7 +34,7 @@ export function guides(info, { h, copyrow }) {
         dot ? h("a", { class: "btn", href: prof + "/dnsnova.mobileconfig?p=dot" }, "Profile, DNS over TLS") : null)),
       step("iPhone and iPad: ", path("Settings", "Profile Downloaded"), ", then Install."),
       step("Mac: ", path("System Settings", "Privacy & Security", "Profiles"), ", then Install."),
-      step("The profile is not signed, so the system says “Unverified”. It only sets DNS; remove it there at any time."))]
+      step("The profile is unsigned. Your device may display \u201cUnverified.\u201d It only sets DNS; remove it there at any time."))]
     : [ol(step("iPhone and iPad: ", path("Settings", "Wi-Fi"), ", tap ⓘ next to your network, then ", path("Configure DNS", "Manual"), " and add:"), ipRow,
       step("Mac: ", path("System Settings", "Network", "Wi-Fi or Ethernet", "Details", "DNS"), ", then + and the same address."),
       (doh || dot) ? step("For encrypted DNS on Apple devices, turn on the public status page: it offers a profile to download.") : null)]]);
@@ -56,7 +56,7 @@ export function guides(info, { h, copyrow }) {
   list.push(["Router", [ol(
     step("Open your router's admin page (often 192.168.1.1 or 192.168.0.1)."),
     step("In the ", h("strong", null, "DHCP"), " or ", h("strong", null, "LAN"), " settings, set the DNS server it hands out to:"), ipRow,
-    step("Leave the second DNS server empty, or devices may use it instead."),
+    step("If you want devices to use only DNSNova, leave the secondary DNS field blank when your router allows it."),
     step("Devices pick it up when they reconnect, or after a restart."))]]);
 
   list.push(["Linux", [ol(
@@ -100,16 +100,17 @@ export function tabs(list, { h, fill }) {
 export function filtered(info, { h, copyrow }, prof) {
   const f = info.filtered;
   if (!f) return null;
-  const note = h("p", { class: "small muted", style: { margin: 0 } },
-    `Blocks ads, trackers and malicious sites (${f.rules.toLocaleString()} rules). Same server, same privacy; only these addresses filter.`);
+  const rules = `Blocks ads, trackers, and malicious sites (${f.rules.toLocaleString()} rules).`;
+  if (f.all) return [h("p", { class: "small", style: { margin: 0 } }, rules, " Filtering applies to all DNS endpoints.")];
   if (!f.doh && !f.dot && !f.doq && !(f.plain || []).length) {
-    return [note, h("p", { class: "small", style: { margin: 0 } }, "Every address of this server filters.")];
+    return [h("p", { class: "small muted", style: { margin: 0 } }, "Filtering is enabled, but no filtered DNS endpoint is configured yet.")];
   }
+  const note = h("p", { class: "small muted", style: { margin: 0 } }, rules, " Same server, same privacy; only these endpoints filter.");
   const rows = [
     f.doh ? ["DNS over HTTPS", f.doh] : null,
     f.dot ? ["DNS over TLS", f.dot] : null,
     f.doq ? ["DNS over QUIC", f.doq] : null,
-    ...(f.plain || []).map((ip) => ["Plain DNS", ip]),
+    ...(f.plain || []).map((ip) => ["Unencrypted DNS", ip]),
   ].filter(Boolean);
   const apple = prof !== null && prof !== undefined && (f.doh || (f.dot && !f.dot.includes(":")));
   return [note, h("div", { class: "addrs" }, rows.map(([k, v]) => copyrow(k, v))),

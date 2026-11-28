@@ -441,19 +441,19 @@ func TestPlainServerLearnt(t *testing.T) {
 	if r.Stats.TCP.Load() == 0 {
 		t.Fatal("the doubted answers were not checked over TCP")
 	}
-	// the server that answered is learnt, and is the one asked first from
+	// the server that answered is learned, and is the one asked first from
 	// now on: its round trip is that of its TCP answer, not the wait for
 	// a UDP one (and the other, asked too while waiting, took longer)
 	now, zone := r.now(), dotted("example.com.")
-	learnt, other := exA, ex2A
+	learned, other := exA, ex2A
 	if !r.infra.plain(exA, now) {
-		learnt, other = ex2A, exA
+		learned, other = ex2A, exA
 	}
-	if !r.infra.plain(learnt, now) {
-		t.Fatal("not learnt")
+	if !r.infra.plain(learned, now) {
+		t.Fatal("not learned")
 	}
-	if a, b := r.infra.score(learnt, zone, now), r.infra.score(other, zone, now); a >= b {
-		t.Fatalf("learnt server scores %v, the other %v", a, b)
+	if a, b := r.infra.score(learned, zone, now), r.infra.score(other, zone, now); a >= b {
+		t.Fatalf("learned server scores %v, the other %v", a, b)
 	}
 	tcp := r.Stats.TCP.Load()
 	start := time.Now()

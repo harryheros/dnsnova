@@ -31,7 +31,7 @@ func TestCachePersistAcrossRestart(t *testing.T) {
 	if fi.Mode().Perm() != 0o600 {
 		t.Fatalf("cache file mode %04o, want 0600", fi.Mode().Perm())
 	}
-	// what recursion learnt about name servers is kept with it
+	// what recursion learned about name servers is kept with it
 	if fi, err := os.Stat(filepath.Join(filepath.Dir(path), serversFile)); err != nil || fi.Mode().Perm() != 0o600 {
 		t.Fatalf("name server file: %v %v", fi, err)
 	}

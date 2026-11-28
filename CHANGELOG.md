@@ -4,50 +4,119 @@ All notable changes are listed here. Versions follow
 [Semantic Versioning](https://semver.org/). Security fixes are marked
 **Security**.
 
-## 1.10.0 (2026-11-25)
+## 2.0.0 (2026-11-28)
 
-**Every feature in view.** What DNSNova can do is now seen in the web
-interface rather than looked for, and turned on where it is shown.
+**A professional console for every capability.** Everything DNSNova runs
+is visible, stated as it actually is, and configurable where it is shown;
+the interface speaks the industry's terms with one consistent spelling; and the
+release blockers found in an engineering review are fixed. Configuration
+keys, CLI flags, metrics, and JSON fields are unchanged: upgrading from
+1.9 needs nothing.
 
-- **Private locality is turned on and off in the interface**: *Settings ›
-  DNS & upstreams › Answers made for* chooses, with each way explained,
-  where answers should fit: where this server is (as before), one network
-  for everyone (client subnet, `ecs.address`, whose address field appears
-  only then), or where each client is (private locality). The last needs
-  exits in the configuration file and resolving names itself; until then
-  it says what is missing, with a link to set up exits. `locality.enabled`
-  is the one `[locality]` setting the admin API can change; the exits and
-  their limits stay in the file.
-- **Features on the overview**: a card lists sixteen features (resolving
-  names itself, DNSSEC, private locality, encrypted DNS, filtering, client
-  groups, new domains, rebinding protection, DNS Cookies, the cache, local
-  names, alerts, cluster, status page, query records, log collector), each
-  on or off with a word on its state, and opens its page or setting.
-  `GET /status` adds `features` for it.
-- **Every page is in the menu**: DNSSEC, Private locality and Nodes are
-  listed also while off; each then says what it does and the next step
-  from where the server is (turn it on, or what it needs first). The menu
-  still fits without scrolling down to a 650 px high window.
-- **Less behind Advanced**: prefetch, keeping the cache across restarts
-  and answering from expired entries (renamed from *Serve stale*) are in
-  view, as are DNS Cookies with name servers, certificates with IP
-  addresses, and a new *Protection* section (response rate limiting, DNS
-  Cookies, refusing ANY). What stays folded is named on the *Advanced*
-  line itself with its values, and the fold is hidden when none of it
-  applies.
-- **Every setting has a place**: twelve settings that were only in the
-  file are now on their pages: per-network burst, queries per connection,
-  idle connection timeout, largest UDP answer, queries at once per domain,
-  rate-limiting truncation, the port 80 check address and the certificate
-  authority, trusted reverse proxies, the client subnet measurement path,
-  and own root servers and keys for an isolated network. *Admin* shows
-  what only the file changes (data directory, cluster, anycast, private
-  locality exits), with links to their pages. A test keeps it so.
-- **Upstreams with none set**: with recursion, the page said "0/0 every
-  upstream answers" over an empty table (a blank card on phones); it now
-  says no upstreams are needed, and how to add fallbacks.
-- The Traffic Flow card counts a cluster's nodes and opens Nodes; links to
-  the configuration file open it.
+### Fixed
+
+- **A failed change no longer breaks encrypted DNS.** Certificate settings
+  were applied before listeners; when a listener then failed (a port in
+  use), the configuration was rolled back but the certificate was not,
+  and running DoT, DoQ, and DoH listeners lost their certificate. The
+  certificate state is now rolled back with the rest, on every path that
+  applies a configuration (web interface, API, file reload, cluster sync).
+- **Setup resumes.** An account created without finishing the wizard (a
+  reload, a closed tab, a failed apply) used to drop the wizard for good.
+  `GET /setup` now reports `pending`, and signing in resumes at the DNS
+  settings until DNS is served or setup is skipped (`POST /setup/done`).
+  The last step, *Apply initial setup*, reads back what is running
+  (listeners, resolution mode, certificate) before saying *Setup complete*.
+- **No unintended third parties.** With recursive resolution chosen, the
+  wizard no longer presets two public resolvers (which became fallback
+  resolvers), and no text claims that no third party sees queries when
+  fallback upstream resolvers are configured.
+- **The wizard keeps what is set.** Allowed client networks start from the
+  configuration (an installer's VLAN or VPN) and are shown for editing;
+  the admin listener changes only when changed in the wizard, so a reverse
+  proxy or forwarded port is not taken for it.
+- **Filtering is reported as it applies.** With filtering on, not on all
+  endpoints, and no filtered endpoint configured, guides said every address
+  filters; they now say so only when it is true (`filtered.all`).
+- **Live capture and the query archive are separate.** With the archive
+  on, a running capture could no longer be seen or stopped; it now has its
+  own card with *Stop capture and delete recorded queries*, an ended
+  capture can be deleted at once, and the status page no longer reports a
+  live capture's full IP addresses as stored on disk (`archive_full_ip`).
+- **Unsaved changes are kept.** Links and search results within a settings
+  page no longer rebuild it; leaving with unsaved changes asks first; edits
+  made while a change is applied stay as unsaved changes. A configuration
+  history restore applies to the version whose differences were shown, or
+  shows the new differences.
+- **Overview data is current or marked.** A quick change of time range is
+  no longer overwritten by an older response, a remembered range the server
+  no longer keeps falls back to the longest it keeps, and a failed refresh
+  keeps the last figures with their time instead of a stale green state.
+- **Upstreams with none configured** (with recursion) showed "0/0" over an
+  empty table, a blank card on phones; the page now states the resolution
+  mode and the next step.
+- The alert help said "95% of queries take longer"; a p95 threshold is
+  exceeded when at least 5% are slower, and it now says so.
+
+### Interface
+
+- **Answer location**: *DNS & upstreams* chooses, with each mode explained,
+  whose location responses are made for: this server's, one subnet for all
+  clients (EDNS Client Subnet), or each client's (private locality, which
+  needs exits in the host configuration file and recursive resolution).
+  `locality.enabled` is the one `[locality]` setting the API can change.
+- **Capabilities**: the overview lists what runs, grouped as resolution &
+  routing, network & reliability, and security & governance, each with its
+  actual state ("Private locality · 3 exits", "Anycast · Announced") and a
+  link to its page or setting.
+- **Every page in the menu**: DNSSEC, Private locality, and Nodes are listed
+  also while off, and say what they need. The Upstreams page states the
+  mode: forwarding, recursive resolution, or recursive resolution with
+  upstream fallback. Every node, standalone or follower too, shows its
+  anycast announcement.
+- **Health states**: *Resolver healthy*, *Running on fallback*, *Health
+  status unavailable*, *DNS is not serving queries*, *Sync failed*.
+- **Settings**: industry terms as labels (Recursive resolution, QNAME
+  minimization, Serve stale, Negative trust anchors, Forward zones, ACME
+  challenge, RRL slip), with help text that says what each does. Prefetch,
+  persistent cache, serve stale, both sides of DNS Cookies, and an *Abuse
+  protection* section are in view; what stays under *Advanced* is named on
+  its line with its values. Twelve settings that were only in the file now
+  have a place (per-network burst, pipelined queries, idle timeout, maximum
+  UDP response size, outstanding queries per zone, RRL slip, HTTP challenge
+  listener, ACME directory, trusted reverse proxies, ECS measurement
+  endpoint, custom root servers and trust anchors), and *Admin* shows the
+  host-only settings read-only. A test keeps every setting placed.
+- **Actions say what they do**: Refresh blocklists, Test a filtering rule,
+  Add to filter allowlist, Allow private-address responses, Add to
+  blocklist, Download shown rows, Send test notification, Delete
+  configuration history.
+- **A sharper logo**: the trident in the rail, the phone bar, the wizard,
+  and on the status page is drawn without the halo that blurred it at
+  those sizes (`mark-crisp.svg`); the sign-in page keeps the full drawing.
+- The sidebar fits without scrolling down to a 650 px high window; the
+  README picture shows the new overview.
+
+### API and messages
+
+- `GET /status` adds `features` (the state of every capability, including
+  this node's anycast announcement) and `privacy.archive_full_ip`;
+  `GET /status.json` adds `client_subnet`, `archive_full_ip`, and
+  `filtered.all`; `GET /config/history/{name}` adds the `hash` its
+  differences are against.
+- Error messages are sentences that say what happened and what to do
+  ("Incorrect username or password.", "That verification code is
+  incorrect. Check your device's clock, then enter a new code."). Scripts
+  that matched the old texts need updating; status codes are unchanged.
+- `docs/api.md`: `POST /filter/update` returns `200` with the filter status
+  (it never returned `204`).
+
+### Wording
+
+- One spelling standard throughout the interface, messages, documentation,
+  and comments (learned, minimization, behavior, expiration), with consistent
+  terms in the menu, search, wizard, settings, and status page. The
+  configuration key `recursion.qname_minimisation` keeps its spelling.
 
 ## 1.9.0 (2026-11-25)
 
@@ -59,7 +128,7 @@ being sent ([docs/private-locality.md](./docs/private-locality.md)).
   through tunnels, that only pass questions on. Each serves clients by
   country code or network (a network wins, the narrowest first); every
   other client gets the server's own answers, as before.
-- **Which zones vary is learnt.** Now and then a question just answered is
+- **Which zones vary is learned.** Now and then a question just answered is
   asked again through an exit; a zone whose addresses share no /24 (IPv6:
   /48) with the server's three times in a row is marked, and checked again
   as it is used (`relearn`). The root, top-level domains, DS and DNSKEY are
@@ -119,7 +188,7 @@ being sent ([docs/private-locality.md](./docs/private-locality.md)).
   failed until the next answer. Now that lookup asks another server, and
   below the root interception is concluded only when a second name fails
   the same way before any server has answered again. At the root, where
-  injectors do not forge, it is still recognised at once.
+  injectors do not forge, it is still recognized at once.
 
 ## 1.8.2 (2026-11-22)
 
@@ -313,7 +382,7 @@ Checked and found sound (now with tests where there were none)
 ## 1.6.8 (2026-11-20)
 
 - **Name servers remembered across restarts.** With recursion and
-  `cache.persist` on (the default on public servers), what was learnt
+  `cache.persist` on (the default on public servers), what was learned
   about name servers is saved with the cache, every 10 minutes and at
   shutdown, in `data_dir/servers.bin`, and read back at start: how fast
   each answered, and the quirks some have (no EDNS, unusual but genuine
@@ -359,7 +428,7 @@ Checked and found sound (now with tests where there were none)
     costs about 1.5 µs more CPU; cached answers are unchanged.
   - Privacy: the question only ever goes to another authoritative server
     of the same zone, the one that would have been asked next anyway,
-    with the same minimised name. No new party sees it.
+    with the same minimized name. No new party sees it.
   - Metric: `dnsnova_recursion_hedges_total`, by whether the hedge's
     answer was the one used; also `hedges` and `hedges_won` in the
     recursion status.
@@ -398,7 +467,7 @@ Checked and found sound (now with tests where there were none)
 - **Documentation.** The README is shorter: the release history is left to
   this changelog, and the notes on using DNSNova for the server's own
   programs moved to [docs/server-itself.md](./docs/server-itself.md).
-  Documentation and this changelog describe behaviour, not particular
+  Documentation and this changelog describe behavior, not particular
   networks or sites.
 
 ## 1.6.6 (2026-11-20)
@@ -444,10 +513,10 @@ against forged answers is unchanged.
 - **A missing DNS Cookie is doubtful, no longer proof of forgery.**
   Instances of one anycast server can differ; a wrong cookie is still
   proof.
-- **QNAME minimisation no longer marks servers lame for a whole zone.** A
+- **QNAME minimization no longer marks servers lame for a whole zone.** A
   server that gives no usable reply to a shortened name is not set aside
   for the zone for ten minutes; the zone's other servers are asked it, and
-  if none answers, the full name. (Giving up minimisation because of one
+  if none answers, the full name. (Giving up minimization because of one
   server would send the full name to every later server.)
 
 ## 1.6.4 (2026-11-20)
@@ -745,7 +814,7 @@ Also:
 
 Two more causes of SERVFAIL found the same way as in 1.3.4:
 
-- With QNAME minimisation, a shortened name that no server of a zone
+- With QNAME minimization, a shortened name that no server of a zone
   answers usably is asked again in full, instead of ending the lookup.
   Some servers mishandle names that only exist as part of longer ones.
 - A name server whose only known addresses are IPv6, when they fail, has
@@ -847,7 +916,7 @@ in DNSNova free of charge, commercial deployments included.
   Telegram, Discord, Slack or a signed JSON webhook when every upstream
   fails, one keeps failing, the SERVFAIL share or the response time of
   queries not in the cache stays high, DNSSEC failures pile up, the
-  certificate nears expiry or cannot be renewed, a changed configuration
+  certificate nears expiration or cannot be renewed, a changed configuration
   file or a block list update fails, or anycast withdraws the route; and
   again when it is fixed, with reminders while it lasts. Each has a
   threshold and a time it must last, so a blip does not page anyone.
@@ -1128,7 +1197,7 @@ in DNSNova free of charge, commercial deployments included.
   rule, IPv6 turned off in the system, no address to send from) pauses it
   for 10 minutes at once, instead of failing again for every name, which
   could end in SERVFAIL. Where IPv6 works it is used as before.
-- `cache.size` is honoured: a small cache was rounded up to 4,096 entries.
+- `cache.size` is honored: a small cache was rounded up to 4,096 entries.
 - `cache.min_ttl` no longer stretches answers that carry DNSSEC
   signatures, which a validating client could then use past their time.
 - Filtering: a CNAME chain too long to check every name (over 32) is
@@ -1173,7 +1242,7 @@ First stable release.
   validation from the built-in root keys (KSK-2017 and KSK-2024): RSA,
   ECDSA and Ed25519 signatures, NSEC and NSEC3 proofs, and answers
   synthesised from validated NSEC records (RFC 8198). Forged answers become
-  SERVFAIL with an Extended DNS Error saying why. QNAME minimisation
+  SERVFAIL with an Extended DNS Error saying why. QNAME minimization
   (RFC 9156), IPv6, TCP and EDNS fallback, protection against cache
   poisoning, name server loops and oversized delegations, and no queries
   into private networks on a public server. The upstreams can step in when
@@ -1182,7 +1251,7 @@ First stable release.
   Where IPv6 is configured but silently broken, recursion prefers IPv4
   until IPv6 has answered, and turns IPv6 off for 10 minutes after three
   timeouts in a row, instead of waiting for it on many names.
-  What is learnt about a name server's speed and failures is forgotten
+  What is learned about a name server's speed and failures is forgotten
   after 15 minutes, so a server that timed out once is tried again instead
   of being avoided for good.
 - Filtering, as a second door on the same server (off by default,
@@ -1292,7 +1361,7 @@ First stable release.
   in session responses.
 - Colors with jobs: green main buttons and switches,
   softer blue for links and the current page, a color mark per key figure,
-  deep-grey text and lightly shadowed cards, in light and dark.
+  deep-gray text and lightly shadowed cards, in light and dark.
 - Sign-in page: the form, "Forgot password?" with what
   to do, and a footer with links and the appearance as three icons.
 - `dnsnova -reset-admin`: for a forgotten password, removes the
@@ -1360,7 +1429,7 @@ First stable release.
   Lucide, ISC), a clearer summary with three key figures, a response-time
   chart with an area, a pointer readout and an empty state, upstream states
   Healthy, Slow, Failing and Standby with success rates, repeated events
-  folded into one, and a blue-grey dark appearance. The design rules are in
+  folded into one, and a blue-gray dark appearance. The design rules are in
   docs/design.md.
 - Privacy: queries and client addresses are never written to disk.
   `[log] queries` no longer logs anything (it is accepted with a warning).

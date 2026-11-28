@@ -27,9 +27,32 @@ func subtleEq(a, b string) bool { return subtle.ConstantTimeCompare([]byte(a), [
 
 // ---- setup, login, session ----
 
+// getSetup says what setup needs: "needed", the administrator account;
+// "pending", the rest of the wizard, from an account created without
+// finishing it (a reload, a closed tab, a port in use). Once the server
+// serves DNS, setup counts as done.
 func (a *Admin) getSetup(w http.ResponseWriter, r *http.Request, c *call) {
-	needed := a.sec.account() == nil
-	writeJSON(w, http.StatusOK, map[string]any{"needed": needed, "code_required": needed && !a.trusted(c), "secure": secureConn(r)})
+	acc := a.sec.account()
+	needed, pending := acc == nil, false
+	if acc != nil && !acc.SetupDone {
+		if a.b.Snapshot().Config.ServesDNS() {
+			if err := a.sec.markSetupDone(); err != nil {
+				a.log.Warn("admin: could not record that setup is done", "err", err)
+			}
+		} else {
+			pending = true
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"needed": needed, "pending": pending, "code_required": needed && !a.trusted(c), "secure": secureConn(r)})
+}
+
+// postSetupDone ends the setup wizard without (or after) its last step.
+func (a *Admin) postSetupDone(w http.ResponseWriter, r *http.Request, c *call) {
+	if err := a.sec.markSetupDone(); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *Admin) postSetup(w http.ResponseWriter, r *http.Request, c *call) {
@@ -40,7 +63,7 @@ func (a *Admin) postSetup(w http.ResponseWriter, r *http.Request, c *call) {
 	a.setupMu.Lock()
 	defer a.setupMu.Unlock()
 	if a.sec.account() != nil {
-		writeError(w, http.StatusConflict, "setup is already done; log in instead")
+		writeError(w, http.StatusConflict, "An administrator account already exists. Sign in instead.")
 		return
 	}
 	if !a.notLocked(w, c) {
@@ -59,7 +82,7 @@ func (a *Admin) postSetup(w http.ResponseWriter, r *http.Request, c *call) {
 				a.log.Warn("admin: too many wrong setup codes; a new code was written to " + a.sec.dir + "/setup-code")
 			}
 		}
-		writeError(w, http.StatusForbidden, "wrong setup code; the installer printed it, and it is in <data_dir>/secrets/setup-code")
+		writeError(w, http.StatusForbidden, "That setup code is incorrect. Use the code shown by the installer, or read <data_dir>/secrets/setup-code on the server.")
 		return
 	}
 	if err := validUsername(req.Username); err != nil {
@@ -127,7 +150,7 @@ func (a *Admin) login(w http.ResponseWriter, r *http.Request, c *call) {
 	if !checkPassword(hash, req.Password) || !userOK {
 		a.lock.fail(c.ip, a.Now())
 		a.log.Warn("admin: failed login", "from", c.ip.String())
-		writeError(w, http.StatusUnauthorized, "wrong user name or password")
+		writeError(w, http.StatusUnauthorized, "Incorrect username or password.")
 		return
 	}
 	if acc.TOTP != "" {
@@ -138,7 +161,7 @@ func (a *Admin) login(w http.ResponseWriter, r *http.Request, c *call) {
 		if !a.useTOTP(acc.TOTP, req.TOTP) {
 			a.lock.fail(c.ip, a.Now())
 			a.log.Warn("admin: failed login (two-step code)", "from", c.ip.String())
-			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "wrong or already used code", "totp_required": true})
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "That verification code is invalid or has already been used. Try a new code.", "totp_required": true})
 			return
 		}
 	}
@@ -221,7 +244,7 @@ func (a *Admin) confirmTOTP(w http.ResponseWriter, r *http.Request, c *call) {
 		return
 	}
 	if !a.useTOTP(secret, req.Code) {
-		writeError(w, http.StatusBadRequest, "wrong code; check the time on your phone and try the next code")
+		writeError(w, http.StatusBadRequest, "That verification code is incorrect. Check your device's clock, then enter a new code.")
 		return
 	}
 	acc := a.sec.account()
@@ -281,7 +304,8 @@ func (a *Admin) status(w http.ResponseWriter, r *http.Request, c *call) {
 		"serves_dns":     cfg.ServesDNS(),
 		"privacy": map[string]any{
 			"query_log":            ql.On || arch.On,
-			"query_log_full_ip":    (ql.On && ql.FullIP) || arch.FullIP,
+			"query_log_full_ip":    (ql.On && ql.FullIP) || (arch.On && arch.FullIP),
+			"archive_full_ip":      arch.On && arch.FullIP,                        // on disk, apart from a live capture in memory
 			"query_log_days":       arch.Days * boolInt(arch.On),                  // kept on disk; 0: not kept
 			"query_export":         a.b.Dnstap().On,                               // sent to a log collector (dnstap)
 			"client_ip_upstream":   false,                                         // clients' addresses are never sent on
@@ -291,14 +315,14 @@ func (a *Admin) status(w http.ResponseWriter, r *http.Request, c *call) {
 			"zero_rtt":             false,
 			"private_ptr_answered": true,
 		},
-		"features": features(cfg),
+		"features": a.features(cfg),
 		"warnings": nonNil(snap.Warnings),
 	})
 }
 
 // features says which of the server's features are on, for the overview's
 // list of them (each links to where it is turned on).
-func features(c *config.Config) map[string]any {
+func (a *Admin) features(c *config.Config) map[string]any {
 	return map[string]any{
 		"recursion":      c.Recursion.Enabled,
 		"dnssec":         c.Recursion.Enabled && c.Recursion.DNSSEC,
@@ -308,6 +332,7 @@ func features(c *config.Config) map[string]any {
 		"groups":         len(c.Clients.Groups),
 		"rebinding":      c.Local.RebindingProtection,
 		"cookies":        c.Server.Cookies,
+		"rrl":            c.Limits.RRLRate > 0,
 		"name_cookies":   c.Recursion.Enabled && c.Recursion.Cookies,
 		"nod":            c.NOD.Enabled,
 		"alerts":         c.Alerts.Enabled,
@@ -321,7 +346,7 @@ func features(c *config.Config) map[string]any {
 		"locality":       c.Locality.Enabled && c.Recursion.Enabled,
 		"locality_exits": len(c.Locality.Exits),
 		"cluster":        c.Cluster.Role,
-		"anycast":        c.Anycast.Enabled,
+		"anycast":        a.b.Anycast(),
 		"local_forward":  len(c.Local.Forward),
 		"local_records":  len(c.Local.Records),
 	}
@@ -342,7 +367,7 @@ func (a *Admin) stats(w http.ResponseWriter, r *http.Request, c *call) {
 	}
 	span, ok := spans[name]
 	if !ok {
-		writeError(w, http.StatusBadRequest, "range must be 1h, 24h or 7d")
+		writeError(w, http.StatusBadRequest, "Set range to 1h, 24h, 7d, or 30d.")
 		return
 	}
 	writeJSON(w, http.StatusOK, struct {
@@ -421,7 +446,7 @@ func (a *Admin) archiveFile(w http.ResponseWriter, r *http.Request, c *call) {
 	name := r.PathValue("name")
 	f, err := a.b.Archive().OpenFile(name)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "no such file")
+		writeError(w, http.StatusNotFound, "Archived query file not found.")
 		return
 	}
 	defer f.Close()
@@ -573,7 +598,7 @@ func (a *Admin) trace(w http.ResponseWriter, r *http.Request, c *call) {
 	}
 	if exit := strings.TrimSpace(req.Exit); exit != "" {
 		if subnet.IsValid() {
-			writeError(w, http.StatusBadRequest, "a client network or an exit, not both")
+			writeError(w, http.StatusBadRequest, "Choose either a client subnet or an exit, not both.")
 			return
 		}
 		ctx = recursor.WithTraceExit(ctx, strings.ToLower(exit))
@@ -837,7 +862,7 @@ func (a *Admin) write(w http.ResponseWriter, c *call, snap *config.Snapshot, src
 			writeInvalid(w, err)
 			return
 		}
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "could not apply the change, so the previous configuration was kept: " + err.Error(), "reverted": true})
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "The change could not be applied; the previous configuration is still active: " + err.Error(), "reverted": true})
 		return
 	}
 	res.Hash = nsnap.Hash
@@ -907,7 +932,7 @@ func (a *Admin) clearHistory(w http.ResponseWriter, r *http.Request, c *call) {
 func (a *Admin) historyFile(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 	src, err := a.b.ConfigHistoryFile(r.PathValue("name"))
 	if err != nil {
-		writeError(w, http.StatusNotFound, "no such saved version")
+		writeError(w, http.StatusNotFound, "Saved configuration version not found.")
 		return nil, false
 	}
 	return src, true
@@ -919,7 +944,9 @@ func (a *Admin) getHistory(w http.ResponseWriter, r *http.Request, c *call) {
 		return
 	}
 	snap := a.b.Snapshot()
-	writeJSON(w, http.StatusOK, map[string]any{"name": r.PathValue("name"), "content": string(src), "diff": lineDiff(snap.Doc.Src, src)})
+	// hash: the configuration the diff is against, which a restore must
+	// still find, so what is restored is what was shown
+	writeJSON(w, http.StatusOK, map[string]any{"name": r.PathValue("name"), "content": string(src), "diff": lineDiff(snap.Doc.Src, src), "hash": snap.Hash})
 }
 
 func (a *Admin) restoreHistory(w http.ResponseWriter, r *http.Request, c *call) {

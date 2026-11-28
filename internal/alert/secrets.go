@@ -95,7 +95,7 @@ func (s *Secrets) Channels() []Channel {
 }
 
 // Shown is what the admin page may see of a destination: whether it is
-// set, and a hint to recognise it (the host, the chat), never the secret.
+// set, and a hint to recognize it (the host, the chat), never the secret.
 type Shown struct {
 	Set  bool   `json:"set"`
 	Hint string `json:"hint,omitempty"`

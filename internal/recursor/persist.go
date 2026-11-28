@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// What is learnt about name servers (how fast each answers, and the ways
+// What is learned about name servers (how fast each answers, and the ways
 // some answer that must be allowed for) can be kept across a restart, so
 // that the first lookups after one go to the fast servers at once rather
 // than learning them again, one slow or failed try at a time.
@@ -96,7 +96,7 @@ const maxServersFile = 16 + maxServers*serverRecord + 4
 // servers it taught. Nothing is taken unless the whole file is intact,
 // and each value is checked: a round trip that is no longer current, a
 // time in the future (the clock went back) or a quirk that would last
-// longer than it can when learnt is left out.
+// longer than it can when learned is left out.
 func (r *Recursor) LoadServers(rd io.Reader) (int, error) {
 	data, err := io.ReadAll(io.LimitReader(rd, maxServersFile+1))
 	if err != nil {
@@ -115,7 +115,7 @@ func (r *Recursor) LoadServers(rd io.Reader) (int, error) {
 		return 0, ErrServersFile
 	}
 	now := r.now()
-	// a quirk is learnt for an hour (setPlain, setNoTCP, the EDNS fallback)
+	// a quirk is learned for an hour (setPlain, setNoTCP, the EDNS fallback)
 	latest := now.Add(time.Hour)
 	in := r.infra
 	in.mu.Lock()
@@ -145,7 +145,7 @@ func (r *Recursor) LoadServers(rd io.Reader) (int, error) {
 			continue
 		}
 		if _, known := in.m[a]; known {
-			continue // learnt since the start: newer
+			continue // learned since the start: newer
 		}
 		if len(in.m) >= maxServers {
 			break

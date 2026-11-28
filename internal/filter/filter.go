@@ -117,7 +117,7 @@ type Counts struct {
 	Skipped int // rules that cannot apply to DNS
 }
 
-// Parse reads one list into b. Lines are recognised as:
+// Parse reads one list into b. Lines are recognized as:
 //
 //	||example.com^          block example.com and every name under it
 //	@@||example.com^        never block them

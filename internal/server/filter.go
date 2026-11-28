@@ -130,6 +130,7 @@ func (s *Server) filteredInfo(c *config.Config, domain string) *admin.Filtered {
 	}
 	out := &admin.Filtered{Rules: s.Filter.Status().Rules}
 	if f.All {
+		out.All = true
 		return out
 	}
 	port := func(list []string, def uint16) (string, bool) {

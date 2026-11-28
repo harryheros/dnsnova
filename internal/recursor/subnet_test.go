@@ -270,7 +270,7 @@ func TestMoreNameServersAfterFailures(t *testing.T) {
 	}
 }
 
-// A shortened (minimised) name that no server of a zone answers usably is
+// A shortened (minimized) name that no server of a zone answers usably is
 // asked again in full, rather than ending the lookup.
 func TestMinimisedNameFallsBack(t *testing.T) {
 	n := world()

@@ -23,7 +23,7 @@ var cacheSaveMu sync.Mutex // one save at a time
 
 func cachePath(c *config.Config) string { return filepath.Join(c.Server.DataDir, cacheFile) }
 
-// serversFile keeps what recursion learnt about name servers (how fast
+// serversFile keeps what recursion learned about name servers (how fast
 // each answers, and quirks) with the cache: addresses and timings only.
 const serversFile = "servers.bin"
 
@@ -47,7 +47,7 @@ func (s *Server) loadServers(c *config.Config) {
 	defer f.Close()
 	n, err := s.Rec.LoadServers(f)
 	if err != nil {
-		s.Log.Warn("name server file not loaded: their speeds are learnt again", "file", serversPath(c), "err", err)
+		s.Log.Warn("could not load saved name server statistics; DNSNova will measure response times again", "file", serversPath(c), "err", err)
 		return
 	}
 	if n > 0 {

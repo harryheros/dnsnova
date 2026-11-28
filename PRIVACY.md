@@ -48,7 +48,7 @@ is your responsibility.
 | --- | --- | --- |
 | Cached DNS answers | Memory | Their TTL, plus up to `cache.serve_stale` |
 | The same answers, in public mode or with `cache.persist = "on"` (names and records; no client addresses, no times of queries) | `/var/lib/dnsnova/cache.bin`, mode 0600, saved every 10 minutes and on shutdown | Replaced at each save; answers past their TTL plus `cache.serve_stale` are left out. Deleted when saving is off (private mode, or `cache.persist = "off"`) and when the cache is cleared |
-| With recursion, what was learnt about name servers, saved with the answers above (their addresses, round-trip times and quirks; no names, no zones, no clients) | `/var/lib/dnsnova/servers.bin`, mode 0600, saved with `cache.bin` | Replaced at each save; only servers used in the last 15 minutes, or with a quirk still in force (an hour at most). Deleted with `cache.bin` |
+| With recursion, what was learned about name servers, saved with the answers above (their addresses, round-trip times and quirks; no names, no zones, no clients) | `/var/lib/dnsnova/servers.bin`, mode 0600, saved with `cache.bin` | Replaced at each save; only servers used in the last 15 minutes, or with a quirk still in force (an hour at most). Deleted with `cache.bin` |
 | With private locality, the zones found to answer by where they are asked from, saved with the answers above (zone names; no clients, no answers) | `/var/lib/dnsnova/locality-zones.bin`, mode 0600, saved with `cache.bin` | Replaced at each save; deleted with `cache.bin` and when private locality is off |
 | With private locality and an exit serving clients by country, the regional Internet registries' public address files (no client data) | `/var/lib/dnsnova/locality/` | Replaced by the daily download |
 | With private locality, queries counted by the country they came from, and how many were for names whose answers vary (counts only: no names, no addresses) | Memory | Until the process stops, or private locality is turned off |
@@ -56,8 +56,8 @@ is your responsibility.
 | Counters and response-time histograms | Memory | Until the process stops |
 | Rate-limit state (per client address or network) | Memory | About a minute after the last query |
 | Configuration and its previous versions | `/etc/dnsnova/` | Until you delete them (10 versions are kept) |
-| Statistics history for the admin charts (totals and response times, no addresses or names) | Memory | Up to 7 days; lost on restart |
-| Most queried domains and domains that do not exist (domain and count only; see below) | Memory | Up to 7 days; lost on restart |
+| Statistics history for the admin charts (totals and response times, no addresses or names) | Memory | The configured statistics retention (`stats.retention`: 24 hours, 7 days, or 30 days); lost on restart |
+| Most queried domains and domains that do not exist (domain and count only; see below) | Memory | The configured statistics retention; lost on restart |
 | Names whose answers failed DNSSEC validation (name, type, reason, count, first and last time; no client data) | Memory | The 200 most recent; lost on restart or when cleared on the DNSSEC page |
 | Networks that hit the rate limits (IPv4 /24, IPv6 /48, and a count) | Memory | 24 hours; lost on restart |
 | Status page check names (random token and protocol, no address) | Memory | 5 minutes |
@@ -72,9 +72,9 @@ is your responsibility.
 | Admin sessions | Memory | 12 idle hours, 7 days at most; lost on restart |
 | Service log | journald | Your journald retention |
 
-The service log records start-up, errors, configuration changes (with the
-administrator who made them) and admin logins, including failed ones with
-their address. It never records queries.
+The service log records startup, errors, configuration changes (with the
+administrator who made them) and administrator sign-ins, including failed
+ones with their address. It never records queries.
 
 The web interface is served from the binary. It loads nothing from other
 sites, which its Content Security Policy enforces. It stores the appearance
@@ -126,11 +126,11 @@ interface:
 - The service log records who started it, for how long and whether full
   addresses were kept. The admin status shows whether it is running.
 
-## Query records
+## Query archive
 
 Off by default. Some networks must be able to tell later which device
 looked up what: an office's security team, an audit, a law. For them,
-`log.query_days` (Settings › Logs & statistics › Query records) keeps
+`log.query_days` (Settings › Logs & statistics › Query archive) keeps
 every query on disk:
 
 - One file per day (UTC) in `/var/lib/dnsnova/querylog/`, readable only by
@@ -139,16 +139,16 @@ every query on disk:
   filtered, client group.
 - Files older than `log.query_days` are deleted every hour. Setting it to 0
   deletes them all.
-- Client addresses are shortened unless `log.query_full_ip` is set.
-- Searching and downloading them needs an administrator's sign-in; each
-  download is recorded in the service log.
+- Client IP addresses are masked unless `log.query_full_ip` is set.
+- Only signed-in administrators can search or download archived query
+  records; each download is recorded in the service log.
 - The public status page shows that queries are kept, for how long, and
   whether with full addresses, and so does the admin overview.
 
 If you run DNSNova for other people, tell them, as the law where you and
 they are may require.
 
-## New domains
+## Newly observed domains
 
 Off by default. With `[nod]` on, DNSNova notes the domain of every answered
 query in two Bloom filters: bits set by hashes of the domains under a
@@ -158,7 +158,7 @@ The domains it reports as new (the domain, the name asked, its type, who
 asked first, shortened unless `nod.full_ip`, and when) are kept in memory,
 the last 500, and sent to the alert destinations if `nod.alert` is set.
 
-## Log collector (dnstap)
+## dnstap export
 
 Off by default. With `dnstap.target`, every query and answer (the DNS
 messages themselves, the time, the protocol and the client's network, or

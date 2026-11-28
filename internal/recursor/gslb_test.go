@@ -38,7 +38,7 @@ func TestDoubtfulAnswerKeptWithoutTCP(t *testing.T) {
 	}
 	now := r.now()
 	if !r.infra.noTCP(exA, now) && !r.infra.noTCP(ex2A, now) {
-		t.Fatal("not learnt that the server does not answer over TCP")
+		t.Fatal("not learned that the server does not answer over TCP")
 	}
 	// the server stays usable: not marked failed or lame
 	for _, a := range []netip.Addr{exA, ex2A} {
@@ -46,7 +46,7 @@ func TestDoubtfulAnswerKeptWithoutTCP(t *testing.T) {
 			t.Fatalf("%v penalised: score %v", a, r.infra.score(a, dotted("example.com."), now))
 		}
 	}
-	// the server learnt keeps its real round trip, so it is asked first
+	// the server learned keeps its real round trip, so it is asked first
 	tcp := r.Stats.TCP.Load()
 	r.sets.clear()
 	r.negs.clear()
@@ -99,11 +99,11 @@ func TestDoubtfulAnswerTCPRefusedOrReset(t *testing.T) {
 		lab := newPathLab(t, c, worldAddrs(n), n.send)
 		lab.route(r)
 		msg, err := askCtx(r, "www.example.com.", m.TypeA, false)
-		learnt := r.infra.noTCP(exA, r.now()) || r.infra.noTCP(ex2A, r.now())
+		learned := r.infra.noTCP(exA, r.now()) || r.infra.noTCP(ex2A, r.now())
 		switch {
-		case refused && (err != nil || len(addrs(msg)) != 1 || !learnt):
-			t.Fatalf("refused: err %v, learnt %v", err, learnt)
-		case !refused && learnt:
+		case refused && (err != nil || len(addrs(msg)) != 1 || !learned):
+			t.Fatalf("refused: err %v, learned %v", err, learned)
+		case !refused && learned:
 			t.Fatal("reset: taken for a server without TCP")
 		case !refused && err == nil && msg.rcode == m.RcodeNoError:
 			t.Fatalf("reset: the doubtful answer was used: %v", addrs(msg))
@@ -114,7 +114,7 @@ func TestDoubtfulAnswerTCPRefusedOrReset(t *testing.T) {
 }
 
 // TestMinimisedLameNotMarked: servers that reply without authority to a
-// shortened name (QNAME minimisation, RFC 9156) are not marked lame for
+// shortened name (QNAME minimization, RFC 9156) are not marked lame for
 // their whole zone; when none of the zone's servers answers it, the full
 // name is asked.
 func TestMinimisedLameNotMarked(t *testing.T) {
@@ -137,7 +137,7 @@ func TestMinimisedLameNotMarked(t *testing.T) {
 }
 
 // TestMinimisedOneServerLame: when only one of a zone's servers mishandles
-// shortened names, the others are asked them, and minimisation goes on:
+// shortened names, the others are asked them, and minimization goes on:
 // one server must not send the full name to every later server.
 func TestMinimisedOneServerLame(t *testing.T) {
 	n := world()
@@ -150,7 +150,7 @@ func TestMinimisedOneServerLame(t *testing.T) {
 		t.Fatalf("answer %v", got)
 	}
 	if _, ok := n.servers[ex2A].seen.Load("c.example.com."); !ok {
-		t.Fatal("the shortened name was not asked of the zone's other server: minimisation given up because of one")
+		t.Fatal("the shortened name was not asked of the zone's other server: minimization given up because of one")
 	}
 	if s := r.infra.score(exA, dotted("example.com."), r.now()); s >= time.Minute {
 		t.Fatalf("marked lame for example.com (score %v)", s)

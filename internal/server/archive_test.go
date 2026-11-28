@@ -29,9 +29,15 @@ func TestQueryArchive(t *testing.T) {
 	if !strings.Contains(string(b), "\t127.0.0.x\tudp\tkept.test\tA\tNOERROR\t") {
 		t.Fatalf("archive file: %q", b)
 	}
-	if info := s.PublicStatus(); !info.QueryLog || info.QueryLogDays != 3 || info.QueryLogFullIP {
+	if info := s.PublicStatus(); !info.QueryLog || info.QueryLogDays != 3 || info.QueryLogFullIP || info.ArchiveFullIP {
 		t.Fatalf("status page: log %v days %d full %v", info.QueryLog, info.QueryLogDays, info.QueryLogFullIP)
 	}
+	// a live capture with full addresses, held in memory, is not on disk
+	s.QLog.Start(15*time.Minute, true, time.Now())
+	if info := s.PublicStatus(); !info.QueryLogFullIP || info.ArchiveFullIP {
+		t.Fatalf("live capture read as on disk: full %v archive full %v", info.QueryLogFullIP, info.ArchiveFullIP)
+	}
+	s.QLog.Stop(time.Now())
 
 	// Turned off: the files go, and the status page says so.
 	snap, _ := s.Store.Load()
@@ -48,5 +54,24 @@ func TestQueryArchive(t *testing.T) {
 	}
 	if info := s.PublicStatus(); info.QueryLog || info.QueryLogDays != 0 {
 		t.Fatal("status page still says queries are kept")
+	}
+}
+
+// The guides say where filtering applies: every endpoint, the filtered ones
+// listed, or none yet (filtering on without a filtered endpoint must not
+// read as "every address filters").
+func TestFilteredInfo(t *testing.T) {
+	s, _, _ := start(t, "")
+	c := *s.Snapshot().Config
+	if f := s.filteredInfo(&c, "dns.test"); f != nil {
+		t.Fatalf("filtering off: %+v", f)
+	}
+	c.Filter.Enabled, c.Filter.All = true, true
+	if f := s.filteredInfo(&c, "dns.test"); f == nil || !f.All {
+		t.Fatalf("all endpoints: %+v", f)
+	}
+	c.Filter.All = false
+	if f := s.filteredInfo(&c, ""); f == nil || f.All || f.DoH != "" || f.DoT != "" || f.DoQ != "" || len(f.Plain) != 0 {
+		t.Fatalf("no filtered endpoint: %+v", f)
 	}
 }

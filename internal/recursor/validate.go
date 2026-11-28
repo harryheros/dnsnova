@@ -138,7 +138,7 @@ func (r *Recursor) checkSet(ctx context.Context, t *task, cs *cachedSet) (*cache
 
 // checkProof returns the proof RRsets that verify with the zone's keys, and
 // the shortest time any of them may still be trusted (TTL capped by the
-// signatures' expiry), so a cached proof never outlives its signatures.
+// signatures' expiration), so a cached proof never outlives its signatures.
 func (r *Recursor) checkProof(proof []*rrset, zone string, ke *keyEntry, t *task) ([]*rrset, uint32) {
 	var out []*rrset
 	least := uint32(math.MaxUint32)

@@ -198,13 +198,15 @@ func (s *Server) PublicStatus() admin.PublicInfo {
 	// is healthy even with no (or no healthy) upstreams, as in /healthz.
 	info.Recursion = c.Recursion.Enabled
 	info.Locality = localityOn(c)
+	info.ClientSubnet = c.ECS.Address != ""
 	if c.Recursion.Enabled && s.Rec != nil && s.Rec.Healthy() && !s.Rec.Intercepted() {
 		info.Healthy = true
 	}
 	ql, arch := s.QLog.State(time.Now()), s.QArchive.State()
-	info.QueryLog, info.QueryLogFullIP = ql.On || arch.On, (ql.On && ql.FullIP) || arch.FullIP
+	info.QueryLog, info.QueryLogFullIP = ql.On || arch.On, (ql.On && ql.FullIP) || (arch.On && arch.FullIP)
 	if arch.On {
-		info.QueryLogDays = arch.Days
+		// what is on disk is said apart from a live capture, held in memory
+		info.QueryLogDays, info.ArchiveFullIP = arch.Days, arch.FullIP
 	}
 	info.QueryExport = s.Tap.On()
 	return info

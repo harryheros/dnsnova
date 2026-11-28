@@ -70,6 +70,9 @@ type Backend interface {
 	Archive() *insight.Archive
 	// Dnstap describes the sending of queries to a log collector.
 	Dnstap() dnstap.State
+	// Anycast is this node's announcement: "announced", "withdrawn", or ""
+	// when anycast is off.
+	Anycast() string
 	// NOD describes newly observed domains; ok is false when it is off.
 	NOD() (st insight.NODState, recent []insight.NewDomain, ok bool)
 	Upstreams() []Upstream
@@ -108,7 +111,7 @@ type Backend interface {
 	// TestAlerts sends a test notification to every destination now.
 	TestAlerts(ctx context.Context) (map[string]string, error)
 	// Locality describes private locality: the exits, the zones whose
-	// answers vary, the country table and the siting report.
+	// answers vary, the country table and the site placement report.
 	Locality() Locality
 }
 
@@ -319,6 +322,7 @@ func (a *Admin) routes() {
 	pub, auth := a.public, a.authed
 	m.Handle("GET /api/v1/setup", pub(a.getSetup))
 	m.Handle("POST /api/v1/setup", pub(a.postSetup))
+	m.Handle("POST /api/v1/setup/done", auth(a.postSetupDone))
 	m.Handle("POST /api/v1/login", pub(a.login))
 	m.Handle("POST /api/v1/logout", auth(a.logout))
 	m.Handle("GET /api/v1/session", auth(a.getSession))

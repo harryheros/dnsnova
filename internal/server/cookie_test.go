@@ -69,7 +69,7 @@ func TestCookiesUDP(t *testing.T) {
 	if rc != m.RcodeNoError || len(got) != 24 || !bytes.Equal(got[:8], cc) {
 		t.Fatalf("first answer: rcode %d, cookie %x", rc, got)
 	}
-	// sent back: recognised as valid, and a fresh one is returned
+	// sent back: recognized as valid, and a fresh one is returned
 	got2, rc := respCookie(t, ask(cookieQuery(2, "c.test", m.TypeA, got)))
 	if rc != m.RcodeNoError || len(got2) != 24 || !bytes.Equal(got2[:8], cc) {
 		t.Fatalf("second answer: rcode %d, cookie %x", rc, got2)

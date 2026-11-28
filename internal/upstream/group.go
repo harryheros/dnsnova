@@ -156,7 +156,7 @@ func NewGroup(o Options) (*Group, error) {
 	return g, nil // with no members (DNS not set up yet) Exchange fails at once
 }
 
-// Adopt carries over what old learnt about the upstreams the two groups
+// Adopt carries over what old learned about the upstreams the two groups
 // share (same address, same role): counters, latency, ranking and health.
 // Every settings change builds a new group; without this, any change, even
 // an unrelated one, reset the counters and forgot a failing upstream, which

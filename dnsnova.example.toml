@@ -211,7 +211,7 @@ address = ""
 # are asked from here and through every exit at once, whoever needs them.
 # Needs recursion; not with ecs.address. This node's own: never taken from
 # a primary. Only enabled can also be changed in the admin interface (DNS &
-# upstreams > Answers made for); the rest only here. See
+# upstreams > Answer location); the rest only here. See
 # docs/private-locality.md.
 enabled = false
 # "name source-address[,source-address] clients...": the source addresses
@@ -264,7 +264,7 @@ listen = "127.0.0.1:9153"
 [admin]
 # The web interface and its API (docs/api.md). On 127.0.0.1, reach it with
 # ssh -L 7000:127.0.0.1:7000 you@server. On ":7000", other machines get it
-# over HTTPS once a certificate exists, behind a password, login lockout and
+# over HTTPS once a certificate exists, behind a password, sign-in lockout and
 # optional two-step verification. Plain HTTP is served only to this server,
 # a local reverse proxy sending X-Forwarded-Proto: https, and, in private
 # mode, the networks in access.allow. Empty: off.
@@ -306,10 +306,11 @@ query_days = 0
 query_full_ip = false     # whole client addresses (normally 203.0.113.x)
 
 [nod]
-# Newly observed domains: tell when a domain is looked up here for the
-# first time in 30 to 60 days, often the first sign of phishing or malware
-# (Status > New domains, and the alert destinations). Keeps no list of
-# domains: only hashes, in data_dir/nod.bin, deleted when turned off.
+# Newly observed domains: report a domain queried here for the first time
+# in 30 to 60 days, often the first sign of phishing or malware (Status >
+# Newly observed domains, and the alert destinations). Seen domains are
+# tracked as hashes in data_dir/nod.bin, deleted when turned off; recent
+# detections, with their names, are held in memory.
 enabled = false
 learn = "24h"      # when first on: quiet this long, learning the usual domains
 alert = true       # send them, at most every 10 minutes (needs [alerts] on)

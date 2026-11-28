@@ -114,13 +114,13 @@ type Recursor struct {
 	infra    *infra
 	fl       flights
 	// private locality (locality.go): nil when off; the answers for every
-	// view of names whose answers vary; delegations learnt through one
+	// view of names whose answers vary; delegations learned through one
 	// path (keyed by zone and view)
 	loc     atomic.Pointer[locState]
 	lsets   *ttlMap[*locEntry]
 	vdelegs *ttlMap[*delegation]
 	// netMu orders a change of the client subnet against resolutions (see
-	// SetConfig): nothing learnt for the old network is cached after it.
+	// SetConfig): nothing learned for the old network is cached after it.
 	netMu sync.RWMutex
 	Stats Stats
 	log   *slog.Logger
@@ -245,7 +245,7 @@ func (r *Recursor) SetConfig(c Config) {
 	old := r.cfg.Load()
 	if old != nil && !bytes.Equal(old.ECS, c.ECS) {
 		// Wait for resolutions still asking for the old network, then
-		// forget what they learnt.
+		// forget what they learned.
 		r.netMu.Lock()
 		r.cfg.Store(&c)
 		r.ClearCache()
@@ -267,7 +267,7 @@ func (r *Recursor) Healthy() bool {
 	return r.failRun.Load() < 20 || r.now().UnixNano()-r.lastOK.Load() < int64(30*time.Second)
 }
 
-// ClearCache forgets everything learnt.
+// ClearCache forgets everything learned.
 func (r *Recursor) ClearCache() {
 	r.sets.clear()
 	r.wilds.clear()

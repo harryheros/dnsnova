@@ -24,7 +24,7 @@ func getServer(r *Recursor, a netip.Addr) (server, bool) {
 	return *s, true
 }
 
-// What is learnt about name servers comes back after a restart: round
+// What is learned about name servers comes back after a restart: round
 // trips still current and quirks still in force. Failures, stale round
 // trips, lame zones and cookies do not.
 func TestServersSurviveRestart(t *testing.T) {
@@ -74,7 +74,7 @@ func TestServersSurviveRestart(t *testing.T) {
 }
 
 // A damaged or foreign file teaches nothing; values that could not have
-// been learnt (a quirk lasting longer than an hour, a round trip from the
+// been learned (a quirk lasting longer than an hour, a round trip from the
 // future) are left out.
 func TestServersFileChecked(t *testing.T) {
 	r := newTest(t, world(), true)
@@ -112,7 +112,7 @@ func TestServersFileChecked(t *testing.T) {
 	}
 }
 
-// What a server learnt since it started is newer than the file.
+// What a server learned since it started is newer than the file.
 func TestServersFileDoesNotOverwrite(t *testing.T) {
 	r := newTest(t, world(), true)
 	now := r.now()

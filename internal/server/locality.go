@@ -118,7 +118,7 @@ func (s *Server) loadZones(c *config.Config) {
 	}
 	defer f.Close()
 	if n, err := s.Rec.LoadZones(f); err != nil {
-		s.Log.Warn("locality: zones file not loaded: they are learnt again", "file", zonesPath(c), "err", err)
+		s.Log.Warn("locality: could not load the zones file; DNSNova will relearn which zones return location-dependent responses", "file", zonesPath(c), "err", err)
 	} else if n > 0 {
 		s.Log.Info("locality: zones whose answers vary remembered", "zones", n)
 	}

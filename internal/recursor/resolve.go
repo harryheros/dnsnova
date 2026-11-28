@@ -302,7 +302,7 @@ func (r *Recursor) addNeg(ctx context.Context, t *task, ans *answer, ne *negEntr
 			return err
 		}
 		// As in addSet: never keep the answer past its signatures (v.orig
-		// is capped by the SOA's and the proof's RRSIG expiry).
+		// is capped by the SOA's and the proof's RRSIG expiration).
 		ttl := min(v.orig, uint32(max(exp.Sub(r.now())/time.Second, 0)))
 		exp = r.now().Add(time.Duration(ttl) * time.Second)
 		if v.sec == secBogus {

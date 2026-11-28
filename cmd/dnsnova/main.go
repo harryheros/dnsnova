@@ -26,7 +26,7 @@ func main() {
 	cfgPath := flag.String("c", "/etc/dnsnova/dnsnova.toml", "configuration file")
 	check := flag.Bool("t", false, "check the configuration file and exit")
 	showVersion := flag.Bool("v", false, "print the version and exit")
-	resetAdmin := flag.Bool("reset-admin", false, "forgot the password: remove the administrator account, then restart dnsnova")
+	resetAdmin := flag.Bool("reset-admin", false, "remove the administrator account and restart DNSNova, to recover access after a forgotten password")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: dnsnova [-c file] [-t] [-v] [-reset-admin]\n")
 		flag.PrintDefaults()
@@ -50,17 +50,17 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: %v (run it as root)\n", err)
 			os.Exit(1)
 		}
-		fmt.Println("The administrator account was removed; settings are kept.")
+		fmt.Println("The administrator account was removed. Configuration settings were preserved.")
 		if _, err := os.Stat("/run/systemd/system"); err == nil {
 			if out, err := exec.Command("systemctl", "try-restart", "dnsnova").CombinedOutput(); err != nil {
-				fmt.Fprintf(os.Stderr, "could not restart dnsnova: %v %s\nRestart it yourself: systemctl restart dnsnova\n", err, out)
+				fmt.Fprintf(os.Stderr, "could not restart DNSNova: %v %s\nRestart DNSNova with: systemctl restart dnsnova\n", err, out)
 				os.Exit(1)
 			}
-			fmt.Println("dnsnova was restarted.")
+			fmt.Println("DNSNova was restarted.")
 		} else {
-			fmt.Println("Restart dnsnova now.")
+			fmt.Println("Restart DNSNova now.")
 		}
-		fmt.Println("Open the web interface and create the administrator again.")
+		fmt.Println("Open the admin interface and create a new administrator account.")
 		return
 	}
 
